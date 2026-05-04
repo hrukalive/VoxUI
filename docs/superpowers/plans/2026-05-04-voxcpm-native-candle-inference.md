@@ -2055,7 +2055,7 @@ git commit -m "fix(inference): apply VoxCPM LoRA adapters natively"
 - Modify: `D:/Sandbox_Share/VoxUI/voxui/crates/voxui-app/src/app.rs`
 - Modify: `D:/Sandbox_Share/VoxUI/voxui/crates/voxui-app/src/config.rs`
 
-- [ ] **Step 1: Update inference suite to manifest bundles**
+- [x] **Step 1: Update inference suite to manifest bundles**
 
 In `tests/inference_suite.rs`:
 
@@ -2065,7 +2065,7 @@ In `tests/inference_suite.rs`:
 - Use `SynthesisRequest` for all synthesis.
 - Add VoxCPM2 reference-only and reference-plus-continuation cases using WAVs from `for_test_wav/`.
 
-- [ ] **Step 2: Update desktop commands**
+- [x] **Step 2: Update desktop commands**
 
 In `voxui-desktop/src-tauri/src/commands.rs`:
 
@@ -2074,7 +2074,7 @@ In `voxui-desktop/src-tauri/src/commands.rs`:
 - Map UI input fields into `SynthesisRequest`.
 - Return clear errors for `normalize=true` until Rust text normalization exists.
 
-- [ ] **Step 3: Update app state**
+- [x] **Step 3: Update app state**
 
 In `voxui-app/src/app.rs` and `config.rs`:
 
@@ -2083,7 +2083,7 @@ In `voxui-app/src/app.rs` and `config.rs`:
 - Expose optional prompt WAV, prompt text, and reference WAV path.
 - Do not require transcript text for reference WAV.
 
-- [ ] **Step 4: Run app and inference checks**
+- [x] **Step 4: Run app and inference checks**
 
 Run:
 
@@ -2095,7 +2095,7 @@ cargo check -p voxui-desktop
 
 Expected: all pass.
 
-- [ ] **Step 5: Commit integration**
+- [x] **Step 5: Commit integration**
 
 Run:
 

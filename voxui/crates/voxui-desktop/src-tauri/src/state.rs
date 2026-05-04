@@ -10,6 +10,12 @@ pub struct AppConfig {
     pub model_dir: String,
     #[serde(default)]
     pub lora_dir: Option<String>,
+    #[serde(default)]
+    pub prompt_wav_path: Option<String>,
+    #[serde(default)]
+    pub prompt_text: Option<String>,
+    #[serde(default)]
+    pub reference_wav_path: Option<String>,
     #[serde(default = "default_backend")]
     pub backend: String,
     #[serde(default)]
@@ -35,6 +41,9 @@ impl Default for AppConfig {
         Self {
             model_dir: default_model_dir(),
             lora_dir: None,
+            prompt_wav_path: None,
+            prompt_text: None,
+            reference_wav_path: None,
             backend: default_backend(),
             audio_host: String::new(),
             audio_device: String::new(),

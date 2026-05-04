@@ -8,6 +8,12 @@ use crate::i18n::Language;
 pub struct AppConfig {
     pub model_dir: String,
     pub lora_path: Option<String>,
+    #[serde(default)]
+    pub prompt_wav_path: Option<String>,
+    #[serde(default)]
+    pub prompt_text: Option<String>,
+    #[serde(default)]
+    pub reference_wav_path: Option<String>,
     pub backend: String,
     pub audio_host: String,
     pub audio_device: String,
@@ -25,6 +31,9 @@ impl Default for AppConfig {
         Self {
             model_dir: "models".into(),
             lora_path: None,
+            prompt_wav_path: None,
+            prompt_text: None,
+            reference_wav_path: None,
             backend: "CUDA".into(),
             audio_host: String::new(),
             audio_device: String::new(),

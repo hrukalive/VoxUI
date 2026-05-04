@@ -20,7 +20,7 @@ use tokio::sync::mpsc;
 
 use app::{App, TtsCommand, UiUpdate};
 use config::AppConfig;
-use voxui_inference::engine::VoxCPMEngine;
+use voxui_inference::{SynthesisRequest, VoxCPMEngine};
 
 /// Process TTS commands in a loop.
 fn process_commands(
@@ -33,7 +33,7 @@ fn process_commands(
             TtsCommand::ReloadEngine { model_dir, backend } => {
                 let device = select_device(&backend);
                 let model_path = PathBuf::from(&model_dir);
-                match VoxCPMEngine::load(&model_path, &model_path, device) {
+                match VoxCPMEngine::load(&model_path, device) {
                     Ok(new_engine) => {
                         *engine = new_engine;
                         let _ = ui_tx.blocking_send(UiUpdate::EngineReady);
@@ -43,9 +43,24 @@ fn process_commands(
                     }
                 }
             }
-            TtsCommand::Synthesize { index, text, dit_steps } => {
+            TtsCommand::Synthesize {
+                index,
+                text,
+                dit_steps,
+                prompt_wav_path,
+                prompt_text,
+                reference_wav_path,
+            } => {
                 let tx = ui_tx.clone();
-                match engine.synthesize(&text, dit_steps, |step, total| {
+                let request = SynthesisRequest {
+                    text,
+                    prompt_wav_path: prompt_wav_path.map(PathBuf::from),
+                    prompt_text,
+                    reference_wav_path: reference_wav_path.map(PathBuf::from),
+                    inference_timesteps: dit_steps,
+                    ..SynthesisRequest::default()
+                };
+                match engine.generate(request, |step, total| {
                     let _ = tx.blocking_send(UiUpdate::Progress(index, step, total));
                 }) {
                     Ok(samples) => {
@@ -119,7 +134,7 @@ async fn main() -> Result<()> {
 
     // Check if model exists before starting engine
     let model_path = PathBuf::from(&saved_config.model_dir);
-    let has_model = model_path.join("base_lm.gguf").exists();
+    let has_model = model_path.join("manifest.json").exists();
 
     // Load engine in background, then serve TTS requests
     let engine_ui_tx = ui_tx.clone();
@@ -134,7 +149,7 @@ async fn main() -> Result<()> {
                     TtsCommand::ReloadEngine { model_dir, backend } => {
                         let device = select_device(&backend);
                         let model_path = PathBuf::from(&model_dir);
-                        match VoxCPMEngine::load(&model_path, &model_path, device) {
+                        match VoxCPMEngine::load(&model_path, device) {
                             Ok(mut engine) => {
                                 let _ = engine_ui_tx.blocking_send(UiUpdate::EngineReady);
                                 // Fall through to command loop
@@ -152,10 +167,9 @@ async fn main() -> Result<()> {
         }
 
         let model_dir = PathBuf::from(&model_dir_for_engine);
-        let tokenizer_dir = model_dir.clone(); // tokenizer.json is in model dir
         let device = select_device(&backend_for_engine);
 
-        let mut engine = match VoxCPMEngine::load(&model_dir, &tokenizer_dir, device) {
+        let mut engine = match VoxCPMEngine::load(&model_dir, device) {
             Ok(engine) => {
                 let _ = engine_ui_tx.blocking_send(UiUpdate::EngineReady);
                 engine

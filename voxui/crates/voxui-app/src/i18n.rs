@@ -77,8 +77,8 @@ const ENGLISH: Strings = Strings {
     input_hint: "Enter: send | F2: settings | Esc: quit",
     model_not_found_title: "Model Not Found",
     model_not_found_msg: "No model directory found. Please enter the path to your GGUF model folder:",
-    model_not_found_hint: "The folder should contain base_lm.gguf and other model files.",
-    model_not_found_error: "base_lm.gguf not found in this directory!",
+    model_not_found_hint: "The folder should contain manifest.json and model component files.",
+    model_not_found_error: "manifest.json not found in this directory!",
     confirm: "OK",
     none: "None",
 };
@@ -108,8 +108,8 @@ const CHINESE: Strings = Strings {
     input_hint: "Enter: 发送 | F2: 设置 | Esc: 退出",
     model_not_found_title: "未找到模型",
     model_not_found_msg: "未找到模型目录，请输入 GGUF 模型文件夹路径：",
-    model_not_found_hint: "文件夹应包含 base_lm.gguf 等模型文件。",
-    model_not_found_error: "该目录下未找到 base_lm.gguf！",
+    model_not_found_hint: "文件夹应包含 manifest.json 和模型组件文件。",
+    model_not_found_error: "该目录下未找到 manifest.json！",
     confirm: "确定",
     none: "无",
 };

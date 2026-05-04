@@ -16,7 +16,14 @@ pub enum AppMode {
 }
 
 pub enum TtsCommand {
-    Synthesize { index: usize, text: String, dit_steps: usize },
+    Synthesize {
+        index: usize,
+        text: String,
+        dit_steps: usize,
+        prompt_wav_path: Option<String>,
+        prompt_text: Option<String>,
+        reference_wav_path: Option<String>,
+    },
     ReloadEngine { model_dir: String, backend: String },
     LoadLora(String),
     UnloadLora,
@@ -48,6 +55,9 @@ pub struct App {
 
     // Settings
     pub model_dir: String,
+    pub prompt_wav_path: Option<String>,
+    pub prompt_text: Option<String>,
+    pub reference_wav_path: Option<String>,
     pub audio_host: String,
     pub audio_device: String,
     pub backend: String,
@@ -135,6 +145,9 @@ impl App {
             engine_ready: false,
             language,
             model_dir,
+            prompt_wav_path: config.prompt_wav_path.clone(),
+            prompt_text: config.prompt_text.clone(),
+            reference_wav_path: config.reference_wav_path.clone(),
             audio_host: config.audio_host.clone().into(),
             audio_device: config.audio_device.clone().into(),
             backend: config.backend.clone().into(),
@@ -304,6 +317,9 @@ impl App {
         let config = AppConfig {
             model_dir: self.model_dir.clone(),
             lora_path: if lora_val == "None" || lora_val == s.none { None } else { Some(lora_val.clone()) },
+            prompt_wav_path: self.prompt_wav_path.clone(),
+            prompt_text: self.prompt_text.clone(),
+            reference_wav_path: self.reference_wav_path.clone(),
             backend: self.backend.clone(),
             audio_host: self.audio_host.clone(),
             audio_device: self.audio_device.clone(),
@@ -342,7 +358,7 @@ impl App {
         let path_str = self.model_select_input.text.trim().to_string();
         // Accept both forward and backslash paths on Windows
         let path = std::path::PathBuf::from(&path_str);
-        if path.join("base_lm.gguf").exists() {
+        if path.join("manifest.json").exists() {
             // Normalize path for storage (use OS-native separators)
             let normalized = path.to_string_lossy().to_string();
             self.model_dir = normalized.clone();
@@ -365,6 +381,9 @@ impl App {
             let config = AppConfig {
                 model_dir: self.model_dir.clone(),
                 lora_path: if saved_lora_path == "None" || saved_lora_path == s.none { None } else { Some(saved_lora_path.clone()) },
+                prompt_wav_path: self.prompt_wav_path.clone(),
+                prompt_text: self.prompt_text.clone(),
+                reference_wav_path: self.reference_wav_path.clone(),
                 backend: self.backend.clone(),
                 audio_host: self.audio_host.clone(),
                 audio_device: self.audio_device.clone(),
@@ -407,7 +426,14 @@ impl App {
         let tx = self.tts_tx.clone();
         let dit_steps_str = &self.settings_values[6].1[self.settings_values[6].2];
         let dit_steps = dit_steps_str.parse::<usize>().unwrap_or(10);
-        let _ = tx.try_send(TtsCommand::Synthesize { index, text, dit_steps });
+        let _ = tx.try_send(TtsCommand::Synthesize {
+            index,
+            text,
+            dit_steps,
+            prompt_wav_path: self.prompt_wav_path.clone(),
+            prompt_text: self.prompt_text.clone(),
+            reference_wav_path: self.reference_wav_path.clone(),
+        });
     }
 
     pub fn poll_updates(&mut self) {
@@ -480,7 +506,7 @@ fn scan_model_dirs(base: &str) -> Vec<String> {
     if let Ok(entries) = std::fs::read_dir(base_path) {
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.is_dir() && path.join("base_lm.gguf").exists() {
+            if path.is_dir() && path.join("manifest.json").exists() {
                 if let Some(name) = path.to_str() {
                     dirs.push(name.replace('\\', "/"));
                 }
@@ -503,7 +529,7 @@ fn scan_lora_dirs(model_dir: &str) -> Vec<String> {
             let name = entry.file_name().to_string_lossy().to_string();
             if name.starts_with("lora_") && entry.path().is_dir() {
                 // Verify it contains at least one lora_*.gguf file
-                if entry.path().join("lora_base_lm.gguf").exists() {
+                if entry.path().join("lora_manifest.json").exists() {
                     options.push(name);
                 }
             }

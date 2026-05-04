@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use tauri::{AppHandle, Emitter, State};
 use serde::Serialize;
 use crate::state::{AppConfig, AppState};
-use voxui_inference::VoxCPMEngine;
+use voxui_inference::{SynthesisRequest, VoxCPMEngine};
 use voxui_audio::AudioPlayer;
 
 #[derive(Serialize, Clone)]
@@ -29,7 +29,7 @@ pub fn list_models() -> Vec<String> {
     let mut models = Vec::new();
     if let Ok(entries) = std::fs::read_dir("models") {
         for entry in entries.flatten() {
-            if entry.path().join("base_lm.gguf").exists() {
+            if entry.path().join("manifest.json").exists() {
                 if let Some(name) = entry.path().to_str() {
                     models.push(name.replace('\\', "/"));
                 }
@@ -48,7 +48,7 @@ pub fn list_lora_dirs(model_dir: String) -> Vec<String> {
         for entry in entries.flatten() {
             let name = entry.file_name().to_string_lossy().to_string();
             if name.starts_with("lora_") && entry.path().is_dir() {
-                if entry.path().join("lora_base_lm.gguf").exists() {
+                if entry.path().join("lora_manifest.json").exists() {
                     dirs.push(name);
                 }
             }
@@ -78,7 +78,7 @@ pub async fn load_model(
     let device = select_device(&backend);
 
     let engine = tokio::task::spawn_blocking(move || {
-        VoxCPMEngine::load(&model_path, &model_path, device)
+        VoxCPMEngine::load(&model_path, device)
     })
     .await
     .map_err(|e| format!("spawn error: {e}"))?
@@ -117,6 +117,9 @@ pub fn synthesize(
     text: String,
     dit_steps: u32,
     index: u32,
+    prompt_wav_path: Option<String>,
+    prompt_text: Option<String>,
+    reference_wav_path: Option<String>,
 ) -> Result<(), String> {
     let config = state.config.lock().unwrap().clone();
 
@@ -126,7 +129,15 @@ pub fn synthesize(
         let engine = guard.as_mut().ok_or("Engine not loaded")?;
         let app_clone = app.clone();
         let sr = engine.sample_rate();
-        let result = engine.synthesize(&text, dit_steps as usize, |step, total| {
+        let request = SynthesisRequest {
+            text,
+            prompt_wav_path: prompt_wav_path.map(PathBuf::from),
+            prompt_text,
+            reference_wav_path: reference_wav_path.map(PathBuf::from),
+            inference_timesteps: dit_steps as usize,
+            ..SynthesisRequest::default()
+        };
+        let result = engine.generate(request, |step, total| {
             let _ = app_clone.emit("tts-progress", ProgressPayload {
                 step: step as u32,
                 total: total as u32,
