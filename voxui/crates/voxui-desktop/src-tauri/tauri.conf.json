@@ -1,0 +1,26 @@
+{
+  "productName": "VoxUI",
+  "version": "0.1.0",
+  "identifier": "com.voxui.app",
+  "build": {
+    "frontendDist": "../dist",
+    "devUrl": "http://localhost:8080",
+    "beforeDevCommand": "",
+    "beforeBuildCommand": ""
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "VoxUI",
+        "width": 800,
+        "height": 600,
+        "resizable": true,
+        "minWidth": 600,
+        "minHeight": 400
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  }
+}

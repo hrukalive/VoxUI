@@ -1,0 +1,17 @@
+[package]
+name = "voxui-inference"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+voxui-gguf = { path = "../voxui-gguf" }
+candle-core.workspace = true
+candle-nn.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+tokenizers = { version = "0.21", default-features = false, features = ["fancy-regex"] }
+log = "0.4"
+
+[features]
+default = []
+cuda = ["candle-core/cuda"]

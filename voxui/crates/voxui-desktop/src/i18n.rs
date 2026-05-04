@@ -1,0 +1,67 @@
+use leptos::prelude::*;
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Language {
+    Chinese,
+    English,
+}
+
+impl Language {
+    pub fn t(&self, key: &str) -> &'static str {
+        match (self, key) {
+            (Language::Chinese, "title") => "VoxUI",
+            (Language::Chinese, "history") => "语音合成历史",
+            (Language::Chinese, "input_placeholder") => "输入文字按 Enter 发送...",
+            (Language::Chinese, "settings") => "设置",
+            (Language::Chinese, "model") => "模型",
+            (Language::Chinese, "lora") => "LoRA",
+            (Language::Chinese, "backend") => "推理后端",
+            (Language::Chinese, "audio_host") => "音频驱动",
+            (Language::Chinese, "audio_device") => "音频设备",
+            (Language::Chinese, "max_chars") => "最大字数",
+            (Language::Chinese, "dit_steps") => "扩散步数",
+            (Language::Chinese, "language") => "语言",
+            (Language::Chinese, "apply") => "应用",
+            (Language::Chinese, "cancel") => "取消",
+            (Language::Chinese, "loading") => "正在加载模型...",
+            (Language::Chinese, "ready") => "就绪",
+            (Language::Chinese, "generating") => "生成中...",
+            (Language::Chinese, "send") => "发送",
+            (Language::Chinese, "no_model") => "未找到模型",
+            (Language::Chinese, "no_model_msg") => "请选择模型目录:",
+            (Language::Chinese, "model_dir") => "模型目录",
+            (Language::Chinese, "lora_dir") => "LoRA 目录",
+            (Language::Chinese, "none") => "无",
+            (Language::English, "title") => "VoxUI",
+            (Language::English, "history") => "TTS History",
+            (Language::English, "input_placeholder") => "Type text and press Enter...",
+            (Language::English, "settings") => "Settings",
+            (Language::English, "model") => "Model",
+            (Language::English, "lora") => "LoRA",
+            (Language::English, "backend") => "Backend",
+            (Language::English, "audio_host") => "Audio Host",
+            (Language::English, "audio_device") => "Audio Device",
+            (Language::English, "max_chars") => "Max Chars",
+            (Language::English, "dit_steps") => "Diffusion Steps",
+            (Language::English, "language") => "Language",
+            (Language::English, "apply") => "Apply",
+            (Language::English, "cancel") => "Cancel",
+            (Language::English, "loading") => "Loading model...",
+            (Language::English, "ready") => "Ready",
+            (Language::English, "generating") => "Generating...",
+            (Language::English, "send") => "Send",
+            (Language::English, "no_model") => "Model Not Found",
+            (Language::English, "no_model_msg") => "Please select a model directory:",
+            (Language::English, "model_dir") => "Model Directory",
+            (Language::English, "lora_dir") => "LoRA Directory",
+            (Language::English, "none") => "None",
+            _ => "?",
+        }
+    }
+}
+
+/// Provide language context to the component tree.
+pub fn provide_language() -> (ReadSignal<Language>, WriteSignal<Language>) {
+    let (lang, set_lang) = signal(Language::Chinese);
+    (lang, set_lang)
+}
