@@ -90,6 +90,7 @@ pub async fn load_model(
     model_dir: String,
     backend: String,
 ) -> Result<ModelInfo, String> {
+    let _busy = state.try_begin_synthesis().map_err(|_| engine_busy_message())?;
     let model_path = PathBuf::from(&model_dir);
     let (device, actual_backend, warning) = select_device(&backend);
     let engine_slot = Arc::clone(&state.engine);
@@ -113,6 +114,7 @@ pub async fn load_model(
 
 #[tauri::command]
 pub fn apply_lora(state: State<AppState>, args: ApplyLoraArgs) -> Result<(), String> {
+    let _busy = state.try_begin_synthesis().map_err(|_| engine_busy_message())?;
     let mut guard = state
         .engine
         .lock()
@@ -136,18 +138,22 @@ pub async fn synthesize(
     state: State<'_, AppState>,
     args: SynthesisArgs,
 ) -> Result<(), String> {
-    let _busy = state.try_begin_synthesis()?;
     let index = args.index;
+    let _busy = match state.try_begin_synthesis() {
+        Ok(guard) => guard,
+        Err(message) => return emit_synthesis_error(&app, index, message),
+    };
     let request = args.into_request();
-    let config = state
-        .config
-        .lock()
-        .map_err(|_| "config lock poisoned".to_string())?
-        .clone();
+    let config = match state.config.lock() {
+        Ok(config) => config.clone(),
+        Err(_) => {
+            return emit_synthesis_error(&app, index, "config lock poisoned".to_string());
+        }
+    };
     let engine_slot = Arc::clone(&state.engine);
     let app_for_task = app.clone();
 
-    let result: Result<(), String> = tokio::task::spawn_blocking(move || {
+    let task = tokio::task::spawn_blocking(move || {
         let (host, device_name) = resolve_audio_output(&config)?;
         let (samples, sample_rate) = {
             let mut guard = engine_slot
@@ -177,24 +183,21 @@ pub async fn synthesize(
             .map_err(|e| format!("playback failed: {e}"))?;
         Ok(())
     })
-    .await
-    .map_err(|e| format!("synthesis task failed: {e}"))?;
+    .await;
+
+    let result: Result<(), String> = match task {
+        Ok(result) => result,
+        Err(err) => {
+            return emit_synthesis_error(&app, index, format!("synthesis task failed: {err}"));
+        }
+    };
 
     match result {
         Ok(()) => {
             let _ = app.emit("tts-complete", serde_json::json!({ "index": index }));
             Ok(())
         }
-        Err(message) => {
-            let _ = app.emit(
-                "tts-error",
-                ErrorPayload {
-                    index,
-                    message: message.clone(),
-                },
-            );
-            Err(message)
-        }
+        Err(message) => emit_synthesis_error(&app, index, message),
     }
 }
 
@@ -212,19 +215,57 @@ pub fn save_config(state: State<AppState>, config: AppConfig) -> Result<(), Stri
 
 fn resolve_audio_output(config: &AppConfig) -> Result<(String, String), String> {
     let audio_system = AudioSystem::new();
-    let host = if config.audio_host.trim().is_empty() {
-        audio_system.default_host_name()
-    } else {
+    let hosts = audio_system
+        .hosts()
+        .iter()
+        .map(|host| host.name.clone())
+        .collect::<Vec<_>>();
+    let host = if !config.audio_host.trim().is_empty()
+        && hosts.iter().any(|host| host == &config.audio_host)
+    {
         config.audio_host.clone()
+    } else {
+        audio_system.default_host_name()
     };
-    let device = if config.audio_device.trim().is_empty() {
+
+    let devices = audio_system
+        .devices(&host)
+        .map_err(|e| format!("audio device lookup failed for host {host}: {e}"))?
+        .into_iter()
+        .map(|device| device.name)
+        .collect::<Vec<_>>();
+    if devices.is_empty() {
+        return Err(format!("no output devices found for audio host {host}"));
+    }
+
+    let device = if !config.audio_device.trim().is_empty()
+        && devices.iter().any(|device| device == &config.audio_device)
+    {
+        config.audio_device.clone()
+    } else {
         audio_system
             .default_device_name(&host)
-            .map_err(|e| format!("default audio device lookup failed: {e}"))?
-    } else {
-        config.audio_device.clone()
+            .ok()
+            .filter(|device| devices.iter().any(|known| known == device))
+            .or_else(|| devices.first().cloned())
+            .ok_or_else(|| format!("no output devices found for audio host {host}"))?
     };
     Ok((host, device))
+}
+
+fn emit_synthesis_error(app: &AppHandle, index: u32, message: String) -> Result<(), String> {
+    let _ = app.emit(
+        "tts-error",
+        ErrorPayload {
+            index,
+            message: message.clone(),
+        },
+    );
+    Err(message)
+}
+
+fn engine_busy_message() -> String {
+    "engine is busy; wait for the current synthesis to finish".to_string()
 }
 
 fn select_device(requested: &str) -> (candle_core::Device, String, Option<String>) {
