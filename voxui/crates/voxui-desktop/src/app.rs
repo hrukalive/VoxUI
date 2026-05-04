@@ -325,10 +325,7 @@ pub fn App() -> impl IntoView {
                                 entry.progress = progress_value;
                             }
                         });
-                        if active_index
-                            .get_untracked()
-                            .map_or(true, |active| active == payload.index)
-                        {
+                        if active_index.get_untracked() == Some(payload.index) {
                             set_progress.set(progress_value);
                         }
                     }
@@ -356,10 +353,7 @@ pub fn App() -> impl IntoView {
                             entry.progress = 1.0;
                         }
                     });
-                    if active_index
-                        .get_untracked()
-                        .map_or(true, |active| active == payload.index)
-                    {
+                    if active_index.get_untracked() == Some(payload.index) {
                         set_active_index.set(None);
                         set_status.set("ready".into());
                         set_progress.set(0.0);
@@ -372,10 +366,6 @@ pub fn App() -> impl IntoView {
                             entry.progress = 1.0;
                         }
                     });
-                    if active_index.get_untracked().is_none() {
-                        set_status.set("ready".into());
-                        set_progress.set(0.0);
-                    }
                 }
             });
             let _ = tauri_api::tauri_listen("tts-complete", &complete_cb).await;
@@ -400,10 +390,7 @@ pub fn App() -> impl IntoView {
                             entry.progress = 0.0;
                         }
                     });
-                    if active_index
-                        .get_untracked()
-                        .map_or(true, |active| active == payload.index)
-                    {
+                    if active_index.get_untracked() == Some(payload.index) {
                         set_active_index.set(None);
                         set_status.set("ready".into());
                         set_progress.set(0.0);
@@ -468,10 +455,7 @@ pub fn App() -> impl IntoView {
                         entry.progress = 0.0;
                     }
                 });
-                if active_index
-                    .get_untracked()
-                    .map_or(true, |active| active == idx)
-                {
+                if active_index.get_untracked() == Some(idx) {
                     set_active_index.set(None);
                     set_status.set("ready".into());
                     set_progress.set(0.0);
