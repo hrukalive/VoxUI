@@ -1,10 +1,15 @@
-use std::sync::Mutex;
-use std::path::PathBuf;
-use serde::{Deserialize, Serialize};
-use voxui_inference::VoxCPMEngine;
-use voxui_audio::AudioSystem;
+use std::path::{Path, PathBuf};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc, Mutex,
+};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+use anyhow::Result;
+use serde::{Deserialize, Serialize};
+use voxui_audio::AudioSystem;
+use voxui_inference::VoxCPMEngine;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AppConfig {
     #[serde(default = "default_model_dir")]
     pub model_dir: String,
@@ -30,11 +35,21 @@ pub struct AppConfig {
     pub language: String,
 }
 
-fn default_model_dir() -> String { "models".into() }
-fn default_backend() -> String { "CUDA".into() }
-fn default_max_chars() -> usize { 80 }
-fn default_dit_steps() -> usize { 10 }
-fn default_language() -> String { "Chinese".into() }
+fn default_model_dir() -> String {
+    "models".into()
+}
+fn default_backend() -> String {
+    "CUDA".into()
+}
+fn default_max_chars() -> usize {
+    120
+}
+fn default_dit_steps() -> usize {
+    10
+}
+fn default_language() -> String {
+    "Chinese".into()
+}
 
 impl Default for AppConfig {
     fn default() -> Self {
@@ -55,33 +70,113 @@ impl Default for AppConfig {
 }
 
 impl AppConfig {
+    pub fn config_path() -> PathBuf {
+        PathBuf::from("voxui_config.json")
+    }
+
     pub fn load() -> Self {
-        let path = PathBuf::from("voxui_config.json");
-        std::fs::read_to_string(&path)
+        Self::load_from_path(&Self::config_path())
+    }
+
+    pub fn load_from_path(path: &Path) -> Self {
+        std::fs::read_to_string(path)
             .ok()
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or_default()
     }
 
-    pub fn save(&self) -> anyhow::Result<()> {
+    pub fn save(&self) -> Result<()> {
+        self.save_to_path(&Self::config_path())
+    }
+
+    pub fn save_to_path(&self, path: &Path) -> Result<()> {
         let json = serde_json::to_string_pretty(self)?;
-        std::fs::write("voxui_config.json", json)?;
+        std::fs::write(path, json)?;
         Ok(())
     }
 }
 
 pub struct AppState {
-    pub engine: Mutex<Option<VoxCPMEngine>>,
+    pub engine: Arc<Mutex<Option<VoxCPMEngine>>>,
     pub audio_system: AudioSystem,
-    pub config: Mutex<AppConfig>,
+    pub config: Arc<Mutex<AppConfig>>,
+    synthesis_busy: Arc<AtomicBool>,
+}
+
+pub struct SynthesisBusyGuard {
+    synthesis_busy: Arc<AtomicBool>,
+}
+
+impl Drop for SynthesisBusyGuard {
+    fn drop(&mut self) {
+        self.synthesis_busy.store(false, Ordering::Release);
+    }
 }
 
 impl AppState {
     pub fn new() -> Self {
         Self {
-            engine: Mutex::new(None),
+            engine: Arc::new(Mutex::new(None)),
             audio_system: AudioSystem::new(),
-            config: Mutex::new(AppConfig::load()),
+            config: Arc::new(Mutex::new(AppConfig::load())),
+            synthesis_busy: Arc::new(AtomicBool::new(false)),
         }
+    }
+
+    pub fn try_begin_synthesis(&self) -> std::result::Result<SynthesisBusyGuard, String> {
+        self.synthesis_busy
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .map(|_| SynthesisBusyGuard {
+                synthesis_busy: Arc::clone(&self.synthesis_busy),
+            })
+            .map_err(|_| "Synthesis already in progress".to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn config_round_trips_desktop_tts_fields() {
+        let tmp = tempdir().unwrap();
+        let path = tmp.path().join("voxui_config.json");
+        let config = AppConfig {
+            model_dir: "models/voxcpm2-fp16".to_string(),
+            lora_dir: Some("models/voxcpm2-fp16/lora_ft2".to_string()),
+            prompt_wav_path: Some("for_test_wav/prompt.wav".to_string()),
+            prompt_text: Some("prompt text".to_string()),
+            reference_wav_path: Some("for_test_wav/reference.wav".to_string()),
+            backend: "CUDA".to_string(),
+            audio_host: "Wasapi".to_string(),
+            audio_device: "Speakers".to_string(),
+            max_chars: 120,
+            dit_steps: 12,
+            language: "English".to_string(),
+        };
+
+        config.save_to_path(&path).unwrap();
+        let loaded = AppConfig::load_from_path(&path);
+
+        assert_eq!(loaded.model_dir, config.model_dir);
+        assert_eq!(loaded.lora_dir, config.lora_dir);
+        assert_eq!(loaded.prompt_wav_path, config.prompt_wav_path);
+        assert_eq!(loaded.prompt_text, config.prompt_text);
+        assert_eq!(loaded.reference_wav_path, config.reference_wav_path);
+        assert_eq!(loaded.backend, "CUDA");
+        assert_eq!(loaded.dit_steps, 12);
+    }
+
+    #[test]
+    fn busy_guard_rejects_second_synthesis_until_dropped() {
+        let state = AppState::new();
+
+        let first = state.try_begin_synthesis();
+        assert!(first.is_ok());
+        assert!(state.try_begin_synthesis().is_err());
+
+        drop(first);
+        assert!(state.try_begin_synthesis().is_ok());
     }
 }
