@@ -45,7 +45,7 @@
 - Create: `D:/Sandbox_Share/VoxUI/voxui/crates/voxui-inference/tests/native_runtime_purity.rs`
 - Modify: `D:/Sandbox_Share/VoxUI/voxui/crates/voxui-inference/src/lib.rs`
 
-- [ ] **Step 1: Write the runtime-purity regression test**
+- [x] **Step 1: Write the runtime-purity regression test**
 
 Create `voxui/crates/voxui-inference/tests/native_runtime_purity.rs`:
 
@@ -90,7 +90,7 @@ fn inference_source_does_not_spawn_or_embed_python_runtime() {
 }
 ```
 
-- [ ] **Step 2: Run the guard**
+- [x] **Step 2: Run the guard**
 
 Run:
 
@@ -101,7 +101,7 @@ cargo test -p voxui-inference --test native_runtime_purity
 
 Expected: pass. This is a guard against a prohibited runtime path, not the main TDD failure.
 
-- [ ] **Step 3: Export explicit native modules**
+- [x] **Step 3: Export explicit native modules**
 
 In `voxui/crates/voxui-inference/src/lib.rs`, add module declarations for the native modules defined in this plan:
 
@@ -118,7 +118,7 @@ pub use manifest::{BundleManifest, ComponentFiles, ModelVariant};
 pub use request::SynthesisRequest;
 ```
 
-- [ ] **Step 4: Run the guard and library check**
+- [x] **Step 4: Run the guard and library check**
 
 Run:
 
@@ -129,7 +129,7 @@ cargo test -p voxui-inference --test native_runtime_purity
 
 Expected: `cargo check` fails until the new modules exist. Keep the failure visible for Task 3 and Task 6.
 
-- [ ] **Step 5: Commit the guard with the first compiling native module commit**
+- [x] **Step 5: Commit the guard with the first compiling native module commit**
 
 Do not commit this task by itself if `cargo check` fails. Include it in the first commit where the crate compiles.
 

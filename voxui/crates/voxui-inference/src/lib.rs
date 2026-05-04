@@ -1,18 +1,24 @@
 //! Inference engine for VoxUI.
 
 pub mod audiovae;
+pub mod audio_io;
 pub mod base_lm;
 pub mod dit;
 pub mod encoder;
 pub mod engine;
 pub mod fsq;
 pub mod lora;
+pub mod manifest;
 pub mod model_loader;
+pub mod request;
 pub mod residual_lm;
+pub mod trace;
 pub mod tokenizer;
 
 pub use engine::VoxCPMEngine;
+pub use manifest::{BundleManifest, ComponentFiles, ModelVariant};
 pub use model_loader::GgufModelLoader;
+pub use request::SynthesisRequest;
 pub use tokenizer::VoxTokenizer;
 
 use anyhow::Result;
