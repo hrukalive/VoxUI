@@ -103,7 +103,7 @@ pub fn scan_lora_entries(model_dir: &Path) -> Vec<LoraEntry> {
 
 pub fn discover_models_root() -> PathBuf {
     if let Ok(current_dir) = std::env::current_dir() {
-        for ancestor in current_dir.ancestors().take(7) {
+        for ancestor in current_dir.ancestors().take(6) {
             let candidate = ancestor.join("models");
             if candidate.is_dir() {
                 return candidate;
@@ -131,7 +131,10 @@ fn optional_path(value: Option<String>) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::sync::Mutex;
     use tempfile::tempdir;
+
+    static CURRENT_DIR_LOCK: Mutex<()> = Mutex::new(());
 
     fn create_manifest_dir(root: &std::path::Path, name: &str) -> std::path::PathBuf {
         let path = root.join(name);
@@ -218,5 +221,29 @@ mod tests {
         assert!(request.prompt_wav_path.is_none());
         assert!(request.prompt_text.is_none());
         assert!(request.reference_wav_path.is_none());
+    }
+
+    #[test]
+    fn discover_models_root_stops_after_six_ancestors() {
+        let _guard = CURRENT_DIR_LOCK.lock().unwrap();
+        let original_dir = std::env::current_dir().unwrap();
+        let tmp = tempdir().unwrap();
+        fs::create_dir_all(tmp.path().join("models")).unwrap();
+
+        let current = tmp
+            .path()
+            .join("one")
+            .join("two")
+            .join("three")
+            .join("four")
+            .join("five")
+            .join("six");
+        fs::create_dir_all(&current).unwrap();
+        std::env::set_current_dir(&current).unwrap();
+
+        let discovered = super::discover_models_root();
+
+        std::env::set_current_dir(original_dir).unwrap();
+        assert_eq!(discovered, std::path::PathBuf::from("models"));
     }
 }
