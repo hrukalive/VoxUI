@@ -1,4 +1,5 @@
 use leptos::prelude::*;
+use crate::app::{LoraEntry, ModelEntry};
 use crate::i18n::Language;
 
 #[component]
@@ -12,9 +13,12 @@ pub fn SettingsModal(
     audio_device: ReadSignal<String>,
     max_chars: ReadSignal<usize>,
     dit_steps: ReadSignal<usize>,
+    prompt_wav_path: ReadSignal<String>,
+    prompt_text: ReadSignal<String>,
+    reference_wav_path: ReadSignal<String>,
     /// Available options
-    models: ReadSignal<Vec<String>>,
-    loras: ReadSignal<Vec<String>>,
+    models: ReadSignal<Vec<ModelEntry>>,
+    loras: ReadSignal<Vec<LoraEntry>>,
     hosts: ReadSignal<Vec<String>>,
     devices: ReadSignal<Vec<String>>,
     /// Callbacks
@@ -28,6 +32,13 @@ pub fn SettingsModal(
     let (sel_device, set_sel_device) = signal(audio_device.get_untracked());
     let (sel_max_chars, set_sel_max_chars) = signal(max_chars.get_untracked());
     let (sel_dit_steps, set_sel_dit_steps) = signal(dit_steps.get_untracked());
+    let (sel_prompt_wav, set_sel_prompt_wav) = signal(prompt_wav_path.get_untracked());
+    let (sel_prompt_text, set_sel_prompt_text) = signal(prompt_text.get_untracked());
+    let (sel_reference_wav, set_sel_reference_wav) = signal(reference_wav_path.get_untracked());
+    let (sel_language, set_sel_language) = signal(match lang.get_untracked() {
+        Language::Chinese => "Chinese".to_string(),
+        Language::English => "English".to_string(),
+    });
 
     let on_close_apply = on_close.clone();
 
@@ -50,11 +61,10 @@ pub fn SettingsModal(
                         >
                             <For
                                 each=move || models.get()
-                                key=|m| m.clone()
-                                children=move |m| {
-                                    let selected = m == sel_model.get();
-                                    let m2 = m.clone();
-                                    view! { <option value={m} selected=selected>{m2}</option> }
+                                key=|model| model.path.clone()
+                                children=move |model| {
+                                    let selected = model.path == sel_model.get();
+                                    view! { <option value={model.path.clone()} selected=selected>{model.name}</option> }
                                 }
                             />
                         </select>
@@ -68,11 +78,11 @@ pub fn SettingsModal(
                         >
                             <For
                                 each=move || loras.get()
-                                key=|l| l.clone()
-                                children=move |l| {
-                                    let selected = l == sel_lora.get();
-                                    let l2 = l.clone();
-                                    view! { <option value={l} selected=selected>{l2}</option> }
+                                key=|lora| lora.path.clone().unwrap_or_else(|| "None".to_string())
+                                children=move |lora| {
+                                    let value = lora.path.clone().unwrap_or_default();
+                                    let selected = value == sel_lora.get() || (value.is_empty() && sel_lora.get() == "None");
+                                    view! { <option value={value} selected=selected>{lora.name}</option> }
                                 }
                             />
                         </select>
@@ -152,6 +162,46 @@ pub fn SettingsModal(
                             }
                         />
                     </SettingsField>
+
+                    // Prompt WAV path
+                    <SettingsField label=move || lang.get().t("prompt_wav")>
+                        <input
+                            type="text"
+                            class="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1 text-sm"
+                            prop:value=move || sel_prompt_wav.get()
+                            on:input=move |ev| set_sel_prompt_wav.set(event_target_value(&ev))
+                        />
+                    </SettingsField>
+
+                    // Prompt text
+                    <SettingsField label=move || lang.get().t("prompt_text")>
+                        <textarea
+                            class="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1 text-sm min-h-16 resize-y"
+                            prop:value=move || sel_prompt_text.get()
+                            on:input=move |ev| set_sel_prompt_text.set(event_target_value(&ev))
+                        />
+                    </SettingsField>
+
+                    // Reference WAV path
+                    <SettingsField label=move || lang.get().t("reference_wav")>
+                        <input
+                            type="text"
+                            class="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1 text-sm"
+                            prop:value=move || sel_reference_wav.get()
+                            on:input=move |ev| set_sel_reference_wav.set(event_target_value(&ev))
+                        />
+                    </SettingsField>
+
+                    // Language
+                    <SettingsField label=move || lang.get().t("language")>
+                        <select
+                            class="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1 text-sm"
+                            on:change=move |ev| set_sel_language.set(event_target_value(&ev))
+                        >
+                            <option value="Chinese" selected=move || sel_language.get() == "Chinese">"中文"</option>
+                            <option value="English" selected=move || sel_language.get() == "English">"English"</option>
+                        </select>
+                    </SettingsField>
                 </div>
                 <div class="flex justify-end gap-2 px-4 py-3 border-t border-gray-700">
                     <button
@@ -174,6 +224,10 @@ pub fn SettingsModal(
                                 audio_device: sel_device.get(),
                                 max_chars: sel_max_chars.get(),
                                 dit_steps: sel_dit_steps.get(),
+                                prompt_wav_path: sel_prompt_wav.get(),
+                                prompt_text: sel_prompt_text.get(),
+                                reference_wav_path: sel_reference_wav.get(),
+                                language: sel_language.get(),
                             });
                         }
                     >
@@ -194,6 +248,10 @@ pub struct SettingsValues {
     pub audio_device: String,
     pub max_chars: usize,
     pub dit_steps: usize,
+    pub prompt_wav_path: String,
+    pub prompt_text: String,
+    pub reference_wav_path: String,
+    pub language: String,
 }
 
 #[component]

@@ -134,13 +134,6 @@ fn lora_selection_option(value: String) -> Option<String> {
     }
 }
 
-fn lora_paths_from_entries(entries: &[LoraEntry]) -> Vec<String> {
-    entries
-        .iter()
-        .map(|entry| entry.path.clone().unwrap_or_else(|| "None".to_string()))
-        .collect::<Vec<_>>()
-}
-
 fn valid_lora_selection(selection: Option<String>, entries: &[LoraEntry]) -> Option<String> {
     selection.filter(|selected| {
         entries
@@ -202,13 +195,11 @@ pub fn App() -> impl IntoView {
     let (prompt_text, set_prompt_text) = signal(String::new());
     let (reference_wav_path, set_reference_wav_path) = signal(String::new());
     let (actual_backend, set_actual_backend) = signal(String::new());
-    let (_status_message, set_status_message) = signal(String::new());
+    let (status_message, set_status_message) = signal(String::new());
 
     // Available options
     let (models, set_models) = signal(Vec::<ModelEntry>::new());
     let (loras, set_loras) = signal(Vec::<LoraEntry>::new());
-    let (model_paths, set_model_paths) = signal(Vec::<String>::new());
-    let (lora_paths, set_lora_paths) = signal(Vec::<String>::new());
     let (hosts, set_hosts) = signal(Vec::<String>::new());
     let (devices, set_devices) = signal(Vec::<String>::new());
 
@@ -251,12 +242,6 @@ pub fn App() -> impl IntoView {
                     .unwrap_or_else(|| model_list[0].clone());
                 set_model_dir.set(selected.path.clone());
                 set_model_name.set(selected.name.clone());
-                set_model_paths.set(
-                    model_list
-                        .iter()
-                        .map(|entry| entry.path.clone())
-                        .collect::<Vec<_>>(),
-                );
                 set_models.set(model_list);
             }
 
@@ -287,13 +272,11 @@ pub fn App() -> impl IntoView {
                         &lora_list,
                     );
                     set_lora_dir.set(selected_lora.clone().unwrap_or_else(|| "None".to_string()));
-                    set_lora_paths.set(lora_paths_from_entries(&lora_list));
                     set_loras.set(lora_list);
                     selected_lora
                 }
                 Err(e) => {
                     set_lora_dir.set("None".into());
-                    set_lora_paths.set(Vec::new());
                     set_loras.set(Vec::new());
                     set_status_message.set(e);
                     None
@@ -501,13 +484,11 @@ pub fn App() -> impl IntoView {
                         &lora_list,
                     );
                     set_lora_dir.set(selected_lora.clone().unwrap_or_else(|| "None".to_string()));
-                    set_lora_paths.set(lora_paths_from_entries(&lora_list));
                     set_loras.set(lora_list);
                     selected_lora
                 }
                 Err(e) => {
                     set_lora_dir.set("None".into());
-                    set_lora_paths.set(Vec::new());
                     set_loras.set(Vec::new());
                     set_status_message.set(e);
                     None
@@ -542,11 +523,16 @@ pub fn App() -> impl IntoView {
         let requested_audio_device = vals.audio_device.clone();
         let requested_max_chars = vals.max_chars;
         let requested_dit_steps = vals.dit_steps;
+        let requested_prompt_wav_path = vals.prompt_wav_path.clone();
+        let requested_prompt_text = vals.prompt_text.clone();
+        let requested_reference_wav_path = vals.reference_wav_path.clone();
+        let requested_language = vals.language.clone();
         let need_reload = requested_model_dir != model_dir.get_untracked()
             || requested_backend != backend.get_untracked();
-        let language = match lang.get_untracked() {
-            Language::Chinese => "Chinese",
-            Language::English => "English",
+        let next_language = if requested_language == "English" {
+            Language::English
+        } else {
+            Language::Chinese
         };
 
         set_model_dir.set(requested_model_dir.clone());
@@ -556,6 +542,10 @@ pub fn App() -> impl IntoView {
         set_audio_device.set(requested_audio_device.clone());
         set_max_chars.set(requested_max_chars);
         set_dit_steps.set(requested_dit_steps);
+        set_prompt_wav_path.set(requested_prompt_wav_path.clone());
+        set_prompt_text.set(requested_prompt_text.clone());
+        set_reference_wav_path.set(requested_reference_wav_path.clone());
+        set_lang.set(next_language);
 
         if need_reload {
             set_engine_ready.set(false);
@@ -574,31 +564,56 @@ pub fn App() -> impl IntoView {
                 Ok(lora_list) => {
                     let selected_lora = valid_lora_selection(requested_lora, &lora_list);
                     set_lora_dir.set(selected_lora.clone().unwrap_or_else(|| "None".to_string()));
-                    set_lora_paths.set(lora_paths_from_entries(&lora_list));
                     set_loras.set(lora_list);
                     selected_lora
                 }
                 Err(e) => {
                     set_lora_dir.set("None".into());
-                    set_lora_paths.set(Vec::new());
                     set_loras.set(Vec::new());
                     set_status_message.set(e);
                     None
                 }
             };
 
+            let (validated_audio_host, validated_audio_device) = match tauri_api::invoke::<_, AudioDeviceList>(
+                "list_audio_devices",
+                &ListAudioDevicesArgs {
+                    host: non_empty_option(requested_audio_host.clone()),
+                },
+            ).await {
+                Ok(audio) => {
+                    set_hosts.set(audio.hosts);
+                    let selected_device = selected_audio_device(
+                        requested_audio_device.clone(),
+                        &audio.devices,
+                        audio.selected_device,
+                    );
+                    set_devices.set(audio.devices);
+                    set_audio_host.set(audio.selected_host.clone());
+                    set_audio_device.set(selected_device.clone());
+                    (audio.selected_host, selected_device)
+                }
+                Err(e) => {
+                    set_status_message.set(e);
+                    (
+                        audio_host.get_untracked(),
+                        audio_device.get_untracked(),
+                    )
+                }
+            };
+
             let config = serde_json::json!({
                 "model_dir": requested_model_dir.clone(),
                 "lora_dir": selected_lora.clone(),
-                "prompt_wav_path": non_empty_option(prompt_wav_path.get_untracked()),
-                "prompt_text": non_empty_option(prompt_text.get_untracked()),
-                "reference_wav_path": non_empty_option(reference_wav_path.get_untracked()),
+                "prompt_wav_path": non_empty_option(requested_prompt_wav_path),
+                "prompt_text": non_empty_option(requested_prompt_text),
+                "reference_wav_path": non_empty_option(requested_reference_wav_path),
                 "backend": requested_backend.clone(),
-                "audio_host": requested_audio_host,
-                "audio_device": requested_audio_device,
+                "audio_host": validated_audio_host,
+                "audio_device": validated_audio_device,
                 "max_chars": requested_max_chars,
                 "dit_steps": requested_dit_steps,
-                "language": language,
+                "language": requested_language,
             });
             let _ = tauri_api::invoke_unit("save_config", &serde_json::json!({ "config": config })).await;
 
@@ -639,7 +654,16 @@ pub fn App() -> impl IntoView {
             <History lang=lang entries=history />
             <ProgressBar progress=progress status=status lang=lang />
             <InputBox lang=lang engine_ready=engine_ready on_submit=on_submit />
-            <StatusBar lang=lang status=status model_name=model_name backend=actual_backend />
+            <StatusBar
+                lang=lang
+                status=status
+                model_name=model_name
+                actual_backend=actual_backend
+                lora_dir=lora_dir
+                audio_host=audio_host
+                audio_device=audio_device
+                status_message=status_message
+            />
             <Show when=move || show_settings.get()>
                 <SettingsModal
                     lang=lang
@@ -650,8 +674,11 @@ pub fn App() -> impl IntoView {
                     audio_device=audio_device
                     max_chars=max_chars
                     dit_steps=dit_steps
-                    models=model_paths
-                    loras=lora_paths
+                    prompt_wav_path=prompt_wav_path
+                    prompt_text=prompt_text
+                    reference_wav_path=reference_wav_path
+                    models=models
+                    loras=loras
                     hosts=hosts
                     devices=devices
                     on_close=move |_| set_show_settings.set(false)

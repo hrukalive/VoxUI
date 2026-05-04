@@ -25,9 +25,8 @@ pub fn InputBox(
     view! {
         <div class="shrink-0 p-3 bg-gray-800 border-t border-gray-700">
             <div class="flex gap-2">
-                <input
-                    type="text"
-                    class="flex-1 px-3 py-2 bg-gray-900 border border-gray-600 rounded text-sm text-gray-100 placeholder-gray-500 focus:outline-none focus:border-blue-500 disabled:opacity-50"
+                <textarea
+                    class="flex-1 px-3 py-2 bg-gray-900 border border-gray-600 rounded text-sm text-gray-100 placeholder-gray-500 focus:outline-none focus:border-blue-500 disabled:opacity-50 min-h-12 max-h-32 resize-y"
                     placeholder=move || lang.get().t("input_placeholder")
                     disabled=move || !engine_ready.get()
                     prop:value=move || text.get()
