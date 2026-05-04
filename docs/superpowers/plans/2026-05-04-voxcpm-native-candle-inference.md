@@ -1758,7 +1758,7 @@ git commit -m "fix(inference): match VoxCPM CFM decoder"
 - Modify: `D:/Sandbox_Share/VoxUI/voxui/crates/voxui-inference/src/tokenizer.rs`
 - Create: `D:/Sandbox_Share/VoxUI/voxui/crates/voxui-inference/tests/generate_flow_parity.rs`
 
-- [ ] **Step 1: Write failing generation-flow parity tests**
+- [x] **Step 1: Write failing generation-flow parity tests**
 
 Create `tests/generate_flow_parity.rs`:
 
@@ -1811,7 +1811,7 @@ fn voxcpm2_reference_request_uses_reference_audio_without_prompt_text() {
 }
 ```
 
-- [ ] **Step 2: Run tests to verify failure**
+- [x] **Step 2: Run tests to verify failure**
 
 Run:
 
@@ -1821,7 +1821,7 @@ cargo test -p voxui-inference --test generate_flow_parity -- --nocapture
 
 Expected: fail because the current engine API and flow do not match `SynthesisRequest`, prompt/reference encoding, and Python masks.
 
-- [ ] **Step 3: Replace engine loading**
+- [x] **Step 3: Replace engine loading**
 
 Change `VoxCPMEngine::load` signature to:
 
@@ -1838,7 +1838,7 @@ It must:
 - Initialize `FSQLayer` from manifest dim and scale.
 - Reject missing component files before loading partial state.
 
-- [ ] **Step 4: Implement Python-compatible token and mask construction**
+- [x] **Step 4: Implement Python-compatible token and mask construction**
 
 In `engine.rs`, add internal methods:
 
@@ -1858,7 +1858,7 @@ They must construct:
 
 Use `audio_start = 101`, `audio_end = 102`, and VoxCPM2 reference tokens `103` and `104` from the manifest.
 
-- [ ] **Step 5: Implement prefill**
+- [x] **Step 5: Implement prefill**
 
 Follow Python `_inference`:
 
@@ -1872,7 +1872,7 @@ Follow Python `_inference`:
   - VoxCPM 0.5 and 1.5 use add path.
   - VoxCPM2 uses `fusion_concat_proj`.
 
-- [ ] **Step 6: Implement autoregressive patch loop**
+- [x] **Step 6: Implement autoregressive patch loop**
 
 For each patch:
 
@@ -1885,7 +1885,7 @@ For each patch:
 - Stop only after `min_len`.
 - Enforce `max_len`.
 
-- [ ] **Step 7: Implement retry bad-case logic**
+- [x] **Step 7: Implement retry bad-case logic**
 
 Match Python retry behavior:
 
@@ -1900,11 +1900,11 @@ if request.retry_badcase
 
 Use the Python ratio formula exactly after inspecting `voxcpm.py` and `voxcpm2.py`.
 
-- [ ] **Step 8: Decode and trim audio**
+- [x] **Step 8: Decode and trim audio**
 
 Decode generated latent patches with AudioVAE decoder, then trim continuation context exactly like Python for prompt-audio requests. Reference-only requests must not be trimmed as continuation.
 
-- [ ] **Step 9: Run generation-flow tests**
+- [x] **Step 9: Run generation-flow tests**
 
 Run:
 
@@ -1914,7 +1914,7 @@ cargo test -p voxui-inference --test generate_flow_parity -- --nocapture
 
 Expected: `OK`.
 
-- [ ] **Step 10: Commit native generation flow**
+- [x] **Step 10: Commit native generation flow**
 
 Run:
 
