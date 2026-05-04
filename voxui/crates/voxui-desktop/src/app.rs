@@ -134,6 +134,39 @@ fn lora_selection_option(value: String) -> Option<String> {
     }
 }
 
+fn lora_paths_from_entries(entries: &[LoraEntry]) -> Vec<String> {
+    entries
+        .iter()
+        .map(|entry| entry.path.clone().unwrap_or_else(|| "None".to_string()))
+        .collect::<Vec<_>>()
+}
+
+fn valid_lora_selection(selection: Option<String>, entries: &[LoraEntry]) -> Option<String> {
+    selection.filter(|selected| {
+        entries
+            .iter()
+            .any(|entry| entry.path.as_ref() == Some(selected))
+    })
+}
+
+async fn list_loras_for_model(model_dir: String) -> Result<Vec<LoraEntry>, String> {
+    tauri_api::invoke::<_, Vec<LoraEntry>>(
+        "list_lora_dirs",
+        &ListLoraArgs { model_dir },
+    )
+    .await
+}
+
+async fn apply_lora_selection(lora_dir: Option<String>) -> Result<(), String> {
+    tauri_api::invoke_unit(
+        "apply_lora",
+        &ApplyLoraArgs {
+            args: ApplyLoraPayload { lora_dir },
+        },
+    )
+    .await
+}
+
 #[component]
 pub fn App() -> impl IntoView {
     let (lang, set_lang) = signal(Language::Chinese);
@@ -143,6 +176,7 @@ pub fn App() -> impl IntoView {
     let (show_settings, set_show_settings) = signal(false);
     let (engine_ready, set_engine_ready) = signal(false);
     let (next_index, set_next_index) = signal(0u32);
+    let (active_index, set_active_index) = signal(None::<u32>);
 
     // Config state
     let (model_dir, set_model_dir) = signal(String::new());
@@ -230,18 +264,25 @@ pub fn App() -> impl IntoView {
 
             // List loras
             let md = model_dir.get_untracked();
-            if let Ok(lora_list) = tauri_api::invoke::<_, Vec<LoraEntry>>(
-                "list_lora_dirs",
-                &ListLoraArgs { model_dir: md.clone() },
-            ).await {
-                set_lora_paths.set(
-                    lora_list
-                        .iter()
-                        .map(|entry| entry.path.clone().unwrap_or_else(|| "None".to_string()))
-                        .collect::<Vec<_>>(),
-                );
-                set_loras.set(lora_list);
-            }
+            let selected_lora = match list_loras_for_model(md).await {
+                Ok(lora_list) => {
+                    let selected_lora = valid_lora_selection(
+                        lora_selection_option(lora_dir.get_untracked()),
+                        &lora_list,
+                    );
+                    set_lora_dir.set(selected_lora.clone().unwrap_or_else(|| "None".to_string()));
+                    set_lora_paths.set(lora_paths_from_entries(&lora_list));
+                    set_loras.set(lora_list);
+                    selected_lora
+                }
+                Err(e) => {
+                    set_lora_dir.set("None".into());
+                    set_lora_paths.set(Vec::new());
+                    set_loras.set(Vec::new());
+                    set_status_message.set(e);
+                    None
+                }
+            };
 
             // Load model
             set_status.set("loading".into());
@@ -253,14 +294,10 @@ pub fn App() -> impl IntoView {
                     set_actual_backend.set(info.backend.clone());
                     set_status.set("ready".into());
                     set_status_message.set(info.warning.unwrap_or_default());
-                    let lora_path = lora_selection_option(lora_dir.get_untracked());
-                    let _ = tauri_api::invoke_unit(
-                        "apply_lora",
-                        &ApplyLoraArgs {
-                            args: ApplyLoraPayload { lora_dir: lora_path },
-                        },
-                    )
-                    .await;
+                    if let Err(e) = apply_lora_selection(selected_lora).await {
+                        set_status.set(format!("Error: {}", e));
+                        set_status_message.set(e);
+                    }
                 }
                 Err(e) => {
                     set_engine_ready.set(false);
@@ -274,6 +311,7 @@ pub fn App() -> impl IntoView {
 
     // Listen for progress events
     {
+        let active_index = active_index.clone();
         let set_progress = set_progress.clone();
         let set_history = set_history.clone();
         spawn_local(async move {
@@ -282,12 +320,17 @@ pub fn App() -> impl IntoView {
                 if let Ok(payload) = serde_wasm_bindgen::from_value::<ProgressPayload>(payload_value) {
                     if payload.total > 0 {
                         let progress_value = payload.step as f64 / payload.total as f64;
-                        set_progress.set(progress_value);
                         set_history.update(|history| {
                             if let Some(entry) = history.get_mut(payload.index as usize) {
                                 entry.progress = progress_value;
                             }
                         });
+                        if active_index
+                            .get_untracked()
+                            .map_or(true, |active| active == payload.index)
+                        {
+                            set_progress.set(progress_value);
+                        }
                     }
                 }
             });
@@ -298,14 +341,14 @@ pub fn App() -> impl IntoView {
 
     // Listen for completion events
     {
+        let active_index = active_index.clone();
+        let set_active_index = set_active_index.clone();
         let set_status = set_status.clone();
         let set_progress = set_progress.clone();
         let set_history = set_history.clone();
         spawn_local(async move {
             let complete_cb = Closure::new(move |val: JsValue| {
                 let payload_value = tauri_api::event_payload(val);
-                set_status.set("ready".into());
-                set_progress.set(0.0);
                 if let Ok(payload) = serde_wasm_bindgen::from_value::<CompletePayload>(payload_value) {
                     set_history.update(|history| {
                         if let Some(entry) = history.get_mut(payload.index as usize) {
@@ -313,6 +356,14 @@ pub fn App() -> impl IntoView {
                             entry.progress = 1.0;
                         }
                     });
+                    if active_index
+                        .get_untracked()
+                        .map_or(true, |active| active == payload.index)
+                    {
+                        set_active_index.set(None);
+                        set_status.set("ready".into());
+                        set_progress.set(0.0);
+                    }
                 } else {
                     // Compatibility with older events that did not include an index.
                     set_history.update(|history| {
@@ -321,6 +372,10 @@ pub fn App() -> impl IntoView {
                             entry.progress = 1.0;
                         }
                     });
+                    if active_index.get_untracked().is_none() {
+                        set_status.set("ready".into());
+                        set_progress.set(0.0);
+                    }
                 }
             });
             let _ = tauri_api::tauri_listen("tts-complete", &complete_cb).await;
@@ -330,6 +385,8 @@ pub fn App() -> impl IntoView {
 
     // Listen for synthesis errors
     {
+        let active_index = active_index.clone();
+        let set_active_index = set_active_index.clone();
         let set_status = set_status.clone();
         let set_progress = set_progress.clone();
         let set_history = set_history.clone();
@@ -337,14 +394,20 @@ pub fn App() -> impl IntoView {
             let error_cb = Closure::new(move |val: JsValue| {
                 let payload_value = tauri_api::event_payload(val);
                 if let Ok(payload) = serde_wasm_bindgen::from_value::<ErrorPayload>(payload_value) {
-                    set_status.set("ready".into());
-                    set_progress.set(0.0);
                     set_history.update(|history| {
                         if let Some(entry) = history.get_mut(payload.index as usize) {
                             entry.status = format!("error: {}", payload.message);
                             entry.progress = 0.0;
                         }
                     });
+                    if active_index
+                        .get_untracked()
+                        .map_or(true, |active| active == payload.index)
+                    {
+                        set_active_index.set(None);
+                        set_status.set("ready".into());
+                        set_progress.set(0.0);
+                    }
                 }
             });
             let _ = tauri_api::tauri_listen("tts-error", &error_cb).await;
@@ -353,8 +416,13 @@ pub fn App() -> impl IntoView {
     }
 
     let on_submit = move |text: String| {
+        if status.get_untracked() == "generating" {
+            return;
+        }
+
         let idx = next_index.get_untracked();
         set_next_index.set(idx + 1);
+        set_active_index.set(Some(idx));
 
         let trimmed = {
             let mc = max_chars.get_untracked();
@@ -394,6 +462,21 @@ pub fn App() -> impl IntoView {
 
             if let Err(e) = tauri_api::invoke_unit("synthesize", &SynthesizeArgs { args: payload }).await {
                 web_sys::console::error_1(&format!("Synthesize error: {}", e).into());
+                set_history.update(|history| {
+                    if let Some(entry) = history.get_mut(idx as usize) {
+                        entry.status = format!("error: {}", e);
+                        entry.progress = 0.0;
+                    }
+                });
+                if active_index
+                    .get_untracked()
+                    .map_or(true, |active| active == idx)
+                {
+                    set_active_index.set(None);
+                    set_status.set("ready".into());
+                    set_progress.set(0.0);
+                    set_status_message.set(e);
+                }
             }
         });
     };
@@ -411,20 +494,35 @@ pub fn App() -> impl IntoView {
                 .map(|entry| entry.name)
                 .unwrap_or_else(|| path.clone());
             set_model_name.set(selected_name);
+            let selected_lora = match list_loras_for_model(path.clone()).await {
+                Ok(lora_list) => {
+                    let selected_lora = valid_lora_selection(
+                        lora_selection_option(lora_dir.get_untracked()),
+                        &lora_list,
+                    );
+                    set_lora_dir.set(selected_lora.clone().unwrap_or_else(|| "None".to_string()));
+                    set_lora_paths.set(lora_paths_from_entries(&lora_list));
+                    set_loras.set(lora_list);
+                    selected_lora
+                }
+                Err(e) => {
+                    set_lora_dir.set("None".into());
+                    set_lora_paths.set(Vec::new());
+                    set_loras.set(Vec::new());
+                    set_status_message.set(e);
+                    None
+                }
+            };
             match tauri_api::invoke::<_, ModelInfo>("load_model", &LoadModelArgs { model_dir: path, backend: be }).await {
                 Ok(info) => {
                     set_engine_ready.set(true);
                     set_actual_backend.set(info.backend.clone());
                     set_status.set("ready".into());
                     set_status_message.set(info.warning.unwrap_or_default());
-                    let lora_path = lora_selection_option(lora_dir.get_untracked());
-                    let _ = tauri_api::invoke_unit(
-                        "apply_lora",
-                        &ApplyLoraArgs {
-                            args: ApplyLoraPayload { lora_dir: lora_path },
-                        },
-                    )
-                    .await;
+                    if let Err(e) = apply_lora_selection(selected_lora).await {
+                        set_status.set(format!("Error: {}", e));
+                        set_status_message.set(e);
+                    }
                 }
                 Err(e) => {
                     set_engine_ready.set(false);
@@ -437,65 +535,90 @@ pub fn App() -> impl IntoView {
 
     let on_apply_settings = move |vals: SettingsValues| {
         set_show_settings.set(false);
-        let need_reload = vals.model_dir != model_dir.get_untracked() || vals.backend != backend.get_untracked();
-        let lora_dir_option = lora_selection_option(vals.lora_dir.clone());
-        let selected_lora = lora_dir_option.clone().unwrap_or_else(|| "None".to_string());
+        let requested_model_dir = vals.model_dir.clone();
+        let requested_lora = lora_selection_option(vals.lora_dir.clone());
+        let requested_backend = vals.backend.clone();
+        let requested_audio_host = vals.audio_host.clone();
+        let requested_audio_device = vals.audio_device.clone();
+        let requested_max_chars = vals.max_chars;
+        let requested_dit_steps = vals.dit_steps;
+        let need_reload = requested_model_dir != model_dir.get_untracked()
+            || requested_backend != backend.get_untracked();
+        let language = match lang.get_untracked() {
+            Language::Chinese => "Chinese",
+            Language::English => "English",
+        };
 
-        set_model_dir.set(vals.model_dir.clone());
-        set_lora_dir.set(selected_lora.clone());
-        set_backend.set(vals.backend.clone());
-        set_audio_host.set(vals.audio_host.clone());
-        set_audio_device.set(vals.audio_device.clone());
-        set_max_chars.set(vals.max_chars);
-        set_dit_steps.set(vals.dit_steps);
-
-        // Save config
-        {
-            let config = serde_json::json!({
-                "model_dir": vals.model_dir,
-                "lora_dir": lora_dir_option.clone(),
-                "prompt_wav_path": non_empty_option(prompt_wav_path.get_untracked()),
-                "prompt_text": non_empty_option(prompt_text.get_untracked()),
-                "reference_wav_path": non_empty_option(reference_wav_path.get_untracked()),
-                "backend": vals.backend,
-                "audio_host": vals.audio_host,
-                "audio_device": vals.audio_device,
-                "max_chars": vals.max_chars,
-                "dit_steps": vals.dit_steps,
-                "language": match lang.get_untracked() { Language::Chinese => "Chinese", Language::English => "English" },
-            });
-            spawn_local(async move {
-                let _ = tauri_api::invoke_unit("save_config", &serde_json::json!({ "config": config })).await;
-            });
-        }
+        set_model_dir.set(requested_model_dir.clone());
+        set_lora_dir.set(requested_lora.clone().unwrap_or_else(|| "None".to_string()));
+        set_backend.set(requested_backend.clone());
+        set_audio_host.set(requested_audio_host.clone());
+        set_audio_device.set(requested_audio_device.clone());
+        set_max_chars.set(requested_max_chars);
+        set_dit_steps.set(requested_dit_steps);
 
         if need_reload {
             set_engine_ready.set(false);
             set_status.set("loading".into());
-            let md = vals.model_dir.clone();
-            let be = vals.backend.clone();
-            let ld = lora_dir_option.clone();
             let selected_name = models
                 .get_untracked()
                 .into_iter()
-                .find(|entry| entry.path == md)
+                .find(|entry| entry.path == requested_model_dir)
                 .map(|entry| entry.name)
-                .unwrap_or_else(|| md.clone());
+                .unwrap_or_else(|| requested_model_dir.clone());
             set_model_name.set(selected_name);
-            spawn_local(async move {
-                match tauri_api::invoke::<_, ModelInfo>("load_model", &LoadModelArgs { model_dir: md, backend: be }).await {
+        }
+
+        spawn_local(async move {
+            let selected_lora = match list_loras_for_model(requested_model_dir.clone()).await {
+                Ok(lora_list) => {
+                    let selected_lora = valid_lora_selection(requested_lora, &lora_list);
+                    set_lora_dir.set(selected_lora.clone().unwrap_or_else(|| "None".to_string()));
+                    set_lora_paths.set(lora_paths_from_entries(&lora_list));
+                    set_loras.set(lora_list);
+                    selected_lora
+                }
+                Err(e) => {
+                    set_lora_dir.set("None".into());
+                    set_lora_paths.set(Vec::new());
+                    set_loras.set(Vec::new());
+                    set_status_message.set(e);
+                    None
+                }
+            };
+
+            let config = serde_json::json!({
+                "model_dir": requested_model_dir.clone(),
+                "lora_dir": selected_lora.clone(),
+                "prompt_wav_path": non_empty_option(prompt_wav_path.get_untracked()),
+                "prompt_text": non_empty_option(prompt_text.get_untracked()),
+                "reference_wav_path": non_empty_option(reference_wav_path.get_untracked()),
+                "backend": requested_backend.clone(),
+                "audio_host": requested_audio_host,
+                "audio_device": requested_audio_device,
+                "max_chars": requested_max_chars,
+                "dit_steps": requested_dit_steps,
+                "language": language,
+            });
+            let _ = tauri_api::invoke_unit("save_config", &serde_json::json!({ "config": config })).await;
+
+            if need_reload {
+                match tauri_api::invoke::<_, ModelInfo>(
+                    "load_model",
+                    &LoadModelArgs {
+                        model_dir: requested_model_dir,
+                        backend: requested_backend,
+                    },
+                ).await {
                     Ok(info) => {
                         set_engine_ready.set(true);
                         set_actual_backend.set(info.backend.clone());
                         set_status.set("ready".into());
                         set_status_message.set(info.warning.unwrap_or_default());
-                        let _ = tauri_api::invoke_unit(
-                            "apply_lora",
-                            &ApplyLoraArgs {
-                                args: ApplyLoraPayload { lora_dir: ld },
-                            },
-                        )
-                        .await;
+                        if let Err(e) = apply_lora_selection(selected_lora).await {
+                            set_status.set(format!("Error: {}", e));
+                            set_status_message.set(e);
+                        }
                     }
                     Err(e) => {
                         set_engine_ready.set(false);
@@ -503,18 +626,11 @@ pub fn App() -> impl IntoView {
                         set_status_message.set(e);
                     }
                 }
-            });
-        } else {
-            spawn_local(async move {
-                let _ = tauri_api::invoke_unit(
-                    "apply_lora",
-                    &ApplyLoraArgs {
-                        args: ApplyLoraPayload { lora_dir: lora_dir_option },
-                    },
-                )
-                .await;
-            });
-        }
+            } else if let Err(e) = apply_lora_selection(selected_lora).await {
+                set_status.set(format!("Error: {}", e));
+                set_status_message.set(e);
+            }
+        });
     };
 
     view! {
