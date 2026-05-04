@@ -4,6 +4,7 @@ use anyhow::Result;
 use candle_core::{DType, Device, Tensor, D};
 use candle_nn::ops::silu;
 
+use crate::lora::LoraAdapter;
 use crate::model_loader::GgufModelLoader;
 
 /// Configuration for the DiT transformer and CFM solver.
@@ -350,6 +351,7 @@ impl DiT {
         t: &Tensor,
         cond: &Tensor,
         dt: &Tensor,
+        lora: Option<&LoraAdapter>,
     ) -> Result<Tensor> {
         // Determine model dtype from weights and cast inputs to match
         let model_dtype = self.in_proj.weight.dtype();
@@ -409,14 +411,32 @@ impl DiT {
         };
 
         // Transformer layers (non-causal, muP scaling)
-        for layer in &self.layers {
+        for (layer_idx, layer) in self.layers.iter().enumerate() {
             let residual = hidden.clone();
             hidden = rms_norm(&hidden, &layer.input_layernorm, self.config.rms_norm_eps)?;
 
             // QKV
-            let q = linear_no_bias(&hidden, &layer.q_proj)?;
-            let k = linear_no_bias(&hidden, &layer.k_proj)?;
-            let v = linear_no_bias(&hidden, &layer.v_proj)?;
+            let attn_input = hidden.clone();
+            let mut q = linear_no_bias(&hidden, &layer.q_proj)?;
+            let mut k = linear_no_bias(&hidden, &layer.k_proj)?;
+            let mut v = linear_no_bias(&hidden, &layer.v_proj)?;
+            if let Some(lora) = lora {
+                let name = format!(
+                    "{}.decoder.layers.{}.self_attn.q_proj",
+                    self.config.prefix, layer_idx
+                );
+                q = lora.apply(&name, &q, &attn_input)?;
+                let name = format!(
+                    "{}.decoder.layers.{}.self_attn.k_proj",
+                    self.config.prefix, layer_idx
+                );
+                k = lora.apply(&name, &k, &attn_input)?;
+                let name = format!(
+                    "{}.decoder.layers.{}.self_attn.v_proj",
+                    self.config.prefix, layer_idx
+                );
+                v = lora.apply(&name, &v, &attn_input)?;
+            }
 
             let q = q
                 .reshape((b, total_len, self.config.num_heads, self.config.head_dim))?
@@ -445,7 +465,15 @@ impl DiT {
             let attn_out = attn_out
                 .transpose(1, 2)?
                 .reshape((b, total_len, self.config.num_heads * self.config.head_dim))?;
-            let attn_out = linear_no_bias(&attn_out, &layer.o_proj)?;
+            let o_input = attn_out.clone();
+            let mut attn_out = linear_no_bias(&attn_out, &layer.o_proj)?;
+            if let Some(lora) = lora {
+                let name = format!(
+                    "{}.decoder.layers.{}.self_attn.o_proj",
+                    self.config.prefix, layer_idx
+                );
+                attn_out = lora.apply(&name, &attn_out, &o_input)?;
+            }
 
             hidden = (residual + (attn_out * residual_scale)?)?;
 
@@ -454,9 +482,22 @@ impl DiT {
             hidden =
                 rms_norm(&hidden, &layer.post_attention_layernorm, self.config.rms_norm_eps)?;
 
-            let gate = silu(&linear_no_bias(&hidden, &layer.gate_proj)?)?;
-            let up = linear_no_bias(&hidden, &layer.up_proj)?;
-            let mlp_out = linear_no_bias(&(gate * up)?, &layer.down_proj)?;
+            let mlp_input = hidden.clone();
+            let mut gate = linear_no_bias(&hidden, &layer.gate_proj)?;
+            let mut up = linear_no_bias(&hidden, &layer.up_proj)?;
+            if let Some(lora) = lora {
+                let name = format!("{}.decoder.layers.{}.mlp.gate_proj", self.config.prefix, layer_idx);
+                gate = lora.apply(&name, &gate, &mlp_input)?;
+                let name = format!("{}.decoder.layers.{}.mlp.up_proj", self.config.prefix, layer_idx);
+                up = lora.apply(&name, &up, &mlp_input)?;
+            }
+            let gate = silu(&gate)?;
+            let down_input = (gate * up)?;
+            let mut mlp_out = linear_no_bias(&down_input, &layer.down_proj)?;
+            if let Some(lora) = lora {
+                let name = format!("{}.decoder.layers.{}.mlp.down_proj", self.config.prefix, layer_idx);
+                mlp_out = lora.apply(&name, &mlp_out, &down_input)?;
+            }
             hidden = (residual + (mlp_out * residual_scale)?)?;
         }
 
@@ -490,6 +531,30 @@ impl DiT {
         noise: &Tensor,
         n_steps: usize,
         cfg_value: f32,
+    ) -> Result<Tensor> {
+        self.solve_euler_with_noise_inner(mu, cond, noise, n_steps, cfg_value, None)
+    }
+
+    pub fn solve_euler_with_noise_lora(
+        &self,
+        mu: &Tensor,
+        cond: &Tensor,
+        noise: &Tensor,
+        n_steps: usize,
+        cfg_value: f32,
+        lora: Option<&LoraAdapter>,
+    ) -> Result<Tensor> {
+        self.solve_euler_with_noise_inner(mu, cond, noise, n_steps, cfg_value, lora)
+    }
+
+    fn solve_euler_with_noise_inner(
+        &self,
+        mu: &Tensor,
+        cond: &Tensor,
+        noise: &Tensor,
+        n_steps: usize,
+        cfg_value: f32,
+        lora: Option<&LoraAdapter>,
     ) -> Result<Tensor> {
         let b = mu.dims()[0];
         let patch_size = noise.dim(2)?;
@@ -531,7 +596,14 @@ impl DiT {
                 let dt_zero = Tensor::zeros((2 * b,), DType::F32, &self.device)?;
                 let cond_doubled = Tensor::cat(&[cond, cond], 0)?; // [2B, 64, T']
 
-                let v = self.forward(&x_doubled, &mu_doubled, &t_doubled, &cond_doubled, &dt_zero)?;
+                let v = self.forward(
+                    &x_doubled,
+                    &mu_doubled,
+                    &t_doubled,
+                    &cond_doubled,
+                    &dt_zero,
+                    lora,
+                )?;
                 // Cast back to f32 for ODE solver math
                 let v = v.to_dtype(DType::F32)?;
 

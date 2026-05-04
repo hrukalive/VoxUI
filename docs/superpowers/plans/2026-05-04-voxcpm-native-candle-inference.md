@@ -1934,7 +1934,7 @@ git commit -m "fix(inference): implement native VoxCPM generate flow"
 - Modify: `D:/Sandbox_Share/VoxUI/voxui/crates/voxui-inference/src/engine.rs`
 - Create: `D:/Sandbox_Share/VoxUI/voxui/crates/voxui-inference/tests/lora_parity.rs`
 
-- [ ] **Step 1: Write failing LoRA tests**
+- [x] **Step 1: Write failing LoRA tests**
 
 Create `tests/lora_parity.rs`:
 
@@ -1983,7 +1983,7 @@ fn lora_adapter_changes_generation_without_breaking_audio() {
 }
 ```
 
-- [ ] **Step 2: Run tests to verify failure**
+- [x] **Step 2: Run tests to verify failure**
 
 Run:
 
@@ -1993,7 +1993,7 @@ cargo test -p voxui-inference --test lora_parity -- --nocapture
 
 Expected: fail because LoRA manifests and DiT/projection LoRA application are incomplete.
 
-- [ ] **Step 3: Implement LoRA manifest loading**
+- [x] **Step 3: Implement LoRA manifest loading**
 
 In `lora.rs`, load `lora_manifest.json`, verify:
 
@@ -2003,7 +2003,7 @@ In `lora.rs`, load `lora_manifest.json`, verify:
 - Tensor shapes match the target base module.
 - Target modules are limited to exported targets.
 
-- [ ] **Step 4: Implement raw LoRA formula**
+- [x] **Step 4: Implement raw LoRA formula**
 
 Expose for tests:
 
@@ -2016,7 +2016,7 @@ pub fn apply_raw(base: &Tensor, input: &Tensor, a: &Tensor, b: &Tensor, alpha: f
 
 Adjust transposes if exported LoRA `A` and `B` tensors follow PyTorch `Linear` layout. Validate against `VoxCPM/src/voxcpm/modules/layers/lora.py`.
 
-- [ ] **Step 5: Apply LoRA in every supported component**
+- [x] **Step 5: Apply LoRA in every supported component**
 
 Apply adapters to:
 
@@ -2026,7 +2026,7 @@ Apply adapters to:
 - `feat_decoder` DiT attention and MLP modules
 - projection layers if exported
 
-- [ ] **Step 6: Run LoRA tests**
+- [x] **Step 6: Run LoRA tests**
 
 Run:
 
@@ -2036,7 +2036,7 @@ cargo test -p voxui-inference --test lora_parity -- --nocapture
 
 Expected: `OK`.
 
-- [ ] **Step 7: Commit LoRA**
+- [x] **Step 7: Commit LoRA**
 
 Run:
 

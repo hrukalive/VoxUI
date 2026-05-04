@@ -20,6 +20,7 @@ pub use base_lm::{BaseLM, BaseLMConfig};
 pub use dit::DiT;
 pub use encoder::LocalEncoder;
 pub use engine::VoxCPMEngine;
+pub use lora::LoraAdapter;
 pub use manifest::{BundleManifest, ComponentFiles, ModelVariant};
 pub use model_loader::GgufModelLoader;
 pub use request::SynthesisRequest;

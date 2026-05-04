@@ -210,7 +210,11 @@ impl VoxCPMEngine {
     }
 
     pub fn load_lora(&mut self, path: &Path) -> Result<()> {
-        self.lora = Some(LoraAdapter::load_from_dir(path, &self.device)?);
+        self.lora = Some(LoraAdapter::load_from_dir_for_model(
+            path,
+            &self.device,
+            &self.manifest,
+        )?);
         Ok(())
     }
 
@@ -464,7 +468,7 @@ impl VoxCPMEngine {
 
         let seq_len = prepared.text_tokens.len();
         let feat_embed = self.encoder.encode_patches(&prepared.audio_feat)?;
-        let feat_embed = linear_projection(&feat_embed, &self.enc_to_lm_proj)?;
+        let feat_embed = self.apply_projection(&feat_embed, &self.enc_to_lm_proj, "enc_to_lm_proj")?;
         let text_embed = self.base_lm.embed(&prepared.text_tokens)?;
 
         let text_mask = prepared
@@ -500,7 +504,11 @@ impl VoxCPMEngine {
                 .as_ref()
                 .context("VoxCPM2 requires fusion_concat_proj")?;
             let masked_feat = feat_embed.broadcast_mul(&audio_mask)?;
-            linear_projection(&Tensor::cat(&[&enc_outputs, &masked_feat], 2)?, fusion)?
+            self.apply_projection(
+                &Tensor::cat(&[&enc_outputs, &masked_feat], 2)?,
+                fusion,
+                "fusion_concat_proj",
+            )?
         } else {
             (enc_outputs + feat_embed.broadcast_mul(&audio_mask)?)?
         };
@@ -572,8 +580,13 @@ impl VoxCPMEngine {
         request: &SynthesisRequest,
         fixed_noise: Option<&Tensor>,
     ) -> Result<(Tensor, Tensor, Tensor)> {
-        let dit_hidden_1 = linear_projection(&state.lm_hidden, &self.lm_to_dit_proj)?;
-        let dit_hidden_2 = linear_projection(&state.residual_hidden, &self.res_to_dit_proj)?;
+        let dit_hidden_1 =
+            self.apply_projection(&state.lm_hidden, &self.lm_to_dit_proj, "lm_to_dit_proj")?;
+        let dit_hidden_2 = self.apply_projection(
+            &state.residual_hidden,
+            &self.res_to_dit_proj,
+            "res_to_dit_proj",
+        )?;
         let dit_hidden = if self.config.variant == ModelVariant::VoxCpm2 {
             Tensor::cat(&[&dit_hidden_1, &dit_hidden_2], 1)?
         } else {
@@ -589,17 +602,18 @@ impl VoxCPMEngine {
                 &self.device,
             )?,
         };
-        let latent_patch = self.dit.solve_euler_with_noise(
+        let latent_patch = self.dit.solve_euler_with_noise_lora(
             &dit_hidden,
             &state.prefix_feat_cond,
             &noise,
             request.inference_timesteps,
             request.cfg_value,
+            self.lora.as_ref(),
         )?;
         let pred_feat = latent_patch.transpose(1, 2)?.contiguous()?;
         let pred_feat_for_encoder = pred_feat.unsqueeze(1)?;
         let curr_embed = self.encoder.encode_patches(&pred_feat_for_encoder)?;
-        let curr_embed = linear_projection(&curr_embed, &self.enc_to_lm_proj)?;
+        let curr_embed = self.apply_projection(&curr_embed, &self.enc_to_lm_proj, "enc_to_lm_proj")?;
 
         state.generated_patches.push(pred_feat.clone());
         state.prefix_feat_cond = latent_patch.clone();
@@ -618,7 +632,11 @@ impl VoxCPMEngine {
                 .fusion_concat_proj
                 .as_ref()
                 .context("VoxCPM2 requires fusion_concat_proj")?;
-            linear_projection(&Tensor::cat(&[&state.lm_hidden, &curr_embed_step], 1)?, fusion)?
+            self.apply_projection(
+                &Tensor::cat(&[&state.lm_hidden, &curr_embed_step], 1)?,
+                fusion,
+                "fusion_concat_proj",
+            )?
         } else {
             (state.lm_hidden.clone() + curr_embed_step)?
         };
@@ -633,6 +651,20 @@ impl VoxCPMEngine {
     fn stop_logits(&self, lm_hidden: &Tensor) -> Result<Tensor> {
         let stop_in = silu(&linear_projection(lm_hidden, &self.stop_proj)?)?;
         linear_projection(&stop_in, &self.stop_head)
+    }
+
+    fn apply_projection(
+        &self,
+        x: &Tensor,
+        projection: &LinearProjection,
+        name: &str,
+    ) -> Result<Tensor> {
+        let base = linear_projection(x, projection)?;
+        if let Some(lora) = self.lora.as_ref() {
+            lora.apply(name, &base, x)
+        } else {
+            Ok(base)
+        }
     }
 
     fn decode_generation(&self, output: GenerationOutput) -> Result<Vec<f32>> {
