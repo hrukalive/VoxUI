@@ -1,5 +1,5 @@
-use wasm_bindgen::prelude::*;
 use serde::{de::DeserializeOwned, Serialize};
+use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen]
 extern "C" {
@@ -34,6 +34,14 @@ pub async fn invoke_no_args<R: DeserializeOwned>(cmd: &str) -> Result<R, String>
         .await
         .map_err(|e| e.as_string().unwrap_or_else(|| format!("{:?}", e)))?;
     serde_wasm_bindgen::from_value(result).map_err(|e| e.to_string())
+}
+
+/// Extract the payload from a Tauri event object, accepting raw payloads for compatibility.
+pub fn event_payload(value: JsValue) -> JsValue {
+    match js_sys::Reflect::get(&value, &JsValue::from_str("payload")) {
+        Ok(payload) if !payload.is_undefined() => payload,
+        _ => value,
+    }
 }
 
 // Event listening - we use raw JS via wasm_bindgen for Tauri event API

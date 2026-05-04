@@ -107,6 +107,11 @@ struct ProgressPayload {
 }
 
 #[derive(Deserialize, Debug)]
+struct CompletePayload {
+    index: u32,
+}
+
+#[derive(Deserialize, Debug)]
 struct ErrorPayload {
     index: u32,
     message: String,
@@ -273,9 +278,16 @@ pub fn App() -> impl IntoView {
         let set_history = set_history.clone();
         spawn_local(async move {
             let progress_cb = Closure::new(move |val: JsValue| {
-                if let Ok(payload) = serde_wasm_bindgen::from_value::<ProgressPayload>(val) {
+                let payload_value = tauri_api::event_payload(val);
+                if let Ok(payload) = serde_wasm_bindgen::from_value::<ProgressPayload>(payload_value) {
                     if payload.total > 0 {
-                        set_progress.set(payload.step as f64 / payload.total as f64);
+                        let progress_value = payload.step as f64 / payload.total as f64;
+                        set_progress.set(progress_value);
+                        set_history.update(|history| {
+                            if let Some(entry) = history.get_mut(payload.index as usize) {
+                                entry.progress = progress_value;
+                            }
+                        });
                     }
                 }
             });
@@ -290,16 +302,26 @@ pub fn App() -> impl IntoView {
         let set_progress = set_progress.clone();
         let set_history = set_history.clone();
         spawn_local(async move {
-            let complete_cb = Closure::new(move |_val: JsValue| {
+            let complete_cb = Closure::new(move |val: JsValue| {
+                let payload_value = tauri_api::event_payload(val);
                 set_status.set("ready".into());
                 set_progress.set(0.0);
-                // Mark latest generating entry as done
-                set_history.update(|h| {
-                    if let Some(entry) = h.iter_mut().rev().find(|e| e.status == "generating") {
-                        entry.status = "done".into();
-                        entry.progress = 1.0;
-                    }
-                });
+                if let Ok(payload) = serde_wasm_bindgen::from_value::<CompletePayload>(payload_value) {
+                    set_history.update(|history| {
+                        if let Some(entry) = history.get_mut(payload.index as usize) {
+                            entry.status = "done".into();
+                            entry.progress = 1.0;
+                        }
+                    });
+                } else {
+                    // Compatibility with older events that did not include an index.
+                    set_history.update(|history| {
+                        if let Some(entry) = history.iter_mut().rev().find(|entry| entry.status == "generating") {
+                            entry.status = "done".into();
+                            entry.progress = 1.0;
+                        }
+                    });
+                }
             });
             let _ = tauri_api::tauri_listen("tts-complete", &complete_cb).await;
             complete_cb.forget();
@@ -313,7 +335,8 @@ pub fn App() -> impl IntoView {
         let set_history = set_history.clone();
         spawn_local(async move {
             let error_cb = Closure::new(move |val: JsValue| {
-                if let Ok(payload) = serde_wasm_bindgen::from_value::<ErrorPayload>(val) {
+                let payload_value = tauri_api::event_payload(val);
+                if let Ok(payload) = serde_wasm_bindgen::from_value::<ErrorPayload>(payload_value) {
                     set_status.set("ready".into());
                     set_progress.set(0.0);
                     set_history.update(|history| {
