@@ -12,6 +12,10 @@ target/
 # Rust backup files
 **/*.rs.bk
 
+# Local agent worktrees
+.worktrees
+.worktrees/
+
 # Keep Cargo.lock for Tauri apps
 !Cargo.lock
 !src-tauri/Cargo.lock
