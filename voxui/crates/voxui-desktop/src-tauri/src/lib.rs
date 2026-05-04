@@ -1,3 +1,4 @@
+mod desktop_core;
 mod commands;
 mod state;
 
