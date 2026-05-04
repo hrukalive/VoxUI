@@ -443,7 +443,7 @@ git commit -m "test(inference): add VoxCPM golden trace tooling"
 - Modify: `D:/Sandbox_Share/VoxUI/exporter/export_voxcpm.py`
 - Create: `D:/Sandbox_Share/VoxUI/exporter/tests/test_export_manifest.py`
 
-- [ ] **Step 1: Write failing exporter tests**
+- [x] **Step 1: Write failing exporter tests**
 
 Create `exporter/tests/test_export_manifest.py`:
 
@@ -526,7 +526,7 @@ class ExportManifestTests(unittest.TestCase):
         self.assertEqual(manifest["components"]["feat_decoder"], "feat_decoder.gguf")
 ```
 
-- [ ] **Step 2: Run tests to verify failure**
+- [x] **Step 2: Run tests to verify failure**
 
 Run:
 
@@ -537,7 +537,7 @@ python -m unittest exporter.tests.test_export_manifest
 
 Expected: fail because the current exporter uses `encoder.gguf` and `dit.gguf`, does not expose `build_manifest`, and does not hard-fail missing coverage.
 
-- [ ] **Step 3: Rewrite component partitioning**
+- [x] **Step 3: Rewrite component partitioning**
 
 In `exporter/export_voxcpm.py`, set component files exactly:
 
@@ -576,7 +576,7 @@ def _vae_transform(key):
     return f"audio_vae.{key}"
 ```
 
-- [ ] **Step 4: Add manifest generation**
+- [x] **Step 4: Add manifest generation**
 
 Implement `build_manifest(...)` so the written `manifest.json` contains:
 
@@ -606,7 +606,7 @@ Implement `build_manifest(...)` so the written `manifest.json` contains:
 
 Also include `patch_size`, `feat_dim`, `scalar_quantization_latent_dim`, `scalar_quantization_scale`, `audio_vae`, `lm_config`, `encoder_config`, `dit_config`, and `quantization` from the Python config.
 
-- [ ] **Step 5: Add strict tensor coverage**
+- [x] **Step 5: Add strict tensor coverage**
 
 Implement `validate_required_tensors(buckets, variant)` with these checks:
 
@@ -623,7 +623,7 @@ REQUIRED_PREFIXES = {
 
 The function must raise `ValueError("missing required tensor ...")` when no tensor in a component matches a required name or prefix. It must also raise for duplicate tensor names within one GGUF component.
 
-- [ ] **Step 6: Update LoRA export**
+- [x] **Step 6: Update LoRA export**
 
 Use output files:
 
@@ -634,7 +634,7 @@ Use output files:
 
 Keep LoRA tensor names source-faithful, and write `lora_manifest.json` with rank, alpha, variant, architecture, and target module lists.
 
-- [ ] **Step 7: Run exporter tests**
+- [x] **Step 7: Run exporter tests**
 
 Run:
 
@@ -644,7 +644,7 @@ python -m unittest exporter.tests.test_export_manifest
 
 Expected: `OK`.
 
-- [ ] **Step 8: Commit exporter schema**
+- [x] **Step 8: Commit exporter schema**
 
 Run:
 
