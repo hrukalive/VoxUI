@@ -134,6 +134,13 @@ fn lora_selection_option(value: String) -> Option<String> {
     }
 }
 
+fn truncate_to_chars(value: &str, max_chars: usize) -> String {
+    match value.char_indices().nth(max_chars) {
+        Some((byte_index, _)) => value[..byte_index].to_string(),
+        None => value.to_string(),
+    }
+}
+
 fn valid_lora_selection(selection: Option<String>, entries: &[LoraEntry]) -> Option<String> {
     selection.filter(|selected| {
         entries
@@ -412,7 +419,7 @@ pub fn App() -> impl IntoView {
 
         let trimmed = {
             let mc = max_chars.get_untracked();
-            if text.len() > mc { text[..mc].to_string() } else { text.clone() }
+            truncate_to_chars(&text, mc)
         };
 
         let now = js_sys::Date::new_0();
@@ -560,6 +567,7 @@ pub fn App() -> impl IntoView {
         }
 
         spawn_local(async move {
+            let mut had_settings_error = false;
             let selected_lora = match list_loras_for_model(requested_model_dir.clone()).await {
                 Ok(lora_list) => {
                     let selected_lora = valid_lora_selection(requested_lora, &lora_list);
@@ -571,6 +579,7 @@ pub fn App() -> impl IntoView {
                     set_lora_dir.set("None".into());
                     set_loras.set(Vec::new());
                     set_status_message.set(e);
+                    had_settings_error = true;
                     None
                 }
             };
@@ -595,6 +604,7 @@ pub fn App() -> impl IntoView {
                 }
                 Err(e) => {
                     set_status_message.set(e);
+                    had_settings_error = true;
                     (
                         audio_host.get_untracked(),
                         audio_device.get_untracked(),
@@ -644,6 +654,9 @@ pub fn App() -> impl IntoView {
             } else if let Err(e) = apply_lora_selection(selected_lora).await {
                 set_status.set(format!("Error: {}", e));
                 set_status_message.set(e);
+            } else if !had_settings_error {
+                set_status.set("ready".into());
+                set_status_message.set(String::new());
             }
         });
     };
