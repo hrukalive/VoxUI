@@ -288,6 +288,7 @@ impl VoxCPMEngine {
             .unwrap_or_else(|| if num_heads > 0 { hidden_dim / num_heads } else { 128 });
 
         Ok(DiTConfig {
+            prefix: "dit.estimator".to_string(),
             hidden_dim,
             num_layers: get_u32("voxcpm.dit.num_layers", 12) as usize,
             num_heads,
@@ -296,6 +297,11 @@ impl VoxCPMEngine {
             ffn_dim: get_u32("voxcpm.dit.ffn_dim", 4096) as usize,
             rms_norm_eps: get_f32("voxcpm.dit.rms_norm_eps", 1e-5) as f64,
             scale_depth: get_f32("voxcpm.dit.scale_depth", 1.4) as f64,
+            use_mup: false,
+            rope_theta: 10000.0,
+            original_max_position_embeddings: None,
+            rope_short_factors: vec![1.0; head_dim / 2],
+            rope_long_factors: vec![1.0; head_dim / 2],
             cfg_value: get_f32("voxcpm.dit.cfg_value", 2.0) as f64,
             n_steps: get_u32("voxcpm.dit.n_steps", 10) as usize,
             sway_coef: get_f32("voxcpm.dit.sway_coef", 1.0) as f64,

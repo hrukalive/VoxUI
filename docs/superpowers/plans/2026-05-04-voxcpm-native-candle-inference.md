@@ -1650,7 +1650,7 @@ git commit -m "fix(inference): match VoxCPM local encoder shape"
 - Modify: `D:/Sandbox_Share/VoxUI/voxui/crates/voxui-inference/src/dit.rs`
 - Create: `D:/Sandbox_Share/VoxUI/voxui/crates/voxui-inference/tests/dit_parity.rs`
 
-- [ ] **Step 1: Write failing DiT parity tests**
+- [x] **Step 1: Write failing DiT parity tests**
 
 Create `tests/dit_parity.rs`:
 
@@ -1677,7 +1677,7 @@ fn first_dit_patch_matches_python_trace_with_fixed_noise() {
 }
 ```
 
-- [ ] **Step 2: Run test to verify failure**
+- [x] **Step 2: Run test to verify failure**
 
 Run:
 
@@ -1687,7 +1687,7 @@ cargo test -p voxui-inference --test dit_parity -- --nocapture
 
 Expected: fail because current `DiT::generate` is approximate and does not expose fixed-noise Euler solving.
 
-- [ ] **Step 3: Implement manifest-driven DiT config**
+- [x] **Step 3: Implement manifest-driven DiT config**
 
 In `dit.rs`, implement `DiT::load_from_manifest(&loader, &manifest)` that reads:
 
@@ -1702,7 +1702,7 @@ In `dit.rs`, implement `DiT::load_from_manifest(&loader, &manifest)` that reads:
 - CFG-Zero* warmup if present
 - variant-specific local DiT class layout
 
-- [ ] **Step 4: Implement `UnifiedCFM.forward` parity**
+- [x] **Step 4: Implement `UnifiedCFM.forward` parity**
 
 Match `VoxCPM/src/voxcpm/modules/locdit/unified_cfm.py` exactly:
 
@@ -1712,7 +1712,7 @@ Match `VoxCPM/src/voxcpm/modules/locdit/unified_cfm.py` exactly:
 - CFG-Zero* warmup handling.
 - `sway_sampling_coef` time transform.
 
-- [ ] **Step 5: Implement deterministic Euler solver**
+- [x] **Step 5: Implement deterministic Euler solver**
 
 Add:
 
@@ -1729,7 +1729,7 @@ pub fn solve_euler_with_noise(
 
 It must use the supplied `noise` tensor instead of sampling internally. Production generation may call a wrapper that samples Candle noise on the selected device.
 
-- [ ] **Step 6: Run DiT tests**
+- [x] **Step 6: Run DiT tests**
 
 Run:
 
@@ -1739,7 +1739,7 @@ cargo test -p voxui-inference --test dit_parity -- --nocapture
 
 Expected: `OK` within `3e-3`.
 
-- [ ] **Step 7: Commit DiT parity**
+- [x] **Step 7: Commit DiT parity**
 
 Run:
 

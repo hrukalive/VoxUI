@@ -8,6 +8,7 @@ use crate::model_loader::GgufModelLoader;
 
 /// Configuration for the DiT transformer and CFM solver.
 pub struct DiTConfig {
+    pub prefix: String,
     pub hidden_dim: usize,   // 1024
     pub num_layers: usize,   // 12
     pub num_heads: usize,    // 16
@@ -16,6 +17,11 @@ pub struct DiTConfig {
     pub ffn_dim: usize,      // 4096
     pub rms_norm_eps: f64,   // 1e-5
     pub scale_depth: f64,    // 1.4
+    pub use_mup: bool,
+    pub rope_theta: f64,
+    pub original_max_position_embeddings: Option<usize>,
+    pub rope_short_factors: Vec<f32>,
+    pub rope_long_factors: Vec<f32>,
     pub cfg_value: f64,      // 2.0
     pub n_steps: usize,      // 10
     pub sway_coef: f64,      // 1.0
@@ -25,6 +31,7 @@ pub struct DiTConfig {
 impl Default for DiTConfig {
     fn default() -> Self {
         Self {
+            prefix: "dit.estimator".to_string(),
             hidden_dim: 1024,
             num_layers: 12,
             num_heads: 16,
@@ -33,6 +40,11 @@ impl Default for DiTConfig {
             ffn_dim: 4096,
             rms_norm_eps: 1e-5,
             scale_depth: 1.4,
+            use_mup: false,
+            rope_theta: 10000.0,
+            original_max_position_embeddings: None,
+            rope_short_factors: vec![1.0; 64],
+            rope_long_factors: vec![1.0; 64],
             cfg_value: 2.0,
             n_steps: 10,
             sway_coef: 1.0,
@@ -115,15 +127,19 @@ fn linear_no_bias(x: &Tensor, weight: &Tensor) -> Result<Tensor> {
 
 /// Apply rotary position embeddings.
 fn apply_rope(x: &Tensor, cos: &Tensor, sin: &Tensor) -> Result<Tensor> {
+    let orig_dtype = x.dtype();
+    let x = x.to_dtype(DType::F32)?;
     let (_b, _h, _t, hd) = x.dims4()?;
     let half = hd / 2;
     let x1 = x.narrow(3, 0, half)?;
     let x2 = x.narrow(3, half, half)?;
-    let cos = cos.unsqueeze(0)?.unsqueeze(0)?.to_dtype(x.dtype())?;
-    let sin = sin.unsqueeze(0)?.unsqueeze(0)?.to_dtype(x.dtype())?;
+    let cos = cos.unsqueeze(0)?.unsqueeze(0)?.to_dtype(DType::F32)?;
+    let sin = sin.unsqueeze(0)?.unsqueeze(0)?.to_dtype(DType::F32)?;
     let o1 = (x1.broadcast_mul(&cos)? - x2.broadcast_mul(&sin)?)?;
     let o2 = (x1.broadcast_mul(&sin)? + x2.broadcast_mul(&cos)?)?;
-    Tensor::cat(&[&o1, &o2], 3).map_err(Into::into)
+    Tensor::cat(&[&o1, &o2], 3)?
+        .to_dtype(orig_dtype)
+        .map_err(Into::into)
 }
 
 /// Repeat KV heads for GQA.
@@ -162,10 +178,76 @@ fn sinusoidal_embedding(t: &Tensor, dim: usize, scale: f64) -> Result<Tensor> {
     out.to_dtype(input_dtype).map_err(Into::into)
 }
 
+fn get_usize(cfg: &serde_json::Value, keys: &[&str], default: usize) -> usize {
+    keys.iter()
+        .find_map(|key| cfg.get(*key).and_then(|v| v.as_u64()).map(|v| v as usize))
+        .unwrap_or(default)
+}
+
+fn get_f64(cfg: &serde_json::Value, key: &str, default: f64) -> f64 {
+    cfg.get(key).and_then(|v| v.as_f64()).unwrap_or(default)
+}
+
+fn read_f32_array(value: &serde_json::Value, key: &str, len: usize) -> Vec<f32> {
+    value
+        .get(key)
+        .and_then(|v| v.as_array())
+        .map(|arr| arr.iter().map(|v| v.as_f64().unwrap_or(1.0) as f32).collect())
+        .filter(|arr: &Vec<f32>| arr.len() == len)
+        .unwrap_or_else(|| vec![1.0; len])
+}
+
 impl DiT {
+    pub fn load_from_manifest(
+        loader: &GgufModelLoader,
+        manifest: &crate::BundleManifest,
+    ) -> Result<Self> {
+        let dit = &manifest.dit_config;
+        let lm = &manifest.lm_config;
+        let hidden_dim = get_usize(dit, &["hidden_dim", "hidden_size"], 1024);
+        let num_heads = get_usize(dit, &["num_heads", "num_attention_heads"], 16);
+        let head_dim = dit
+            .get("kv_channels")
+            .or_else(|| lm.get("kv_channels"))
+            .and_then(|v| v.as_u64())
+            .map(|v| v as usize)
+            .unwrap_or(hidden_dim / num_heads);
+        let num_kv_heads = lm
+            .get("num_key_value_heads")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as usize)
+            .unwrap_or(num_heads);
+        let rope_scaling = lm.get("rope_scaling").unwrap_or(&serde_json::Value::Null);
+        let cfm = dit.get("cfm_config").unwrap_or(&serde_json::Value::Null);
+        let config = DiTConfig {
+            prefix: "feat_decoder.estimator".to_string(),
+            hidden_dim,
+            num_layers: get_usize(dit, &["num_layers", "num_hidden_layers"], 12),
+            num_heads,
+            num_kv_heads,
+            head_dim,
+            ffn_dim: get_usize(dit, &["ffn_dim", "intermediate_size"], 4096),
+            rms_norm_eps: get_f64(lm, "rms_norm_eps", 1e-5),
+            scale_depth: get_f64(lm, "scale_depth", 1.0),
+            use_mup: lm.get("use_mup").and_then(|v| v.as_bool()).unwrap_or(false),
+            rope_theta: get_f64(lm, "rope_theta", 10000.0),
+            original_max_position_embeddings: rope_scaling
+                .get("original_max_position_embeddings")
+                .and_then(|v| v.as_u64())
+                .map(|v| v as usize),
+            rope_short_factors: read_f32_array(rope_scaling, "short_factor", head_dim / 2),
+            rope_long_factors: read_f32_array(rope_scaling, "long_factor", head_dim / 2),
+            cfg_value: get_f64(cfm, "inference_cfg_rate", 1.0),
+            n_steps: 10,
+            sway_coef: get_f64(dit, "sway_sampling_coef", 1.0),
+            latent_dim: manifest.feat_dim,
+        };
+        Self::load(loader, config, loader.device())
+    }
+
     /// Load DiT weights from GGUF.
     pub fn load(loader: &GgufModelLoader, config: DiTConfig, device: &Device) -> Result<Self> {
-        let p = "dit.estimator";
+        let p = &config.prefix;
 
         let load_lw = |name: &str| -> Result<LinearWeight> {
             let weight = loader.load_tensor_optimal(&format!("{p}.{name}.weight"))?;
@@ -227,19 +309,35 @@ impl DiT {
 
     fn build_rope_cache(config: &DiTConfig, device: &Device) -> Result<(Tensor, Tensor)> {
         let half_dim = config.head_dim / 2;
-        let theta = 10000.0f64;
+        let max_pos = config.original_max_position_embeddings.unwrap_or(8192).max(8192);
+        let factors = if let Some(original) = config.original_max_position_embeddings {
+            if max_pos > original {
+                &config.rope_long_factors
+            } else {
+                &config.rope_short_factors
+            }
+        } else {
+            &config.rope_short_factors
+        };
         let mut freqs = vec![0f32; half_dim];
         for i in 0..half_dim {
             freqs[i] =
-                1.0 / (theta as f32).powf(2.0 * i as f32 / config.head_dim as f32);
+                1.0 / (config.rope_theta as f32).powf(2.0 * i as f32 / config.head_dim as f32)
+                    / factors[i];
         }
         let freqs = Tensor::new(freqs.as_slice(), device)?;
-        // Max sequence length for DiT: generous upper bound
-        let max_pos = 8192usize;
+        let scaling_factor = config
+            .original_max_position_embeddings
+            .filter(|v| *v > 1)
+            .map(|original| {
+                let scale = max_pos as f64 / original as f64;
+                (1.0 + scale.ln() / (original as f64).ln()).sqrt()
+            })
+            .unwrap_or(1.0);
         let positions: Vec<f32> = (0..max_pos).map(|p| p as f32).collect();
         let positions = Tensor::new(positions.as_slice(), device)?;
         let angles = positions.unsqueeze(1)?.broadcast_mul(&freqs.unsqueeze(0)?)?;
-        Ok((angles.cos()?, angles.sin()?))
+        Ok(((angles.cos()? * scaling_factor)?, (angles.sin()? * scaling_factor)?))
     }
 
     /// Run the DiT forward pass (single evaluation).
@@ -304,7 +402,11 @@ impl DiT {
 
         let num_kv_groups = self.config.num_heads / self.config.num_kv_heads;
         let scale = 1.0 / (self.config.head_dim as f64).sqrt();
-        let mup_scale = self.config.scale_depth / (self.config.num_layers as f64).sqrt();
+        let residual_scale = if self.config.use_mup {
+            self.config.scale_depth / (self.config.num_layers as f64).sqrt()
+        } else {
+            1.0
+        };
 
         // Transformer layers (non-causal, muP scaling)
         for layer in &self.layers {
@@ -345,8 +447,7 @@ impl DiT {
                 .reshape((b, total_len, self.config.num_heads * self.config.head_dim))?;
             let attn_out = linear_no_bias(&attn_out, &layer.o_proj)?;
 
-            // muP residual
-            hidden = (residual + (attn_out * mup_scale)?)?;
+            hidden = (residual + (attn_out * residual_scale)?)?;
 
             // Post-attention MLP
             let residual = hidden.clone();
@@ -356,7 +457,7 @@ impl DiT {
             let gate = silu(&linear_no_bias(&hidden, &layer.gate_proj)?)?;
             let up = linear_no_bias(&hidden, &layer.up_proj)?;
             let mlp_out = linear_no_bias(&(gate * up)?, &layer.down_proj)?;
-            hidden = (residual + (mlp_out * mup_scale)?)?;
+            hidden = (residual + (mlp_out * residual_scale)?)?;
         }
 
         // Final norm
@@ -378,11 +479,21 @@ impl DiT {
     /// patch_size: number of output time frames
     pub fn generate(&self, mu: &Tensor, cond: &Tensor, patch_size: usize, n_steps: usize) -> Result<Tensor> {
         let b = mu.dims()[0];
-        let cfg_value = self.config.cfg_value;
+        let noise = Tensor::randn(0f32, 1f32, (b, self.config.latent_dim, patch_size), &self.device)?;
+        self.solve_euler_with_noise(mu, cond, &noise, n_steps, self.config.cfg_value as f32)
+    }
 
-        // Initial noise: [B, 64, patch_size]
-        let mut x = Tensor::randn(0f32, 1f32, (b, self.config.latent_dim, patch_size), &self.device)?;
-
+    pub fn solve_euler_with_noise(
+        &self,
+        mu: &Tensor,
+        cond: &Tensor,
+        noise: &Tensor,
+        n_steps: usize,
+        cfg_value: f32,
+    ) -> Result<Tensor> {
+        let b = mu.dims()[0];
+        let patch_size = noise.dim(2)?;
+        let mut x = noise.to_dtype(DType::F32)?;
         // Time schedule with sway sampling
         let sway = self.config.sway_coef;
         let mut t_span = Vec::with_capacity(n_steps + 1);
@@ -393,7 +504,7 @@ impl DiT {
         }
 
         // CFG-Zero* warmup steps
-        let zero_init_steps = 1.max((n_steps as f64 * 0.04) as usize);
+        let zero_init_steps = 1.max(((n_steps + 1) as f64 * 0.04) as usize);
 
         let mut t_val = t_span[0];
 
@@ -449,7 +560,7 @@ impl DiT {
                 // dphi_dt = v_uncond * st_star + cfg * (v_cond - v_uncond * st_star)
                 let vu_scaled = v_uncond.broadcast_mul(&st_star)?;
                 let diff = (v_cond - &vu_scaled)?;
-                let cfg_t = Tensor::new(&[cfg_value as f32], &self.device)?;
+                let cfg_t = Tensor::new(&[cfg_value], &self.device)?;
                 (vu_scaled + diff.broadcast_mul(&cfg_t)?)?
             };
 
