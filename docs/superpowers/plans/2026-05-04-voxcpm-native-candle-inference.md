@@ -747,7 +747,7 @@ If GGUF files are too large for git, commit only `manifest.json` examples and up
 - Modify: `D:/Sandbox_Share/VoxUI/voxui/crates/voxui-inference/Cargo.toml`
 - Create: `D:/Sandbox_Share/VoxUI/voxui/crates/voxui-inference/tests/manifest_loader.rs`
 
-- [ ] **Step 1: Write failing manifest loader tests**
+- [x] **Step 1: Write failing manifest loader tests**
 
 Create `voxui/crates/voxui-inference/tests/manifest_loader.rs`:
 
@@ -813,7 +813,7 @@ fn manifest_rejects_reference_tokens_for_non_v2() {
 }
 ```
 
-- [ ] **Step 2: Run test to verify failure**
+- [x] **Step 2: Run test to verify failure**
 
 Run:
 
@@ -823,7 +823,7 @@ cargo test -p voxui-inference --test manifest_loader
 
 Expected: fail because `BundleManifest` and `ModelVariant` do not exist.
 
-- [ ] **Step 3: Add dependencies**
+- [x] **Step 3: Add dependencies**
 
 In `voxui/crates/voxui-inference/Cargo.toml`, add:
 
@@ -835,7 +835,7 @@ serde_json = "1"
 tempfile = "3"
 ```
 
-- [ ] **Step 4: Implement manifest types**
+- [x] **Step 4: Implement manifest types**
 
 Create `src/manifest.rs` with:
 
@@ -970,7 +970,7 @@ impl BundleManifest {
 }
 ```
 
-- [ ] **Step 5: Export manifest module**
+- [x] **Step 5: Export manifest module**
 
 In `src/lib.rs`, add:
 
@@ -979,7 +979,7 @@ pub mod manifest;
 pub use manifest::{BundleManifest, ComponentFiles, ModelVariant};
 ```
 
-- [ ] **Step 6: Run manifest tests**
+- [x] **Step 6: Run manifest tests**
 
 Run:
 
@@ -989,7 +989,7 @@ cargo test -p voxui-inference --test manifest_loader
 
 Expected: `OK`.
 
-- [ ] **Step 7: Commit manifest loader**
+- [x] **Step 7: Commit manifest loader**
 
 Run:
 
