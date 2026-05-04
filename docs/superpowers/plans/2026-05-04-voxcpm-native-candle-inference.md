@@ -1007,7 +1007,7 @@ git commit -m "feat(inference): load VoxCPM bundle manifests"
 - Modify: `D:/Sandbox_Share/VoxUI/voxui/crates/voxui-inference/src/lib.rs`
 - Create: `D:/Sandbox_Share/VoxUI/voxui/crates/voxui-inference/tests/request_validation.rs`
 
-- [ ] **Step 1: Write failing request validation tests**
+- [x] **Step 1: Write failing request validation tests**
 
 Create `voxui/crates/voxui-inference/tests/request_validation.rs`:
 
@@ -1077,7 +1077,7 @@ fn request_rejects_normalize_until_rust_normalizer_is_implemented() {
 }
 ```
 
-- [ ] **Step 2: Run test to verify failure**
+- [x] **Step 2: Run test to verify failure**
 
 Run:
 
@@ -1087,7 +1087,7 @@ cargo test -p voxui-inference --test request_validation
 
 Expected: fail because `SynthesisRequest` does not exist.
 
-- [ ] **Step 3: Implement request type**
+- [x] **Step 3: Implement request type**
 
 Create `src/request.rs`:
 
@@ -1165,7 +1165,7 @@ fn collapse_whitespace(text: &str) -> String {
 }
 ```
 
-- [ ] **Step 4: Export request module**
+- [x] **Step 4: Export request module**
 
 In `src/lib.rs`, add:
 
@@ -1174,7 +1174,7 @@ pub mod request;
 pub use request::SynthesisRequest;
 ```
 
-- [ ] **Step 5: Run request tests**
+- [x] **Step 5: Run request tests**
 
 Run:
 
@@ -1184,7 +1184,7 @@ cargo test -p voxui-inference --test request_validation
 
 Expected: `OK`.
 
-- [ ] **Step 6: Commit request API**
+- [x] **Step 6: Commit request API**
 
 Run:
 
