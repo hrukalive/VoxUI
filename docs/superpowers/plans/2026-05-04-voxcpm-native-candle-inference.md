@@ -143,7 +143,7 @@ Do not commit this task by itself if `cargo check` fails. Include it in the firs
 - Create: `D:/Sandbox_Share/VoxUI/tools/golden_trace/tests/test_trace_schema.py`
 - Create: `D:/Sandbox_Share/VoxUI/goldens/README.md`
 
-- [ ] **Step 1: Write failing trace schema tests**
+- [x] **Step 1: Write failing trace schema tests**
 
 Create `tools/golden_trace/tests/test_trace_schema.py`:
 
@@ -183,7 +183,7 @@ if __name__ == "__main__":
     unittest.main()
 ```
 
-- [ ] **Step 2: Run tests to verify failure**
+- [x] **Step 2: Run tests to verify failure**
 
 Run:
 
@@ -194,7 +194,7 @@ python -m unittest tools.golden_trace.tests.test_trace_schema
 
 Expected: fail because `trace_schema.py` does not exist.
 
-- [ ] **Step 3: Implement trace schema helpers**
+- [x] **Step 3: Implement trace schema helpers**
 
 Create `tools/golden_trace/trace_schema.py`:
 
@@ -259,7 +259,7 @@ def read_tensor_record(case_dir: Path, record: TensorRecord) -> np.ndarray:
     return arr.reshape(record.shape)
 ```
 
-- [ ] **Step 4: Implement trace generation entrypoint**
+- [x] **Step 4: Implement trace generation entrypoint**
 
 Create `tools/golden_trace/voxcpm_trace.py` with these behaviors:
 
@@ -382,7 +382,7 @@ Implement `TraceCapture` in the same file. It must use PyTorch hooks and small w
 - `stop_logits`
 - `decoded_wav_head`
 
-- [ ] **Step 5: Run schema tests**
+- [x] **Step 5: Run schema tests**
 
 Run:
 
@@ -392,7 +392,7 @@ python -m unittest tools.golden_trace.tests.test_trace_schema
 
 Expected: `OK`.
 
-- [ ] **Step 6: Generate the required trace cases**
+- [x] **Step 6: Generate the required trace cases**
 
 Run:
 
@@ -405,7 +405,7 @@ python tools/golden_trace/voxcpm_trace.py --model-dir VoxCPM/models/VoxCPM2 --va
 
 If `for_test_wav/reference.wav` does not exist, choose the first `.wav` from `for_test_wav/` and record the exact filename in `goldens/README.md`.
 
-- [ ] **Step 7: Document trace regeneration**
+- [x] **Step 7: Document trace regeneration**
 
 Create `goldens/README.md` with:
 
@@ -426,7 +426,7 @@ python tools/golden_trace/voxcpm_trace.py --model-dir VoxCPM/models/VoxCPM2 --va
 ```
 ```
 
-- [ ] **Step 8: Commit trace tooling**
+- [x] **Step 8: Commit trace tooling**
 
 Run:
 

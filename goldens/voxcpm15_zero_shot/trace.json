@@ -1,0 +1,190 @@
+{
+  "schema_version": 1,
+  "variant": "1.5",
+  "architecture": "voxcpm",
+  "request": {
+    "text": "Hello, welcome to the stream!",
+    "prompt_wav_path": null,
+    "prompt_text": null,
+    "reference_wav_path": null,
+    "cfg_value": 2.0,
+    "inference_timesteps": 4,
+    "min_len": 1,
+    "max_len": 3,
+    "normalize": false,
+    "retry_badcase": false
+  },
+  "metadata": {
+    "seed": 1234,
+    "source_model_dir": "D:\\Sandbox_Share\\VoxUI\\VoxCPM\\models\\VoxCPM1.5"
+  },
+  "lists": {
+    "token_ids": [
+      21045,
+      59342,
+      10452,
+      1385,
+      1358,
+      7546,
+      73,
+      101
+    ]
+  },
+  "tensors": [
+    {
+      "name": "text_mask",
+      "file": "text_mask.f32",
+      "dtype": "f32",
+      "shape": [
+        1,
+        8
+      ]
+    },
+    {
+      "name": "audio_mask",
+      "file": "audio_mask.f32",
+      "dtype": "f32",
+      "shape": [
+        1,
+        8
+      ]
+    },
+    {
+      "name": "prefill_audio_feat_b_t_p_d",
+      "file": "prefill_audio_feat_b_t_p_d.f32",
+      "dtype": "f32",
+      "shape": [
+        1,
+        8,
+        4,
+        64
+      ]
+    },
+    {
+      "name": "local_encoder_output",
+      "file": "local_encoder_output.f32",
+      "dtype": "f32",
+      "shape": [
+        1,
+        8,
+        1024
+      ]
+    },
+    {
+      "name": "base_lm_prefill_hidden",
+      "file": "base_lm_prefill_hidden.f32",
+      "dtype": "f32",
+      "shape": [
+        1,
+        8,
+        1024
+      ]
+    },
+    {
+      "name": "first_fsq_hidden",
+      "file": "first_fsq_hidden.f32",
+      "dtype": "f32",
+      "shape": [
+        1,
+        8,
+        1024
+      ]
+    },
+    {
+      "name": "residual_lm_prefill_hidden",
+      "file": "residual_lm_prefill_hidden.f32",
+      "dtype": "f32",
+      "shape": [
+        1,
+        8,
+        1024
+      ]
+    },
+    {
+      "name": "first_dit_noise",
+      "file": "first_dit_noise.f32",
+      "dtype": "f32",
+      "shape": [
+        1,
+        64,
+        4
+      ]
+    },
+    {
+      "name": "first_dit_cond",
+      "file": "first_dit_cond.f32",
+      "dtype": "f32",
+      "shape": [
+        1,
+        64,
+        4
+      ]
+    },
+    {
+      "name": "first_dit_mu",
+      "file": "first_dit_mu.f32",
+      "dtype": "f32",
+      "shape": [
+        1,
+        1024
+      ]
+    },
+    {
+      "name": "first_dit_patch",
+      "file": "first_dit_patch.f32",
+      "dtype": "f32",
+      "shape": [
+        1,
+        64,
+        4
+      ]
+    },
+    {
+      "name": "stop_logits",
+      "file": "stop_logits.f32",
+      "dtype": "f32",
+      "shape": [
+        1,
+        2
+      ]
+    },
+    {
+      "name": "generated_latent",
+      "file": "generated_latent.f32",
+      "dtype": "f32",
+      "shape": [
+        1,
+        64,
+        12
+      ]
+    },
+    {
+      "name": "generated_audio_feat",
+      "file": "generated_audio_feat.f32",
+      "dtype": "f32",
+      "shape": [
+        3,
+        4,
+        64
+      ]
+    },
+    {
+      "name": "audio_vae_decoded_raw",
+      "file": "audio_vae_decoded_raw.f32",
+      "dtype": "f32",
+      "shape": [
+        1,
+        1,
+        21168
+      ]
+    },
+    {
+      "name": "decoded_wav_head",
+      "file": "decoded_wav_head.f32",
+      "dtype": "f32",
+      "shape": [
+        4096
+      ]
+    }
+  ]
+}
