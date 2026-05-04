@@ -2111,7 +2111,7 @@ git commit -m "fix(app): use native VoxCPM synthesis requests"
 **Files:**
 - Generated WAVs under `D:/Sandbox_Share/VoxUI/test_output/`
 
-- [ ] **Step 1: Run runtime purity guard**
+- [x] **Step 1: Run runtime purity guard**
 
 Run:
 
@@ -2121,7 +2121,7 @@ cargo test -p voxui-inference --test native_runtime_purity
 
 Expected: pass.
 
-- [ ] **Step 2: Run parity tests**
+- [x] **Step 2: Run parity tests**
 
 Run:
 
@@ -2138,7 +2138,7 @@ cargo test -p voxui-inference --test lora_parity -- --nocapture
 
 Expected: all pass within documented tolerances.
 
-- [ ] **Step 3: Run CPU synthesis matrix**
+- [x] **Step 3: Run CPU synthesis matrix**
 
 Run:
 
@@ -2155,7 +2155,7 @@ Expected:
 - VoxCPM2 reference-audio cases pass.
 - WAV files are written under `test_output/`.
 
-- [ ] **Step 4: Check generated WAV sanity**
+- [x] **Step 4: Check generated WAV sanity**
 
 Run:
 
@@ -2165,7 +2165,7 @@ Get-ChildItem test_output -Filter *.wav | Select-Object Name, Length
 
 Expected: each WAV is non-empty. Manually inspect at least one WAV from each variant for intelligible speech.
 
-- [ ] **Step 5: Commit verification test updates**
+- [x] **Step 5: Commit verification test updates**
 
 Run:
 
