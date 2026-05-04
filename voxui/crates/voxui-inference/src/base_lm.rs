@@ -65,27 +65,37 @@ impl BaseLMConfig {
             "feat_encoder" => &manifest.encoder_config,
             other => bail!("unsupported MiniCPM component `{other}`"),
         };
-        let hidden_size = get_usize_any(cfg, component, &["hidden_size", "hidden_dim"])?;
+        let fallback_cfg = if component == "feat_encoder" {
+            Some(&manifest.lm_config)
+        } else {
+            None
+        };
+        let hidden_size = get_usize_any(cfg, fallback_cfg, component, &["hidden_size", "hidden_dim"])?;
         let num_layers = if component == "residual_lm" {
             manifest
                 .residual_lm_num_layers
-                .unwrap_or(get_usize_any(cfg, component, &["num_hidden_layers", "num_layers"])?)
+                .unwrap_or(get_usize_any(cfg, fallback_cfg, component, &["num_hidden_layers", "num_layers"])?)
         } else {
-            get_usize_any(cfg, component, &["num_hidden_layers", "num_layers"])?
+            get_usize_any(cfg, fallback_cfg, component, &["num_hidden_layers", "num_layers"])?
         };
-        let num_heads = get_usize_any(cfg, component, &["num_attention_heads", "num_heads"])?;
+        let num_heads = get_usize_any(cfg, fallback_cfg, component, &["num_attention_heads", "num_heads"])?;
         let num_kv_heads = cfg
             .get("num_key_value_heads")
+            .or_else(|| fallback_cfg.and_then(|v| v.get("num_key_value_heads")))
             .and_then(|v| v.as_u64())
             .map(|v| v as usize)
             .unwrap_or(num_heads);
         let head_dim = cfg
             .get("kv_channels")
+            .or_else(|| fallback_cfg.and_then(|v| v.get("kv_channels")))
             .and_then(|v| v.as_u64())
             .map(|v| v as usize)
             .unwrap_or(hidden_size / num_heads);
         let half_dim = head_dim / 2;
-        let rope_scaling = cfg.get("rope_scaling").unwrap_or(&serde_json::Value::Null);
+        let rope_scaling = cfg
+            .get("rope_scaling")
+            .or_else(|| fallback_cfg.and_then(|v| v.get("rope_scaling")))
+            .unwrap_or(&serde_json::Value::Null);
         let rope_short_factors = read_f32_array(rope_scaling, "short_factor", half_dim);
         let rope_long_factors = read_f32_array(rope_scaling, "long_factor", half_dim);
         Ok(Self {
@@ -94,42 +104,75 @@ impl BaseLMConfig {
             num_heads,
             num_kv_heads,
             head_dim,
-            intermediate_size: get_usize_any(cfg, component, &["intermediate_size", "ffn_dim"])?,
-            rms_norm_eps: get_f64(cfg, "rms_norm_eps", 1e-5),
-            rope_theta: get_f64(cfg, "rope_theta", 10000.0),
+            intermediate_size: get_usize_any(cfg, fallback_cfg, component, &["intermediate_size", "ffn_dim"])?,
+            rms_norm_eps: get_f64(cfg, fallback_cfg, "rms_norm_eps", 1e-5),
+            rope_theta: get_f64(cfg, fallback_cfg, "rope_theta", 10000.0),
             rope_factors: rope_short_factors.clone(),
-            use_mup: cfg.get("use_mup").and_then(|v| v.as_bool()).unwrap_or(false),
-            scale_emb: get_f64(cfg, "scale_emb", 1.0),
-            scale_depth: get_f64(cfg, "scale_depth", 1.0),
+            use_mup: cfg
+                .get("use_mup")
+                .or_else(|| fallback_cfg.and_then(|v| v.get("use_mup")))
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false),
+            scale_emb: get_f64(cfg, fallback_cfg, "scale_emb", 1.0),
+            scale_depth: get_f64(cfg, fallback_cfg, "scale_depth", 1.0),
             original_max_position_embeddings: rope_scaling
                 .get("original_max_position_embeddings")
                 .and_then(|v| v.as_u64())
                 .map(|v| v as usize),
             rope_short_factors,
             rope_long_factors,
-            vocab_size: cfg.get("vocab_size").and_then(|v| v.as_u64()).unwrap_or(0) as usize,
+            vocab_size: if component == "feat_encoder" {
+                0
+            } else {
+                cfg.get("vocab_size").and_then(|v| v.as_u64()).unwrap_or(0) as usize
+            },
             max_position: cfg
                 .get("max_position_embeddings")
+                .or_else(|| fallback_cfg.and_then(|v| v.get("max_position_embeddings")))
                 .and_then(|v| v.as_u64())
                 .unwrap_or(4096) as usize,
-            prefix: component.to_string(),
+            prefix: if component == "feat_encoder" {
+                "feat_encoder.encoder".to_string()
+            } else {
+                component.to_string()
+            },
             no_rope: component == "residual_lm" && manifest.residual_lm_no_rope.unwrap_or(false),
             is_causal: component != "feat_encoder",
         })
     }
 }
 
-fn get_usize_any(cfg: &serde_json::Value, component: &str, keys: &[&str]) -> Result<usize> {
+fn get_usize_any(
+    cfg: &serde_json::Value,
+    fallback_cfg: Option<&serde_json::Value>,
+    component: &str,
+    keys: &[&str],
+) -> Result<usize> {
     for key in keys {
         if let Some(value) = cfg.get(*key).and_then(|v| v.as_u64()) {
             return Ok(value as usize);
         }
     }
+    if let Some(fallback_cfg) = fallback_cfg {
+        for key in keys {
+            if let Some(value) = fallback_cfg.get(*key).and_then(|v| v.as_u64()) {
+                return Ok(value as usize);
+            }
+        }
+    }
     bail!("missing one of `{keys:?}` in {component} config")
 }
 
-fn get_f64(cfg: &serde_json::Value, key: &str, default: f64) -> f64 {
-    cfg.get(key).and_then(|v| v.as_f64()).unwrap_or(default)
+fn get_f64(
+    cfg: &serde_json::Value,
+    fallback_cfg: Option<&serde_json::Value>,
+    key: &str,
+    default: f64,
+) -> f64 {
+    cfg.get(key)
+        .or_else(|| fallback_cfg.and_then(|v| v.get(key)))
+        .and_then(|v| v.as_f64())
+        .unwrap_or(default)
 }
 
 fn read_f32_array(value: &serde_json::Value, key: &str, len: usize) -> Vec<f32> {
@@ -380,7 +423,7 @@ impl BaseLM {
     /// Run forward pass with pre-computed embeddings [1, seq_len, hidden_size].
     /// Returns hidden_states [1, seq_len, hidden_size].
     pub fn forward_embed(&mut self, hidden: &Tensor) -> Result<Tensor> {
-        let seq_len = hidden.dim(1)?;
+        let (batch, seq_len, _) = hidden.dims3()?;
         let mut hidden = hidden.clone();
 
         // Get RoPE cos/sin for positions [cache_len .. cache_len+seq_len)
@@ -412,13 +455,13 @@ impl BaseLM {
 
             // Reshape to [B, heads, T, head_dim]
             let q = q
-                .reshape((1, seq_len, self.config.num_heads, self.config.head_dim))?
+                .reshape((batch, seq_len, self.config.num_heads, self.config.head_dim))?
                 .transpose(1, 2)?; // [1, 16, T, 128]
             let k = k
-                .reshape((1, seq_len, self.config.num_kv_heads, self.config.head_dim))?
+                .reshape((batch, seq_len, self.config.num_kv_heads, self.config.head_dim))?
                 .transpose(1, 2)?; // [1, 2, T, 128]
             let v = v
-                .reshape((1, seq_len, self.config.num_kv_heads, self.config.head_dim))?
+                .reshape((batch, seq_len, self.config.num_kv_heads, self.config.head_dim))?
                 .transpose(1, 2)?; // [1, 2, T, 128]
 
             // Apply RoPE (unless disabled)
@@ -476,7 +519,7 @@ impl BaseLM {
             // Reshape back: [1, T, num_heads * head_dim]
             let attn_out = attn_out
                 .transpose(1, 2)?
-                .reshape((1, seq_len, self.config.num_heads * self.config.head_dim))?;
+                .reshape((batch, seq_len, self.config.num_heads * self.config.head_dim))?;
 
             // Output projection
             let attn_out = Self::linear(&attn_out, &layer.o_proj)?;
@@ -505,7 +548,7 @@ impl BaseLM {
     /// Run forward pass with pre-computed embeddings and optional LoRA adapter.
     /// Returns hidden_states [1, seq_len, hidden_size].
     pub fn forward_embed_with_lora(&mut self, hidden: &Tensor, lora: Option<&crate::lora::LoraAdapter>) -> Result<Tensor> {
-        let seq_len = hidden.dim(1)?;
+        let (batch, seq_len, _) = hidden.dims3()?;
         let mut hidden = hidden.clone();
 
         let use_cache = self.config.is_causal;
@@ -542,13 +585,13 @@ impl BaseLM {
             }
 
             let q = q
-                .reshape((1, seq_len, self.config.num_heads, self.config.head_dim))?
+                .reshape((batch, seq_len, self.config.num_heads, self.config.head_dim))?
                 .transpose(1, 2)?;
             let k = k
-                .reshape((1, seq_len, self.config.num_kv_heads, self.config.head_dim))?
+                .reshape((batch, seq_len, self.config.num_kv_heads, self.config.head_dim))?
                 .transpose(1, 2)?;
             let v = v
-                .reshape((1, seq_len, self.config.num_kv_heads, self.config.head_dim))?
+                .reshape((batch, seq_len, self.config.num_kv_heads, self.config.head_dim))?
                 .transpose(1, 2)?;
 
             let (q, k) = if self.config.no_rope {
@@ -596,7 +639,7 @@ impl BaseLM {
 
             let attn_out = attn_out
                 .transpose(1, 2)?
-                .reshape((1, seq_len, self.config.num_heads * self.config.head_dim))?;
+                .reshape((batch, seq_len, self.config.num_heads * self.config.head_dim))?;
 
             // O projection with LoRA
             let o_input = attn_out.clone();

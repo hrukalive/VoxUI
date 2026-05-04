@@ -1561,7 +1561,7 @@ git commit -m "fix(inference): match MiniCPM transformer parity"
 - Modify: `D:/Sandbox_Share/VoxUI/voxui/crates/voxui-inference/src/encoder.rs`
 - Create: `D:/Sandbox_Share/VoxUI/voxui/crates/voxui-inference/tests/local_encoder_parity.rs`
 
-- [ ] **Step 1: Write failing local encoder parity test**
+- [x] **Step 1: Write failing local encoder parity test**
 
 Create `tests/local_encoder_parity.rs`:
 
@@ -1587,7 +1587,7 @@ fn local_encoder_accepts_b_t_p_d_and_matches_trace() {
 }
 ```
 
-- [ ] **Step 2: Run test to verify failure**
+- [x] **Step 2: Run test to verify failure**
 
 Run:
 
@@ -1597,7 +1597,7 @@ cargo test -p voxui-inference --test local_encoder_parity -- --nocapture
 
 Expected: fail because current encoder accepts only `[B, D, P]`.
 
-- [ ] **Step 3: Implement `[B, T, P, D]` encoding**
+- [x] **Step 3: Implement `[B, T, P, D]` encoding**
 
 In `encoder.rs`, implement:
 
@@ -1623,7 +1623,7 @@ pub fn encode_single_patch(&mut self, feat: &Tensor) -> Result<Tensor> {
 }
 ```
 
-- [ ] **Step 4: Run local encoder tests**
+- [x] **Step 4: Run local encoder tests**
 
 Run:
 
@@ -1633,7 +1633,7 @@ cargo test -p voxui-inference --test local_encoder_parity -- --nocapture
 
 Expected: `OK`.
 
-- [ ] **Step 5: Commit local encoder parity**
+- [x] **Step 5: Commit local encoder parity**
 
 Run:
 
