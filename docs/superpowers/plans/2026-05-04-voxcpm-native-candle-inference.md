@@ -1367,7 +1367,7 @@ git commit -m "fix(inference): match VoxCPM AudioVAE encode decode"
 - Modify: `D:/Sandbox_Share/VoxUI/voxui/crates/voxui-inference/src/model_loader.rs`
 - Create: `D:/Sandbox_Share/VoxUI/voxui/crates/voxui-inference/tests/minicpm_parity.rs`
 
-- [ ] **Step 1: Write failing MiniCPM parity tests**
+- [x] **Step 1: Write failing MiniCPM parity tests**
 
 Create `tests/minicpm_parity.rs`:
 
@@ -1400,7 +1400,7 @@ fn rope_rotate_half_matches_python_layout() {
 }
 ```
 
-- [ ] **Step 2: Run tests to verify failure**
+- [x] **Step 2: Run tests to verify failure**
 
 Run:
 
@@ -1410,7 +1410,7 @@ cargo test -p voxui-inference --test minicpm_parity -- --nocapture
 
 Expected: fail because `from_manifest`, MuP scaling, LongRoPE, and Python `rotate_half` parity are missing or incomplete.
 
-- [ ] **Step 3: Implement config construction**
+- [x] **Step 3: Implement config construction**
 
 In `base_lm.rs`, extend `BaseLMConfig`:
 
@@ -1510,7 +1510,7 @@ fn read_f32_array(value: &serde_json::Value, key: &str, len: usize) -> Vec<f32> 
 
 The function must not use default dimensions when manifest contains explicit config values.
 
-- [ ] **Step 4: Fix RoPE**
+- [x] **Step 4: Fix RoPE**
 
 Update RoPE to match `VoxCPM/src/voxcpm/modules/minicpm4/model.py`:
 
@@ -1519,14 +1519,14 @@ Update RoPE to match `VoxCPM/src/voxcpm/modules/minicpm4/model.py`:
 - Apply LongRoPE scaling factor from config.
 - Keep no-rope path for residual LM when required.
 
-- [ ] **Step 5: Fix MuP scaling**
+- [x] **Step 5: Fix MuP scaling**
 
 Match Python:
 
 - Apply `scale_emb` to embedding output when `use_mup` is true.
 - Apply residual scaling `scale_depth / sqrt(num_hidden_layers)` around attention and MLP residual additions when `use_mup` is true.
 
-- [ ] **Step 6: Fix non-causal and KV-cache behavior**
+- [x] **Step 6: Fix non-causal and KV-cache behavior**
 
 Ensure:
 
@@ -1534,7 +1534,7 @@ Ensure:
 - Single-token inference uses existing KV cache.
 - Non-causal encoder/DiT transformer paths do not update persistent autoregressive caches across independent calls.
 
-- [ ] **Step 7: Run MiniCPM tests**
+- [x] **Step 7: Run MiniCPM tests**
 
 Run:
 
@@ -1544,7 +1544,7 @@ cargo test -p voxui-inference --test minicpm_parity -- --nocapture
 
 Expected: parity within `2e-3` on FP16-exported CPU tensors.
 
-- [ ] **Step 8: Commit MiniCPM parity**
+- [x] **Step 8: Commit MiniCPM parity**
 
 Run:
 

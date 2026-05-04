@@ -38,6 +38,28 @@ def to_numpy(tensor: Any) -> np.ndarray:
     return np.asarray(tensor, dtype=np.float32)
 
 
+def force_runtime_dtype(pipeline: Any, runtime_dtype: str) -> None:
+    if runtime_dtype == "config":
+        return
+    model = pipeline.tts_model
+    if runtime_dtype == "float32":
+        dtype = torch.float32
+        config_value = "float32"
+    elif runtime_dtype == "bfloat16":
+        dtype = torch.bfloat16
+        config_value = "bfloat16"
+    else:
+        raise ValueError(f"unsupported runtime dtype: {runtime_dtype}")
+    model.config.dtype = config_value
+    model.to(dtype)
+    model.audio_vae = model.audio_vae.to(torch.float32)
+    max_length = getattr(model.config, "max_length", 8192)
+    if hasattr(model.base_lm, "setup_cache"):
+        model.base_lm.setup_cache(1, max_length, model.device, dtype)
+    if hasattr(model.residual_lm, "setup_cache"):
+        model.residual_lm.setup_cache(1, max_length, model.device, dtype)
+
+
 class TraceCapture:
     def __init__(self, pipeline: Any) -> None:
         self.pipeline = pipeline
@@ -217,6 +239,7 @@ def main() -> None:
     parser.add_argument("--prompt-text")
     parser.add_argument("--reference-wav-path", type=Path)
     parser.add_argument("--seed", type=int, default=1234)
+    parser.add_argument("--runtime-dtype", choices=["float32", "bfloat16", "config"], default="float32")
     args = parser.parse_args()
 
     set_seed(args.seed)
@@ -231,6 +254,7 @@ def main() -> None:
         optimize=False,
         device="cpu",
     )
+    force_runtime_dtype(model, args.runtime_dtype)
 
     capture = TraceCapture(model)
     capture.install()
@@ -268,7 +292,11 @@ def main() -> None:
             "retry_badcase": False,
         },
         tensors=tensors,
-        metadata={"seed": args.seed, "source_model_dir": str(args.model_dir.resolve())},
+        metadata={
+            "seed": args.seed,
+            "source_model_dir": str(args.model_dir.resolve()),
+            "runtime_dtype": args.runtime_dtype,
+        },
     )
 
 

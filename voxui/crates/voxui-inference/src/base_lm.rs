@@ -4,6 +4,7 @@ use anyhow::{bail, Result};
 use candle_core::{DType, Device, Tensor, D};
 use candle_nn::ops::silu;
 
+use crate::manifest::BundleManifest;
 use crate::model_loader::GgufModelLoader;
 
 /// Configuration for the base LM transformer.
@@ -17,6 +18,12 @@ pub struct BaseLMConfig {
     pub rms_norm_eps: f64,       // 1e-5
     pub rope_theta: f64,         // 10000
     pub rope_factors: Vec<f32>,  // LongRope factors (64 elements = head_dim/2)
+    pub use_mup: bool,
+    pub scale_emb: f64,
+    pub scale_depth: f64,
+    pub original_max_position_embeddings: Option<usize>,
+    pub rope_short_factors: Vec<f32>,
+    pub rope_long_factors: Vec<f32>,
     pub vocab_size: usize,       // 73448
     pub max_position: usize,     // max sequence length for cache/rope precomputation
     pub prefix: String,          // tensor name prefix: "base_lm" or "residual_lm"
@@ -36,6 +43,12 @@ impl Default for BaseLMConfig {
             rms_norm_eps: 1e-5,
             rope_theta: 10000.0,
             rope_factors: vec![1.0; 64], // default: no scaling
+            use_mup: false,
+            scale_emb: 1.0,
+            scale_depth: 1.0,
+            original_max_position_embeddings: None,
+            rope_short_factors: vec![1.0; 64],
+            rope_long_factors: vec![1.0; 64],
             vocab_size: 73448,
             max_position: 4096,
             prefix: "base_lm".to_string(),
@@ -43,6 +56,98 @@ impl Default for BaseLMConfig {
             is_causal: true,
         }
     }
+}
+
+impl BaseLMConfig {
+    pub fn from_manifest(manifest: &BundleManifest, component: &str) -> Result<Self> {
+        let cfg = match component {
+            "base_lm" | "residual_lm" => &manifest.lm_config,
+            "feat_encoder" => &manifest.encoder_config,
+            other => bail!("unsupported MiniCPM component `{other}`"),
+        };
+        let hidden_size = get_usize_any(cfg, component, &["hidden_size", "hidden_dim"])?;
+        let num_layers = if component == "residual_lm" {
+            manifest
+                .residual_lm_num_layers
+                .unwrap_or(get_usize_any(cfg, component, &["num_hidden_layers", "num_layers"])?)
+        } else {
+            get_usize_any(cfg, component, &["num_hidden_layers", "num_layers"])?
+        };
+        let num_heads = get_usize_any(cfg, component, &["num_attention_heads", "num_heads"])?;
+        let num_kv_heads = cfg
+            .get("num_key_value_heads")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as usize)
+            .unwrap_or(num_heads);
+        let head_dim = cfg
+            .get("kv_channels")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as usize)
+            .unwrap_or(hidden_size / num_heads);
+        let half_dim = head_dim / 2;
+        let rope_scaling = cfg.get("rope_scaling").unwrap_or(&serde_json::Value::Null);
+        let rope_short_factors = read_f32_array(rope_scaling, "short_factor", half_dim);
+        let rope_long_factors = read_f32_array(rope_scaling, "long_factor", half_dim);
+        Ok(Self {
+            hidden_size,
+            num_layers,
+            num_heads,
+            num_kv_heads,
+            head_dim,
+            intermediate_size: get_usize_any(cfg, component, &["intermediate_size", "ffn_dim"])?,
+            rms_norm_eps: get_f64(cfg, "rms_norm_eps", 1e-5),
+            rope_theta: get_f64(cfg, "rope_theta", 10000.0),
+            rope_factors: rope_short_factors.clone(),
+            use_mup: cfg.get("use_mup").and_then(|v| v.as_bool()).unwrap_or(false),
+            scale_emb: get_f64(cfg, "scale_emb", 1.0),
+            scale_depth: get_f64(cfg, "scale_depth", 1.0),
+            original_max_position_embeddings: rope_scaling
+                .get("original_max_position_embeddings")
+                .and_then(|v| v.as_u64())
+                .map(|v| v as usize),
+            rope_short_factors,
+            rope_long_factors,
+            vocab_size: cfg.get("vocab_size").and_then(|v| v.as_u64()).unwrap_or(0) as usize,
+            max_position: cfg
+                .get("max_position_embeddings")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(4096) as usize,
+            prefix: component.to_string(),
+            no_rope: component == "residual_lm" && manifest.residual_lm_no_rope.unwrap_or(false),
+            is_causal: component != "feat_encoder",
+        })
+    }
+}
+
+fn get_usize_any(cfg: &serde_json::Value, component: &str, keys: &[&str]) -> Result<usize> {
+    for key in keys {
+        if let Some(value) = cfg.get(*key).and_then(|v| v.as_u64()) {
+            return Ok(value as usize);
+        }
+    }
+    bail!("missing one of `{keys:?}` in {component} config")
+}
+
+fn get_f64(cfg: &serde_json::Value, key: &str, default: f64) -> f64 {
+    cfg.get(key).and_then(|v| v.as_f64()).unwrap_or(default)
+}
+
+fn read_f32_array(value: &serde_json::Value, key: &str, len: usize) -> Vec<f32> {
+    value
+        .get(key)
+        .and_then(|v| v.as_array())
+        .map(|arr| arr.iter().map(|v| v.as_f64().unwrap_or(1.0) as f32).collect())
+        .filter(|arr: &Vec<f32>| arr.len() == len)
+        .unwrap_or_else(|| vec![1.0; len])
+}
+
+pub fn rotate_half_for_test(input: &[f32]) -> Vec<f32> {
+    let half = input.len() / 2;
+    input[half..]
+        .iter()
+        .map(|v| -*v)
+        .chain(input[..half].iter().copied())
+        .collect()
 }
 
 /// Weights for a single transformer layer.
@@ -95,19 +200,22 @@ fn rms_norm(x: &Tensor, weight: &Tensor, eps: f64) -> Result<Tensor> {
 /// x: [batch, heads, seq_len, head_dim]
 /// cos, sin: [seq_len, head_dim/2] (sliced for the relevant positions)
 fn apply_rope(x: &Tensor, cos: &Tensor, sin: &Tensor) -> Result<Tensor> {
+    let orig_dtype = x.dtype();
+    let x = x.to_dtype(DType::F32)?;
     let (_b, _h, _t, hd) = x.dims4()?;
     let half = hd / 2;
     // Split into first half and second half of head_dim
     let x1 = x.narrow(3, 0, half)?;
     let x2 = x.narrow(3, half, half)?;
     // cos/sin are [seq_len, half], need [1, 1, seq_len, half]
-    // Cast to match x's dtype (f16 on CUDA, f32 on CPU)
-    let cos = cos.unsqueeze(0)?.unsqueeze(0)?.to_dtype(x.dtype())?;
-    let sin = sin.unsqueeze(0)?.unsqueeze(0)?.to_dtype(x.dtype())?;
+    let cos = cos.unsqueeze(0)?.unsqueeze(0)?.to_dtype(DType::F32)?;
+    let sin = sin.unsqueeze(0)?.unsqueeze(0)?.to_dtype(DType::F32)?;
     // RoPE: (x1*cos - x2*sin, x1*sin + x2*cos)
     let o1 = (x1.broadcast_mul(&cos)? - x2.broadcast_mul(&sin)?)?;
     let o2 = (x1.broadcast_mul(&sin)? + x2.broadcast_mul(&cos)?)?;
-    Tensor::cat(&[&o1, &o2], 3).map_err(Into::into)
+    Tensor::cat(&[&o1, &o2], 3)?
+        .to_dtype(orig_dtype)
+        .map_err(Into::into)
 }
 
 /// Repeat KV heads to match query head count.
@@ -122,6 +230,14 @@ fn repeat_kv(x: &Tensor, n_rep: usize) -> Result<Tensor> {
         .expand((b, kv_h, n_rep, t, hd))?
         .reshape((b, kv_h * n_rep, t, hd))
         .map_err(Into::into)
+}
+
+fn residual_add(residual: &Tensor, update: &Tensor, scale: f64) -> Result<Tensor> {
+    if (scale - 1.0).abs() < f64::EPSILON {
+        residual.add(update).map_err(Into::into)
+    } else {
+        residual.add(&(update * scale)?).map_err(Into::into)
+    }
 }
 
 impl BaseLM {
@@ -179,11 +295,24 @@ impl BaseLM {
     /// Build the RoPE cos/sin cache using LongRope frequency scaling.
     fn build_rope_cache(config: &BaseLMConfig, device: &Device) -> Result<(Tensor, Tensor)> {
         let half_dim = config.head_dim / 2;
-        assert_eq!(
-            config.rope_factors.len(),
-            half_dim,
-            "rope_factors must have head_dim/2 elements"
-        );
+        let factors = if let Some(original) = config.original_max_position_embeddings {
+            if config.max_position > original {
+                &config.rope_long_factors
+            } else {
+                &config.rope_short_factors
+            }
+        } else {
+            &config.rope_factors
+        };
+        assert_eq!(factors.len(), half_dim, "rope factors must have head_dim/2 elements");
+        let scaling_factor = config
+            .original_max_position_embeddings
+            .filter(|v| *v > 1)
+            .map(|original| {
+                let scale = config.max_position as f64 / original as f64;
+                (1.0 + scale.ln() / (original as f64).ln()).sqrt()
+            })
+            .unwrap_or(1.0);
 
         // base_freq[i] = 1 / (theta ^ (2i / head_dim))
         // scaled_freq[i] = base_freq[i] / factor[i]
@@ -192,7 +321,7 @@ impl BaseLM {
             let base = 1.0
                 / (config.rope_theta as f32)
                     .powf(2.0 * i as f32 / config.head_dim as f32);
-            freqs[i] = base / config.rope_factors[i];
+            freqs[i] = base / factors[i];
         }
         let freqs = Tensor::new(freqs.as_slice(), device)?; // [half_dim]
 
@@ -203,8 +332,8 @@ impl BaseLM {
         // outer product: [max_pos, half_dim]
         let angles = positions.unsqueeze(1)?.broadcast_mul(&freqs.unsqueeze(0)?)?;
 
-        let cos_cache = angles.cos()?;
-        let sin_cache = angles.sin()?;
+        let cos_cache = (angles.cos()? * scaling_factor)?;
+        let sin_cache = (angles.sin()? * scaling_factor)?;
         Ok((cos_cache, sin_cache))
     }
 
@@ -229,7 +358,12 @@ impl BaseLM {
         let seq_len = token_ids.len();
         let ids_tensor = Tensor::new(token_ids, &self.device)?;
         let hidden = embed.index_select(&ids_tensor, 0)?;
-        hidden.reshape((1, seq_len, self.config.hidden_size)).map_err(Into::into)
+        let hidden = hidden.reshape((1, seq_len, self.config.hidden_size))?;
+        if self.config.use_mup {
+            (hidden * self.config.scale_emb).map_err(Into::into)
+        } else {
+            Ok(hidden)
+        }
     }
 
     /// Run forward pass for a sequence of tokens. Returns hidden_states [1, seq_len, hidden_size].
@@ -250,12 +384,18 @@ impl BaseLM {
         let mut hidden = hidden.clone();
 
         // Get RoPE cos/sin for positions [cache_len .. cache_len+seq_len)
-        let start_pos = self.cache_len;
+        let use_cache = self.config.is_causal;
+        let start_pos = if use_cache { self.cache_len } else { 0 };
         let cos = self.cos_cache.narrow(0, start_pos, seq_len)?; // [T, head_dim/2]
         let sin = self.sin_cache.narrow(0, start_pos, seq_len)?;
 
         let num_kv_groups = self.config.num_heads / self.config.num_kv_heads;
         let scale = 1.0 / (self.config.head_dim as f64).sqrt();
+        let residual_scale = if self.config.use_mup {
+            self.config.scale_depth / (self.config.num_layers as f64).sqrt()
+        } else {
+            1.0
+        };
 
         // 2. Transformer layers
         for layer_idx in 0..self.config.num_layers {
@@ -289,7 +429,7 @@ impl BaseLM {
             };
 
             // Update KV cache
-            let (k_full, v_full) = if self.k_cache.len() > layer_idx && self.cache_len > 0 {
+            let (k_full, v_full) = if use_cache && self.k_cache.len() > layer_idx && self.cache_len > 0 {
                 let k_full =
                     Tensor::cat(&[&self.k_cache[layer_idx], &k], 2)?; // [1, 2, cache+T, 128]
                 let v_full = Tensor::cat(&[&self.v_cache[layer_idx], &v], 2)?;
@@ -299,15 +439,17 @@ impl BaseLM {
             };
 
             // Store updated cache
-            if self.k_cache.len() <= layer_idx {
-                self.k_cache.push(k_full.clone());
-                self.v_cache.push(v_full.clone());
-            } else {
-                self.k_cache[layer_idx] = k_full.clone();
-                self.v_cache[layer_idx] = v_full.clone();
+            if use_cache {
+                if self.k_cache.len() <= layer_idx {
+                    self.k_cache.push(k_full.clone());
+                    self.v_cache.push(v_full.clone());
+                } else {
+                    self.k_cache[layer_idx] = k_full.clone();
+                    self.v_cache[layer_idx] = v_full.clone();
+                }
             }
 
-            let total_len = start_pos + seq_len;
+            let total_len = if use_cache { start_pos + seq_len } else { seq_len };
 
             // GQA: expand KV heads
             let k_exp = repeat_kv(&k_full, num_kv_groups)?; // [1, 16, total_len, 128]
@@ -338,7 +480,7 @@ impl BaseLM {
 
             // Output projection
             let attn_out = Self::linear(&attn_out, &layer.o_proj)?;
-            hidden = (residual + attn_out)?;
+            hidden = residual_add(&residual, &attn_out, residual_scale)?;
 
             // Post-attention norm + MLP
             let residual = hidden.clone();
@@ -348,13 +490,15 @@ impl BaseLM {
             let gate = silu(&Self::linear(&hidden, &layer.gate_proj)?)?;
             let up = Self::linear(&hidden, &layer.up_proj)?;
             let mlp_out = Self::linear(&(gate * up)?, &layer.down_proj)?;
-            hidden = (residual + mlp_out)?;
+            hidden = residual_add(&residual, &mlp_out, residual_scale)?;
         }
 
         // 3. Final norm
         hidden = rms_norm(&hidden, &self.norm, self.config.rms_norm_eps)?;
 
-        self.cache_len = start_pos + seq_len;
+        if use_cache {
+            self.cache_len = start_pos + seq_len;
+        }
         Ok(hidden)
     }
 
@@ -364,12 +508,18 @@ impl BaseLM {
         let seq_len = hidden.dim(1)?;
         let mut hidden = hidden.clone();
 
-        let start_pos = self.cache_len;
+        let use_cache = self.config.is_causal;
+        let start_pos = if use_cache { self.cache_len } else { 0 };
         let cos = self.cos_cache.narrow(0, start_pos, seq_len)?;
         let sin = self.sin_cache.narrow(0, start_pos, seq_len)?;
 
         let num_kv_groups = self.config.num_heads / self.config.num_kv_heads;
         let scale = 1.0 / (self.config.head_dim as f64).sqrt();
+        let residual_scale = if self.config.use_mup {
+            self.config.scale_depth / (self.config.num_layers as f64).sqrt()
+        } else {
+            1.0
+        };
 
         for layer_idx in 0..self.config.num_layers {
             let layer = &self.layers[layer_idx];
@@ -407,7 +557,7 @@ impl BaseLM {
                 (apply_rope(&q, &cos, &sin)?, apply_rope(&k, &cos, &sin)?)
             };
 
-            let (k_full, v_full) = if self.k_cache.len() > layer_idx && self.cache_len > 0 {
+            let (k_full, v_full) = if use_cache && self.k_cache.len() > layer_idx && self.cache_len > 0 {
                 let k_full = Tensor::cat(&[&self.k_cache[layer_idx], &k], 2)?;
                 let v_full = Tensor::cat(&[&self.v_cache[layer_idx], &v], 2)?;
                 (k_full, v_full)
@@ -415,15 +565,17 @@ impl BaseLM {
                 (k.clone(), v.clone())
             };
 
-            if self.k_cache.len() <= layer_idx {
-                self.k_cache.push(k_full.clone());
-                self.v_cache.push(v_full.clone());
-            } else {
-                self.k_cache[layer_idx] = k_full.clone();
-                self.v_cache[layer_idx] = v_full.clone();
+            if use_cache {
+                if self.k_cache.len() <= layer_idx {
+                    self.k_cache.push(k_full.clone());
+                    self.v_cache.push(v_full.clone());
+                } else {
+                    self.k_cache[layer_idx] = k_full.clone();
+                    self.v_cache[layer_idx] = v_full.clone();
+                }
             }
 
-            let total_len = start_pos + seq_len;
+            let total_len = if use_cache { start_pos + seq_len } else { seq_len };
 
             let k_exp = repeat_kv(&k_full, num_kv_groups)?;
             let v_exp = repeat_kv(&v_full, num_kv_groups)?;
@@ -453,7 +605,7 @@ impl BaseLM {
                 let name = format!("{}.layers.{}.self_attn.o_proj", self.config.prefix, layer_idx);
                 attn_out = lora.apply(&name, &attn_out, &o_input)?;
             }
-            hidden = (residual + attn_out)?;
+            hidden = residual_add(&residual, &attn_out, residual_scale)?;
 
             // Post-attention norm + MLP with LoRA
             let residual = hidden.clone();
@@ -475,12 +627,14 @@ impl BaseLM {
                 let name = format!("{}.layers.{}.mlp.down_proj", self.config.prefix, layer_idx);
                 mlp_out = lora.apply(&name, &mlp_out, &down_input)?;
             }
-            hidden = (residual + mlp_out)?;
+            hidden = residual_add(&residual, &mlp_out, residual_scale)?;
         }
 
         hidden = rms_norm(&hidden, &self.norm, self.config.rms_norm_eps)?;
 
-        self.cache_len = start_pos + seq_len;
+        if use_cache {
+            self.cache_len = start_pos + seq_len;
+        }
         Ok(hidden)
     }
 

@@ -16,7 +16,8 @@
   },
   "metadata": {
     "seed": 1234,
-    "source_model_dir": "D:\\Sandbox_Share\\VoxUI\\VoxCPM\\models\\VoxCPM2"
+    "source_model_dir": "D:\\Sandbox_Share\\VoxUI\\VoxCPM\\models\\VoxCPM2",
+    "runtime_dtype": "float32"
   },
   "lists": {
     "token_ids": [
