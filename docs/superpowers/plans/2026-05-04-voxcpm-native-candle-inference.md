@@ -2184,7 +2184,7 @@ Only commit WAV outputs if they are intended fixtures; otherwise keep `test_outp
 **Files:**
 - No source changes expected.
 
-- [ ] **Step 1: Set CUDA environment**
+- [x] **Step 1: Set CUDA environment**
 
 Run:
 
@@ -2196,7 +2196,7 @@ $env:CUDA_COMPUTE_CAP = "89"
 $env:NVCC_APPEND_FLAGS = "--allow-unsupported-compiler"
 ```
 
-- [ ] **Step 2: Run CUDA compile check**
+- [x] **Step 2: Run CUDA compile check**
 
 Run:
 
@@ -2206,7 +2206,7 @@ cargo check -p voxui-inference --features cuda
 
 Expected: pass.
 
-- [ ] **Step 3: Run CUDA inference suite**
+- [x] **Step 3: Run CUDA inference suite**
 
 Run:
 
@@ -2222,7 +2222,7 @@ Expected:
 - Available LoRA adapters pass.
 - VoxCPM2 reference-audio cases pass.
 
-- [ ] **Step 4: Record final status**
+- [x] **Step 4: Record final status**
 
 Run:
 

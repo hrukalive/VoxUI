@@ -495,11 +495,12 @@ impl BaseLM {
             let total_len = if use_cache { start_pos + seq_len } else { seq_len };
 
             // GQA: expand KV heads
-            let k_exp = repeat_kv(&k_full, num_kv_groups)?; // [1, 16, total_len, 128]
-            let v_exp = repeat_kv(&v_full, num_kv_groups)?;
+            let q = q.contiguous()?;
+            let k_exp = repeat_kv(&k_full, num_kv_groups)?.contiguous()?; // [1, 16, total_len, 128]
+            let v_exp = repeat_kv(&v_full, num_kv_groups)?.contiguous()?;
 
             // Attention scores: Q @ K^T / sqrt(d)
-            let scores = q.matmul(&k_exp.t()?)?; // [1, 16, T, total_len]
+            let scores = q.matmul(&k_exp.t()?.contiguous()?)?; // [1, 16, T, total_len]
             let scores = (scores * scale)?;
 
             // Causal mask: position i can attend to positions <= start_pos + i
@@ -519,6 +520,7 @@ impl BaseLM {
             // Reshape back: [1, T, num_heads * head_dim]
             let attn_out = attn_out
                 .transpose(1, 2)?
+                .contiguous()?
                 .reshape((batch, seq_len, self.config.num_heads * self.config.head_dim))?;
 
             // Output projection
@@ -620,10 +622,11 @@ impl BaseLM {
 
             let total_len = if use_cache { start_pos + seq_len } else { seq_len };
 
-            let k_exp = repeat_kv(&k_full, num_kv_groups)?;
-            let v_exp = repeat_kv(&v_full, num_kv_groups)?;
+            let q = q.contiguous()?;
+            let k_exp = repeat_kv(&k_full, num_kv_groups)?.contiguous()?;
+            let v_exp = repeat_kv(&v_full, num_kv_groups)?.contiguous()?;
 
-            let scores = q.matmul(&k_exp.t()?)?;
+            let scores = q.matmul(&k_exp.t()?.contiguous()?)?;
             let scores = (scores * scale)?;
 
             let scores = if self.config.is_causal && seq_len > 1 {
@@ -639,6 +642,7 @@ impl BaseLM {
 
             let attn_out = attn_out
                 .transpose(1, 2)?
+                .contiguous()?
                 .reshape((batch, seq_len, self.config.num_heads * self.config.head_dim))?;
 
             // O projection with LoRA

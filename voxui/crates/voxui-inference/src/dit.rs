@@ -453,17 +453,19 @@ impl DiT {
             let k = apply_rope(&k, &cos, &sin)?;
 
             // GQA expand
-            let k = repeat_kv(&k, num_kv_groups)?;
-            let v = repeat_kv(&v, num_kv_groups)?;
+            let q = q.contiguous()?;
+            let k = repeat_kv(&k, num_kv_groups)?.contiguous()?;
+            let v = repeat_kv(&v, num_kv_groups)?.contiguous()?;
 
             // Full (non-causal) attention
-            let scores = q.matmul(&k.t()?)?;
+            let scores = q.matmul(&k.t()?.contiguous()?)?;
             let scores = (scores * scale)?;
             let attn_weights = crate::softmax_last_dim(&scores)?;
             let attn_out = attn_weights.matmul(&v)?;
 
             let attn_out = attn_out
                 .transpose(1, 2)?
+                .contiguous()?
                 .reshape((b, total_len, self.config.num_heads * self.config.head_dim))?;
             let o_input = attn_out.clone();
             let mut attn_out = linear_no_bias(&attn_out, &layer.o_proj)?;
