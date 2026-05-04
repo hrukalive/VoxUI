@@ -149,6 +149,17 @@ fn valid_lora_selection(selection: Option<String>, entries: &[LoraEntry]) -> Opt
     })
 }
 
+fn selected_audio_device(configured: String, devices: &[String], backend_selected: String) -> String {
+    let configured = configured.trim().to_string();
+    if !configured.is_empty() && devices.iter().any(|device| device == &configured) {
+        configured
+    } else if !backend_selected.trim().is_empty() {
+        backend_selected
+    } else {
+        devices.first().cloned().unwrap_or_default()
+    }
+}
+
 async fn list_loras_for_model(model_dir: String) -> Result<Vec<LoraEntry>, String> {
     tauri_api::invoke::<_, Vec<LoraEntry>>(
         "list_lora_dirs",
@@ -258,8 +269,13 @@ pub fn App() -> impl IntoView {
             ).await {
                 set_hosts.set(audio.hosts);
                 set_audio_host.set(audio.selected_host);
+                let selected_device = selected_audio_device(
+                    audio_device.get_untracked(),
+                    &audio.devices,
+                    audio.selected_device,
+                );
                 set_devices.set(audio.devices);
-                set_audio_device.set(audio.selected_device);
+                set_audio_device.set(selected_device);
             }
 
             // List loras
