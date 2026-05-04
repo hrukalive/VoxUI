@@ -1204,7 +1204,7 @@ git commit -m "feat(inference): add VoxCPM synthesis request"
 - Modify: `D:/Sandbox_Share/VoxUI/voxui/crates/voxui-inference/Cargo.toml`
 - Create: `D:/Sandbox_Share/VoxUI/voxui/crates/voxui-inference/tests/audiovae_parity.rs`
 
-- [ ] **Step 1: Write failing audio IO and AudioVAE parity tests**
+- [x] **Step 1: Write failing audio IO and AudioVAE parity tests**
 
 Create `tests/audiovae_parity.rs`:
 
@@ -1244,7 +1244,7 @@ fn audiovae_decode_matches_python_trace_head() {
 }
 ```
 
-- [ ] **Step 2: Run test to verify failure**
+- [x] **Step 2: Run test to verify failure**
 
 Run:
 
@@ -1254,7 +1254,7 @@ cargo test -p voxui-inference --test audiovae_parity -- --nocapture
 
 Expected: fail because `audio_io`, `AudioVAE::load_from_manifest`, encoder support, and trace helpers do not exist or decoder parity differs.
 
-- [ ] **Step 3: Add audio dependency**
+- [x] **Step 3: Add audio dependency**
 
 In `Cargo.toml`, add:
 
@@ -1262,7 +1262,7 @@ In `Cargo.toml`, add:
 hound = "3"
 ```
 
-- [ ] **Step 4: Implement WAV loading**
+- [x] **Step 4: Implement WAV loading**
 
 Create `src/audio_io.rs` with:
 
@@ -1327,7 +1327,7 @@ fn resample_linear(input: &[f32], src_rate: u32, dst_rate: u32) -> Vec<f32> {
 }
 ```
 
-- [ ] **Step 5: Implement AudioVAE load and encode/decode parity**
+- [x] **Step 5: Implement AudioVAE load and encode/decode parity**
 
 In `src/audiovae.rs`, add `AudioVAE::load_from_manifest(loader, manifest_audio_vae)` and implement:
 
@@ -1339,7 +1339,7 @@ In `src/audiovae.rs`, add `AudioVAE::load_from_manifest(loader, manifest_audio_v
 - Snake activation with broadcasted alpha.
 - V2 sample-rate conditioning when tensors are present.
 
-- [ ] **Step 6: Run AudioVAE tests**
+- [x] **Step 6: Run AudioVAE tests**
 
 Run:
 
@@ -1349,7 +1349,7 @@ cargo test -p voxui-inference --test audiovae_parity -- --nocapture
 
 Expected: `wav_loader_returns_mono_f32_at_requested_rate` passes and decode parity is within `2e-3` for FP16 exported weights.
 
-- [ ] **Step 7: Commit audio and AudioVAE parity**
+- [x] **Step 7: Commit audio and AudioVAE parity**
 
 Run:
 

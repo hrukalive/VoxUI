@@ -1,7 +1,12 @@
-"""Quantization functions for GGUF export: FP16, Q8_0, Q4_0."""
+"""Quantization functions for GGUF export: F32, FP16, Q8_0, Q4_0."""
 
 import numpy as np
 import struct
+
+
+def quantize_f32(tensor: np.ndarray) -> bytes:
+    """Keep float32 values and return raw little-endian bytes."""
+    return tensor.astype(np.float32).tobytes()
 
 
 def quantize_fp16(tensor: np.ndarray) -> bytes:

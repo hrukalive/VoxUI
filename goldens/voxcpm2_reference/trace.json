@@ -67,6 +67,25 @@
   },
   "tensors": [
     {
+      "name": "audio_vae_encode_input",
+      "file": "audio_vae_encode_input.f32",
+      "dtype": "f32",
+      "shape": [
+        1,
+        84480
+      ]
+    },
+    {
+      "name": "audio_vae_encode_output",
+      "file": "audio_vae_encode_output.f32",
+      "dtype": "f32",
+      "shape": [
+        1,
+        64,
+        132
+      ]
+    },
+    {
       "name": "audio_vae_encoded_reference",
       "file": "audio_vae_encoded_reference.f32",
       "dtype": "f32",

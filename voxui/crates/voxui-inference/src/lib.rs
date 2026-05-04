@@ -15,6 +15,7 @@ pub mod residual_lm;
 pub mod trace;
 pub mod tokenizer;
 
+pub use audiovae::AudioVAE;
 pub use engine::VoxCPMEngine;
 pub use manifest::{BundleManifest, ComponentFiles, ModelVariant};
 pub use model_loader::GgufModelLoader;

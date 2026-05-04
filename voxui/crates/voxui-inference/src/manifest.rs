@@ -26,6 +26,10 @@ pub struct SpecialTokens {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct AudioVaeManifest {
+    #[serde(default)]
+    pub encoder_dim: Option<usize>,
+    #[serde(default)]
+    pub decoder_dim: Option<usize>,
     pub sample_rate: u32,
     pub out_sample_rate: Option<u32>,
     pub latent_dim: usize,

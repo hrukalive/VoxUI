@@ -46,6 +46,7 @@ class TraceCapture:
         self.lists: dict[str, list[int]] = {}
         self._orig_inference = None
         self._orig_encode_wav = None
+        self._orig_vae_encode = None
         self._orig_decode = None
         self._orig_randn = None
         self._handles = []
@@ -53,6 +54,7 @@ class TraceCapture:
     def install(self) -> None:
         self._wrap_inference()
         self._wrap_encode_wav()
+        self._wrap_vae_encode()
         self._wrap_decode()
         self._wrap_randn()
         self._install_module_hooks()
@@ -70,6 +72,9 @@ class TraceCapture:
         if self._orig_encode_wav is not None:
             self.model._encode_wav = self._orig_encode_wav
             self._orig_encode_wav = None
+        if self._orig_vae_encode is not None:
+            self.model.audio_vae.encode = self._orig_vae_encode
+            self._orig_vae_encode = None
         if self._orig_decode is not None:
             self.model.audio_vae.decode = self._orig_decode
             self._orig_decode = None
@@ -131,6 +136,17 @@ class TraceCapture:
             return result
 
         self.model.audio_vae.decode = wrapped_decode
+
+    def _wrap_vae_encode(self) -> None:
+        self._orig_vae_encode = self.model.audio_vae.encode
+
+        def wrapped_encode(audio_data, sample_rate, *args, **kwargs):
+            self._store_tensor_once("audio_vae_encode_input", audio_data)
+            result = self._orig_vae_encode(audio_data, sample_rate, *args, **kwargs)
+            self._store_tensor_once("audio_vae_encode_output", result)
+            return result
+
+        self.model.audio_vae.encode = wrapped_encode
 
     def _wrap_randn(self) -> None:
         self._orig_randn = torch.randn

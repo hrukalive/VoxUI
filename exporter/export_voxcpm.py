@@ -17,15 +17,17 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
 from exporter.gguf_writer import (
+    GGML_TYPE_F32,
     GGML_TYPE_F16,
     GGML_TYPE_Q4_0,
     GGML_TYPE_Q8_0,
     GGUFWriter,
 )
-from exporter.quantize import quantize_fp16, quantize_q4_0, quantize_q8_0
+from exporter.quantize import quantize_f32, quantize_fp16, quantize_q4_0, quantize_q8_0
 
 
 QUANT_MAP = {
+    "f32": (quantize_f32, GGML_TYPE_F32),
     "fp16": (quantize_fp16, GGML_TYPE_F16),
     "q8": (quantize_q8_0, GGML_TYPE_Q8_0),
     "q4": (quantize_q4_0, GGML_TYPE_Q4_0),
@@ -474,10 +476,10 @@ def main() -> None:
     parser.add_argument("--output-dir", required=True, help="Output directory for GGUF files")
     parser.add_argument("--variant", required=True, choices=["0.5", "1.5", "2.0"], help="VoxCPM variant")
     parser.add_argument("--lora-dir", default=None, help="Path to LoRA adapter directory")
-    parser.add_argument("--quant-lm", default="fp16", choices=["fp16", "q8", "q4"])
-    parser.add_argument("--quant-encoder", default="fp16", choices=["fp16", "q8", "q4"])
-    parser.add_argument("--quant-dit", default="fp16", choices=["fp16", "q8", "q4"])
-    parser.add_argument("--quant-vae", default="fp16", choices=["fp16", "q8", "q4"])
+    parser.add_argument("--quant-lm", default="fp16", choices=sorted(QUANT_MAP))
+    parser.add_argument("--quant-encoder", default="fp16", choices=sorted(QUANT_MAP))
+    parser.add_argument("--quant-dit", default="fp16", choices=sorted(QUANT_MAP))
+    parser.add_argument("--quant-vae", default="f32", choices=sorted(QUANT_MAP))
     args = parser.parse_args()
 
     quant_args = {
