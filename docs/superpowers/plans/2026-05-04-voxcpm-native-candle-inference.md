@@ -660,7 +660,7 @@ git commit -m "fix(exporter): add native VoxCPM bundle schema"
 **Files:**
 - Modify generated artifacts under `D:/Sandbox_Share/VoxUI/models/`
 
-- [ ] **Step 1: Remove stale generated model directories after confirming target paths**
+- [x] **Step 1: Remove stale generated model directories after confirming target paths**
 
 Run:
 
@@ -670,7 +670,7 @@ Get-ChildItem D:\Sandbox_Share\VoxUI\models -Directory | Select-Object FullName
 
 Expected: only generated model bundle directories are listed. Do not remove source model directories under `VoxCPM/models`.
 
-- [ ] **Step 2: Export VoxCPM 0.5**
+- [x] **Step 2: Export VoxCPM 0.5**
 
 Run:
 
@@ -681,7 +681,7 @@ python exporter/export_voxcpm.py --model-dir VoxCPM/models/VoxCPM-0.5B --output-
 
 Expected: `models/voxcpm05-fp16/manifest.json`, all required GGUF components, tokenizer files, and config copy.
 
-- [ ] **Step 3: Export VoxCPM 1.5**
+- [x] **Step 3: Export VoxCPM 1.5**
 
 Run:
 
@@ -691,7 +691,7 @@ python exporter/export_voxcpm.py --model-dir VoxCPM/models/VoxCPM1.5 --output-di
 
 Expected: `models/voxcpm15-fp16/manifest.json` and all required GGUF components.
 
-- [ ] **Step 4: Export VoxCPM 2.0**
+- [x] **Step 4: Export VoxCPM 2.0**
 
 Run:
 
@@ -701,7 +701,7 @@ python exporter/export_voxcpm.py --model-dir VoxCPM/models/VoxCPM2 --output-dir 
 
 Expected: `models/voxcpm2-fp16/manifest.json` and all required GGUF components.
 
-- [ ] **Step 5: Export available LoRA adapters**
+- [x] **Step 5: Export available LoRA adapters**
 
 Run one command per local adapter that exists:
 
@@ -713,7 +713,7 @@ if (Test-Path VoxCPM/ft2/latest) { python exporter/export_voxcpm.py --model-dir 
 
 Expected: each available adapter creates `lora_manifest.json` and component LoRA GGUF files under a `lora_*` subdirectory.
 
-- [ ] **Step 6: Verify bundle files**
+- [x] **Step 6: Verify bundle files**
 
 Run:
 
@@ -725,7 +725,7 @@ Get-ChildItem models -Filter feat_decoder.gguf -Recurse | Select-Object FullName
 
 Expected: all three variants show manifest, `feat_encoder.gguf`, and `feat_decoder.gguf`.
 
-- [ ] **Step 7: Commit regenerated bundle metadata if model artifacts are intentionally tracked**
+- [x] **Step 7: Commit regenerated bundle metadata if model artifacts are intentionally tracked**
 
 Run:
 
