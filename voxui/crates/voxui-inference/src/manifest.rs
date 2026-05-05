@@ -54,8 +54,10 @@ pub struct BundleManifest {
     pub schema_version: u32,
     pub architecture: String,
     pub variant: ModelVariant,
-    pub source_model_dir: String,
-    pub source_weight_format: String,
+    #[serde(default)]
+    pub source_model_dir: Option<String>,
+    #[serde(default)]
+    pub source_weight_format: Option<String>,
     pub special_tokens: SpecialTokens,
     pub patch_size: usize,
     pub feat_dim: usize,
@@ -89,7 +91,9 @@ impl BundleManifest {
     }
 
     pub fn output_sample_rate(&self) -> u32 {
-        self.audio_vae.out_sample_rate.unwrap_or(self.audio_vae.sample_rate)
+        self.audio_vae
+            .out_sample_rate
+            .unwrap_or(self.audio_vae.sample_rate)
     }
 
     pub fn component_path(&self, model_dir: &Path, component: &str) -> Result<PathBuf> {
