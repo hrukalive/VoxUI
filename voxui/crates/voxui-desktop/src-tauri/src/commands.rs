@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
@@ -58,14 +59,23 @@ pub fn list_lora_dirs(model_dir: String) -> Vec<LoraEntry> {
 
 #[tauri::command]
 pub fn list_audio_devices(state: State<AppState>, host: Option<String>) -> AudioDeviceList {
-    let hosts: Vec<String> = state.audio_system.hosts().iter().map(|h| h.name.clone()).collect();
+    let hosts: Vec<String> = state
+        .audio_system
+        .hosts()
+        .iter()
+        .map(|h| h.name.clone())
+        .collect();
     let selected_host = host
         .filter(|name| hosts.iter().any(|known| known == name))
         .unwrap_or_else(|| state.audio_system.default_host_name());
     let devices = state
         .audio_system
         .devices(&selected_host)
-        .map(|devs| devs.into_iter().map(|device| device.name).collect::<Vec<_>>())
+        .map(|devs| {
+            devs.into_iter()
+                .map(|device| device.name)
+                .collect::<Vec<_>>()
+        })
         .unwrap_or_default();
     let selected_device = state
         .audio_system
@@ -90,15 +100,50 @@ pub async fn load_model(
     model_dir: String,
     backend: String,
 ) -> Result<ModelInfo, String> {
-    let _busy = state.try_begin_synthesis().map_err(|_| engine_busy_message())?;
+    log::debug!("load_model requested model_dir={model_dir} backend={backend}");
+    let _busy = match state.try_begin_synthesis() {
+        Ok(guard) => guard,
+        Err(_) => {
+            let message = engine_busy_message();
+            log::warn!(
+                "load_model rejected busy model_dir={model_dir} backend={backend} error={message}"
+            );
+            return Err(message);
+        }
+    };
+    let started_at = Instant::now();
     let model_path = PathBuf::from(&model_dir);
     let (device, actual_backend, warning) = select_device(&backend);
+    if let Some(message) = warning.as_ref() {
+        log::warn!(
+            "load_model backend warning requested_backend={backend} actual_backend={actual_backend} warning={message}"
+        );
+    } else {
+        log::debug!(
+            "load_model backend selected requested_backend={backend} actual_backend={actual_backend}"
+        );
+    }
     let engine_slot = Arc::clone(&state.engine);
 
-    let engine = tokio::task::spawn_blocking(move || VoxCPMEngine::load(&model_path, device))
+    let engine = match tokio::task::spawn_blocking(move || VoxCPMEngine::load(&model_path, device))
         .await
-        .map_err(|e| format!("model load task failed: {e}"))?
-        .map_err(|e| format!("model load failed: {e}"))?;
+    {
+        Ok(Ok(engine)) => engine,
+        Ok(Err(err)) => {
+            log::error!(
+                "load_model failed model_dir={model_dir} backend={actual_backend} elapsed_seconds={:.3} error={err:#}",
+                started_at.elapsed().as_secs_f64()
+            );
+            return Err(format!("model load failed: {err}"));
+        }
+        Err(err) => {
+            log::error!(
+                "load_model task failed model_dir={model_dir} backend={actual_backend} elapsed_seconds={:.3} error={err}",
+                started_at.elapsed().as_secs_f64()
+            );
+            return Err(format!("model load task failed: {err}"));
+        }
+    };
 
     let info = ModelInfo {
         architecture: engine.architecture().to_string(),
@@ -106,27 +151,65 @@ pub async fn load_model(
         backend: actual_backend,
         warning,
     };
+    log::debug!(
+        "load_model complete architecture={} sample_rate={} backend={} elapsed_seconds={:.3}",
+        info.architecture,
+        info.sample_rate,
+        info.backend,
+        started_at.elapsed().as_secs_f64()
+    );
 
-    *engine_slot.lock().map_err(|_| "engine lock poisoned".to_string())? = Some(engine);
+    *engine_slot
+        .lock()
+        .map_err(|_| "engine lock poisoned".to_string())? = Some(engine);
     let _ = app.emit("engine-ready", info.clone());
     Ok(info)
 }
 
 #[tauri::command]
 pub fn apply_lora(state: State<AppState>, args: ApplyLoraArgs) -> Result<(), String> {
-    let _busy = state.try_begin_synthesis().map_err(|_| engine_busy_message())?;
-    let mut guard = state
-        .engine
-        .lock()
-        .map_err(|_| "engine lock poisoned".to_string())?;
-    let engine = guard.as_mut().ok_or("Engine not loaded")?;
+    let requested_lora = args.lora_dir.clone();
+    log::debug!("apply_lora requested lora_dir={requested_lora:?}");
+    let _busy = match state.try_begin_synthesis() {
+        Ok(guard) => guard,
+        Err(_) => {
+            let message = engine_busy_message();
+            log::warn!("apply_lora rejected busy lora_dir={requested_lora:?} error={message}");
+            return Err(message);
+        }
+    };
+    let mut guard = match state.engine.lock() {
+        Ok(guard) => guard,
+        Err(_) => {
+            log::error!("apply_lora failed lora_dir={requested_lora:?} error=engine lock poisoned");
+            return Err("engine lock poisoned".to_string());
+        }
+    };
+    let engine = match guard.as_mut() {
+        Some(engine) => engine,
+        None => {
+            log::error!("apply_lora failed lora_dir={requested_lora:?} error=Engine not loaded");
+            return Err("Engine not loaded".to_string());
+        }
+    };
 
     match args.lora_dir {
-        Some(path) if !path.trim().is_empty() => engine
-            .load_lora(&PathBuf::from(path.trim()))
-            .map_err(|e| format!("LoRA load failed: {e}")),
+        Some(path) if !path.trim().is_empty() => {
+            let trimmed = path.trim();
+            match engine.load_lora(&PathBuf::from(trimmed)) {
+                Ok(()) => {
+                    log::debug!("apply_lora complete lora_dir={trimmed}");
+                    Ok(())
+                }
+                Err(err) => {
+                    log::error!("apply_lora failed lora_dir={trimmed} error={err:#}");
+                    Err(format!("LoRA load failed: {err}"))
+                }
+            }
+        }
         _ => {
             engine.unload_lora();
+            log::debug!("apply_lora complete lora_dir=None");
             Ok(())
         }
     }
@@ -139,9 +222,13 @@ pub async fn synthesize(
     args: SynthesisArgs,
 ) -> Result<(), String> {
     let index = args.index;
+    log::debug!("synthesize requested index={index}");
     let _busy = match state.try_begin_synthesis() {
         Ok(guard) => guard,
-        Err(message) => return emit_synthesis_error(&app, index, message),
+        Err(message) => {
+            log::warn!("synthesize rejected busy index={index} error={message}");
+            return emit_synthesis_error(&app, index, message);
+        }
     };
     let request = args.into_request();
     let config = match state.config.lock() {
@@ -203,13 +290,20 @@ pub async fn synthesize(
 
 #[tauri::command]
 pub fn get_config(state: State<AppState>) -> AppConfig {
-    state.config.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    state
+        .config
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
 }
 
 #[tauri::command]
 pub fn save_config(state: State<AppState>, config: AppConfig) -> Result<(), String> {
     config.save().map_err(|e| format!("{e}"))?;
-    *state.config.lock().map_err(|_| "config lock poisoned".to_string())? = config;
+    *state
+        .config
+        .lock()
+        .map_err(|_| "config lock poisoned".to_string())? = config;
     Ok(())
 }
 
@@ -254,6 +348,11 @@ fn resolve_audio_output(config: &AppConfig) -> Result<(String, String), String> 
 }
 
 fn emit_synthesis_error(app: &AppHandle, index: u32, message: String) -> Result<(), String> {
+    if message == engine_busy_message() {
+        log::warn!("emit_synthesis_error index={index} message={message}");
+    } else {
+        log::error!("emit_synthesis_error index={index} message={message}");
+    }
     let _ = app.emit(
         "tts-error",
         ErrorPayload {

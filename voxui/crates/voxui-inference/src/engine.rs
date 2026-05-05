@@ -1,6 +1,7 @@
 //! Native VoxCPM generation pipeline.
 
 use std::path::Path;
+use std::time::Instant;
 
 use anyhow::{bail, Context, Result};
 use candle_core::{DType, Device, Tensor};
@@ -87,60 +88,89 @@ pub struct VoxCPMEngine {
 
 impl VoxCPMEngine {
     pub fn load(model_dir: &Path, device: Device) -> Result<Self> {
+        let started_at = Instant::now();
+        log::debug!(
+            "VoxCPMEngine::load start model_dir={} device={device:?}",
+            model_dir.display()
+        );
+
         let manifest = BundleManifest::load(model_dir)?;
         let tokenizer = VoxTokenizer::from_dir(model_dir)
             .with_context(|| format!("load tokenizer from {}", model_dir.display()))?;
+        log::debug!(
+            "VoxCPMEngine::load manifest/tokenizer ready architecture={} sample_rate={} patch_size={}",
+            manifest.architecture,
+            manifest.output_sample_rate(),
+            manifest.patch_size
+        );
 
+        let base_lm_path = manifest.component_path(model_dir, "base_lm")?;
+        let residual_lm_path = manifest.component_path(model_dir, "residual_lm")?;
+        let feat_encoder_path = manifest.component_path(model_dir, "feat_encoder")?;
+        let feat_decoder_path = manifest.component_path(model_dir, "feat_decoder")?;
+        let audio_vae_path = manifest.component_path(model_dir, "audio_vae")?;
+        let projections_path = manifest.component_path(model_dir, "projections")?;
         let component_paths = [
-            manifest.component_path(model_dir, "base_lm")?,
-            manifest.component_path(model_dir, "residual_lm")?,
-            manifest.component_path(model_dir, "feat_encoder")?,
-            manifest.component_path(model_dir, "feat_decoder")?,
-            manifest.component_path(model_dir, "audio_vae")?,
-            manifest.component_path(model_dir, "projections")?,
+            ("base_lm", &base_lm_path),
+            ("residual_lm", &residual_lm_path),
+            ("feat_encoder", &feat_encoder_path),
+            ("feat_decoder", &feat_decoder_path),
+            ("audio_vae", &audio_vae_path),
+            ("projections", &projections_path),
         ];
-        for path in &component_paths {
+        for (name, path) in &component_paths {
             if !path.exists() {
-                bail!("missing VoxCPM component file {}", path.display());
+                bail!("missing VoxCPM component file {name} at {}", path.display());
             }
         }
 
-        let base_lm_loader = GgufModelLoader::new(
-            &manifest.component_path(model_dir, "base_lm")?,
-            device.clone(),
-        )?;
+        log::debug!(
+            "VoxCPMEngine::load component start name=base_lm path={}",
+            base_lm_path.display()
+        );
+        let base_lm_loader = GgufModelLoader::new(&base_lm_path, device.clone())?;
         let base_lm_config = BaseLMConfig::from_manifest(&manifest, "base_lm")?;
         let base_lm = BaseLM::load(&base_lm_loader, base_lm_config, &device)?;
+        log::debug!("VoxCPMEngine::load component done name=base_lm");
 
-        let residual_lm_loader = GgufModelLoader::new(
-            &manifest.component_path(model_dir, "residual_lm")?,
-            device.clone(),
-        )?;
+        log::debug!(
+            "VoxCPMEngine::load component start name=residual_lm path={}",
+            residual_lm_path.display()
+        );
+        let residual_lm_loader = GgufModelLoader::new(&residual_lm_path, device.clone())?;
         let residual_lm_config = BaseLMConfig::from_manifest(&manifest, "residual_lm")?;
         let residual_lm = BaseLM::load(&residual_lm_loader, residual_lm_config, &device)?;
+        log::debug!("VoxCPMEngine::load component done name=residual_lm");
 
-        let encoder_loader = GgufModelLoader::new(
-            &manifest.component_path(model_dir, "feat_encoder")?,
-            device.clone(),
-        )?;
+        log::debug!(
+            "VoxCPMEngine::load component start name=feat_encoder path={}",
+            feat_encoder_path.display()
+        );
+        let encoder_loader = GgufModelLoader::new(&feat_encoder_path, device.clone())?;
         let encoder = LocalEncoder::load_from_manifest(&encoder_loader, &manifest)?;
+        log::debug!("VoxCPMEngine::load component done name=feat_encoder");
 
-        let dit_loader = GgufModelLoader::new(
-            &manifest.component_path(model_dir, "feat_decoder")?,
-            device.clone(),
-        )?;
+        log::debug!(
+            "VoxCPMEngine::load component start name=feat_decoder path={}",
+            feat_decoder_path.display()
+        );
+        let dit_loader = GgufModelLoader::new(&feat_decoder_path, device.clone())?;
         let dit = DiT::load_from_manifest(&dit_loader, &manifest)?;
+        log::debug!("VoxCPMEngine::load component done name=feat_decoder");
 
-        let vae_loader = GgufModelLoader::new(
-            &manifest.component_path(model_dir, "audio_vae")?,
-            device.clone(),
-        )?;
+        log::debug!(
+            "VoxCPMEngine::load component start name=audio_vae path={}",
+            audio_vae_path.display()
+        );
+        let vae_loader = GgufModelLoader::new(&audio_vae_path, device.clone())?;
         let vae = AudioVAE::load_from_manifest(&vae_loader, &manifest.audio_vae)?;
+        log::debug!("VoxCPMEngine::load component done name=audio_vae");
 
-        let proj_loader = GgufModelLoader::new(
-            &manifest.component_path(model_dir, "projections")?,
-            device.clone(),
-        )?;
+        log::debug!(
+            "VoxCPMEngine::load component start name=projections path={}",
+            projections_path.display()
+        );
+        let proj_loader = GgufModelLoader::new(&projections_path, device.clone())?;
         let fsq = FSQLayer::load(
             &proj_loader,
             manifest.scalar_quantization_latent_dim,
@@ -156,6 +186,7 @@ impl VoxCPMEngine {
         };
         let stop_proj = load_projection(&proj_loader, "stop_proj")?;
         let stop_head = load_projection(&proj_loader, "stop_head")?;
+        log::debug!("VoxCPMEngine::load component done name=projections");
 
         let audio_chunk_size = product_or_manifest(
             &manifest.audio_vae.encoder_rates,
@@ -175,6 +206,13 @@ impl VoxCPMEngine {
             architecture: manifest.architecture.clone(),
             variant: manifest.variant,
         };
+        log::debug!(
+            "VoxCPMEngine::load complete architecture={} sample_rate={} patch_size={} elapsed_seconds={:.3}",
+            config.architecture,
+            config.sample_rate,
+            config.patch_size,
+            started_at.elapsed().as_secs_f64()
+        );
 
         Ok(Self {
             manifest,
@@ -222,7 +260,10 @@ impl VoxCPMEngine {
         self.lora = None;
     }
 
-    pub fn generate_debug_first_patch(&mut self, request: SynthesisRequest) -> Result<FirstPatchDebug> {
+    pub fn generate_debug_first_patch(
+        &mut self,
+        request: SynthesisRequest,
+    ) -> Result<FirstPatchDebug> {
         self.generate_debug_first_patch_inner(request, None)
     }
 
@@ -332,18 +373,19 @@ impl VoxCPMEngine {
             .prompt_text
             .as_ref()
             .context("prompt_text is required when prompt_wav_path is present")?;
-        let mut text_tokens = self.tokenizer.encode(&format!("{prompt_text}{}", request.text))?;
+        let mut text_tokens = self
+            .tokenizer
+            .encode(&format!("{prompt_text}{}", request.text))?;
         let target_text_token_count = self.tokenizer.encode(&request.text)?.len();
         text_tokens.push(self.manifest.special_tokens.audio_start);
         let text_len = text_tokens.len();
 
-        let prompt_feat = self.encode_wav_patches(
-            request.prompt_wav_path.as_ref().unwrap(),
-            PaddingMode::Left,
-        )?;
+        let prompt_feat =
+            self.encode_wav_patches(request.prompt_wav_path.as_ref().unwrap(), PaddingMode::Left)?;
         let prompt_len = prompt_feat.dim(0)?;
         text_tokens.extend(std::iter::repeat(0).take(prompt_len));
-        let audio_feat = Tensor::cat(&[&self.zero_feat(text_len)?, &prompt_feat], 0)?.unsqueeze(0)?;
+        let audio_feat =
+            Tensor::cat(&[&self.zero_feat(text_len)?, &prompt_feat], 0)?.unsqueeze(0)?;
         let mut text_mask_values = vec![1.0; text_len];
         text_mask_values.extend(std::iter::repeat(0.0).take(prompt_len));
         let mut audio_mask_values = vec![0.0; text_len];
@@ -368,7 +410,8 @@ impl VoxCPMEngine {
             request.reference_wav_path.as_ref().unwrap(),
             PaddingMode::Right,
         )?;
-        let (ref_tokens, ref_feats, ref_text_mask, ref_audio_mask) = self.make_ref_prefix(&ref_feat)?;
+        let (ref_tokens, ref_feats, ref_text_mask, ref_audio_mask) =
+            self.make_ref_prefix(&ref_feat)?;
 
         let mut all_tokens = ref_tokens;
         all_tokens.extend(text_tokens);
@@ -387,12 +430,17 @@ impl VoxCPMEngine {
         )
     }
 
-    fn build_reference_prompt_inputs(&mut self, request: &SynthesisRequest) -> Result<PreparedInputs> {
+    fn build_reference_prompt_inputs(
+        &mut self,
+        request: &SynthesisRequest,
+    ) -> Result<PreparedInputs> {
         let prompt_text = request
             .prompt_text
             .as_ref()
             .context("prompt_text is required when prompt_wav_path is present")?;
-        let mut text_tokens = self.tokenizer.encode(&format!("{prompt_text}{}", request.text))?;
+        let mut text_tokens = self
+            .tokenizer
+            .encode(&format!("{prompt_text}{}", request.text))?;
         let target_text_token_count = self.tokenizer.encode(&request.text)?.len();
         text_tokens.push(self.manifest.special_tokens.audio_start);
         let text_len = text_tokens.len();
@@ -401,18 +449,18 @@ impl VoxCPMEngine {
             request.reference_wav_path.as_ref().unwrap(),
             PaddingMode::Right,
         )?;
-        let prompt_feat = self.encode_wav_patches(
-            request.prompt_wav_path.as_ref().unwrap(),
-            PaddingMode::Left,
-        )?;
+        let prompt_feat =
+            self.encode_wav_patches(request.prompt_wav_path.as_ref().unwrap(), PaddingMode::Left)?;
         let prompt_len = prompt_feat.dim(0)?;
-        let (ref_tokens, ref_feats, ref_text_mask, ref_audio_mask) = self.make_ref_prefix(&ref_feat)?;
+        let (ref_tokens, ref_feats, ref_text_mask, ref_audio_mask) =
+            self.make_ref_prefix(&ref_feat)?;
 
         let mut all_tokens = ref_tokens;
         all_tokens.extend(text_tokens);
         all_tokens.extend(std::iter::repeat(0).take(prompt_len));
         let text_pad_feat = self.zero_feat(text_len)?;
-        let audio_feat = Tensor::cat(&[&ref_feats, &text_pad_feat, &prompt_feat], 0)?.unsqueeze(0)?;
+        let audio_feat =
+            Tensor::cat(&[&ref_feats, &text_pad_feat, &prompt_feat], 0)?.unsqueeze(0)?;
 
         let mut text_mask_values = ref_text_mask;
         text_mask_values.extend(std::iter::repeat(1.0).take(text_len));
@@ -468,7 +516,8 @@ impl VoxCPMEngine {
 
         let seq_len = prepared.text_tokens.len();
         let feat_embed = self.encoder.encode_patches(&prepared.audio_feat)?;
-        let feat_embed = self.apply_projection(&feat_embed, &self.enc_to_lm_proj, "enc_to_lm_proj")?;
+        let feat_embed =
+            self.apply_projection(&feat_embed, &self.enc_to_lm_proj, "enc_to_lm_proj")?;
         let text_embed = self.base_lm.embed(&prepared.text_tokens)?;
 
         let text_mask = prepared
@@ -479,8 +528,8 @@ impl VoxCPMEngine {
             .audio_mask
             .unsqueeze(2)?
             .to_dtype(feat_embed.dtype())?;
-        let combined_embed = (text_embed.broadcast_mul(&text_mask)?
-            + feat_embed.broadcast_mul(&audio_mask)?)?;
+        let combined_embed =
+            (text_embed.broadcast_mul(&text_mask)? + feat_embed.broadcast_mul(&audio_mask)?)?;
 
         let enc_outputs = self
             .base_lm
@@ -494,8 +543,8 @@ impl VoxCPMEngine {
             .audio_mask
             .unsqueeze(2)?
             .to_dtype(fsq_outputs.dtype())?;
-        let enc_outputs = (fsq_outputs.broadcast_mul(&fsq_mask)?
-            + enc_outputs.broadcast_mul(&enc_mask)?)?;
+        let enc_outputs =
+            (fsq_outputs.broadcast_mul(&fsq_mask)? + enc_outputs.broadcast_mul(&enc_mask)?)?;
         let lm_hidden = enc_outputs.narrow(1, seq_len - 1, 1)?.squeeze(1)?;
 
         let residual_input = if self.config.variant == ModelVariant::VoxCpm2 {
@@ -566,7 +615,11 @@ impl VoxCPMEngine {
         if generated_patch_count == 0 {
             bail!("VoxCPM generated no latent patches");
         }
-        let latent = patches_to_latent(&state.generated_patches, self.config.latent_dim, self.config.patch_size)?;
+        let latent = patches_to_latent(
+            &state.generated_patches,
+            self.config.latent_dim,
+            self.config.patch_size,
+        )?;
         Ok(GenerationOutput {
             latent,
             generated_patch_count,
@@ -613,7 +666,8 @@ impl VoxCPMEngine {
         let pred_feat = latent_patch.transpose(1, 2)?.contiguous()?;
         let pred_feat_for_encoder = pred_feat.unsqueeze(1)?;
         let curr_embed = self.encoder.encode_patches(&pred_feat_for_encoder)?;
-        let curr_embed = self.apply_projection(&curr_embed, &self.enc_to_lm_proj, "enc_to_lm_proj")?;
+        let curr_embed =
+            self.apply_projection(&curr_embed, &self.enc_to_lm_proj, "enc_to_lm_proj")?;
 
         state.generated_patches.push(pred_feat.clone());
         state.prefix_feat_cond = latent_patch.clone();
@@ -671,7 +725,8 @@ impl VoxCPMEngine {
         let audio = self.vae.decode(&output.latent.to_dtype(DType::F32)?)?;
         let mut samples = audio.squeeze(0)?.squeeze(0)?.to_vec1::<f32>()?;
         if output.context_len > 0 {
-            let trim_len = output.context_len * self.config.patch_size * self.config.decode_chunk_size;
+            let trim_len =
+                output.context_len * self.config.patch_size * self.config.decode_chunk_size;
             if trim_len < samples.len() {
                 samples.drain(0..trim_len);
             } else {
@@ -690,10 +745,7 @@ impl VoxCPMEngine {
         .map_err(Into::into)
     }
 
-    fn make_ref_prefix(
-        &self,
-        ref_feat: &Tensor,
-    ) -> Result<(Vec<u32>, Tensor, Vec<f32>, Vec<f32>)> {
+    fn make_ref_prefix(&self, ref_feat: &Tensor) -> Result<(Vec<u32>, Tensor, Vec<f32>, Vec<f32>)> {
         let ref_len = ref_feat.dim(0)?;
         let ref_audio_start = self
             .manifest
@@ -754,7 +806,10 @@ impl VoxCPMEngine {
         if audio_mask_values.last().copied().unwrap_or(0.0) == 0.0 {
             return 0;
         }
-        let audio_count = audio_mask_values.iter().filter(|value| **value > 0.5).count();
+        let audio_count = audio_mask_values
+            .iter()
+            .filter(|value| **value > 0.5)
+            .count();
         let streaming_prefix_len = if self.config.variant == ModelVariant::VoxCpm2 {
             4
         } else {
