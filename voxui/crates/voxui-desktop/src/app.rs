@@ -408,9 +408,12 @@ pub fn App() -> impl IntoView {
         });
     }
 
-    let on_submit = move |text: String| {
-        if status.get_untracked() == "generating" {
-            return;
+    let on_submit = move |text: String| -> bool {
+        if status.get_untracked() == "generating"
+            || active_index.get_untracked().is_some()
+            || !engine_ready.get_untracked()
+        {
+            return false;
         }
 
         let idx = next_index.get_untracked();
@@ -469,6 +472,7 @@ pub fn App() -> impl IntoView {
                 }
             }
         });
+        true
     };
 
     let on_model_selected = move |path: String| {
@@ -522,6 +526,13 @@ pub fn App() -> impl IntoView {
     };
 
     let on_apply_settings = move |vals: SettingsValues| {
+        if active_index.get_untracked().is_some()
+            || matches!(status.get_untracked().as_str(), "generating" | "loading")
+        {
+            set_status_message.set("Finish the current operation before changing settings".to_string());
+            return;
+        }
+
         set_show_settings.set(false);
         let requested_model_dir = vals.model_dir.clone();
         let requested_lora = lora_selection_option(vals.lora_dir.clone());
@@ -534,6 +545,7 @@ pub fn App() -> impl IntoView {
         let requested_prompt_text = vals.prompt_text.clone();
         let requested_reference_wav_path = vals.reference_wav_path.clone();
         let requested_language = vals.language.clone();
+        let previous_engine_ready = engine_ready.get_untracked();
         let need_reload = requested_model_dir != model_dir.get_untracked()
             || requested_backend != backend.get_untracked();
         let next_language = if requested_language == "English" {
@@ -542,131 +554,146 @@ pub fn App() -> impl IntoView {
             Language::Chinese
         };
 
-        set_model_dir.set(requested_model_dir.clone());
-        set_lora_dir.set(requested_lora.clone().unwrap_or_else(|| "None".to_string()));
-        set_backend.set(requested_backend.clone());
-        set_audio_host.set(requested_audio_host.clone());
-        set_audio_device.set(requested_audio_device.clone());
-        set_max_chars.set(requested_max_chars);
-        set_dit_steps.set(requested_dit_steps);
-        set_prompt_wav_path.set(requested_prompt_wav_path.clone());
-        set_prompt_text.set(requested_prompt_text.clone());
-        set_reference_wav_path.set(requested_reference_wav_path.clone());
-        set_lang.set(next_language);
-
         if need_reload {
             set_engine_ready.set(false);
             set_status.set("loading".into());
-            let selected_name = models
-                .get_untracked()
-                .into_iter()
-                .find(|entry| entry.path == requested_model_dir)
-                .map(|entry| entry.name)
-                .unwrap_or_else(|| requested_model_dir.clone());
-            set_model_name.set(selected_name);
+            set_status_message.set(String::new());
         }
 
         spawn_local(async move {
-            let mut had_settings_error = false;
-            let selected_lora = match list_loras_for_model(requested_model_dir.clone()).await {
-                Ok(lora_list) => {
-                    let selected_lora = valid_lora_selection(requested_lora, &lora_list);
-                    set_lora_dir.set(selected_lora.clone().unwrap_or_else(|| "None".to_string()));
-                    set_loras.set(lora_list);
-                    selected_lora
+            let restore_after_error = |message: String| {
+                if need_reload {
+                    set_engine_ready.set(previous_engine_ready);
+                    if previous_engine_ready {
+                        set_status.set("ready".into());
+                    } else {
+                        set_status.set(format!("Error: {}", message));
+                    }
                 }
-                Err(e) => {
-                    set_lora_dir.set("None".into());
-                    set_loras.set(Vec::new());
-                    set_status_message.set(e);
-                    had_settings_error = true;
-                    None
-                }
+                set_status_message.set(message);
             };
 
-            let (validated_audio_host, validated_audio_device) = match tauri_api::invoke::<_, AudioDeviceList>(
+            let lora_list = match list_loras_for_model(requested_model_dir.clone()).await {
+                Ok(lora_list) => lora_list,
+                Err(e) => {
+                    restore_after_error(e);
+                    return;
+                }
+            };
+            let selected_lora = valid_lora_selection(requested_lora, &lora_list);
+
+            let audio = match tauri_api::invoke::<_, AudioDeviceList>(
                 "list_audio_devices",
                 &ListAudioDevicesArgs {
                     host: non_empty_option(requested_audio_host.clone()),
                 },
             ).await {
-                Ok(audio) => {
-                    set_hosts.set(audio.hosts);
-                    let selected_device = selected_audio_device(
-                        requested_audio_device.clone(),
-                        &audio.devices,
-                        audio.selected_device,
-                    );
-                    set_devices.set(audio.devices);
-                    set_audio_host.set(audio.selected_host.clone());
-                    set_audio_device.set(selected_device.clone());
-                    (audio.selected_host, selected_device)
-                }
+                Ok(audio) => audio,
                 Err(e) => {
-                    set_status_message.set(e);
-                    had_settings_error = true;
-                    (
-                        audio_host.get_untracked(),
-                        audio_device.get_untracked(),
-                    )
+                    restore_after_error(e);
+                    return;
                 }
             };
+            let validated_audio_device = selected_audio_device(
+                requested_audio_device.clone(),
+                &audio.devices,
+                audio.selected_device.clone(),
+            );
+            let validated_audio_host = audio.selected_host.clone();
+            let audio_hosts = audio.hosts;
+            let audio_devices = audio.devices;
+
+            let mut final_lora = selected_lora.clone();
+            let mut final_backend = actual_backend.get_untracked();
+            let mut final_status_message = String::new();
+
+            if need_reload {
+                match tauri_api::invoke::<_, ModelInfo>(
+                    "load_model",
+                    &LoadModelArgs {
+                        model_dir: requested_model_dir.clone(),
+                        backend: requested_backend.clone(),
+                    },
+                ).await {
+                    Ok(info) => {
+                        final_backend = info.backend;
+                        final_status_message = info.warning.unwrap_or_default();
+                    }
+                    Err(e) => {
+                        restore_after_error(e);
+                        return;
+                    }
+                }
+            } else if let Err(e) = apply_lora_selection(selected_lora).await {
+                restore_after_error(e);
+                return;
+            }
+
+            if need_reload {
+                if let Err(e) = apply_lora_selection(final_lora.clone()).await {
+                    final_lora = None;
+                    final_status_message = e;
+                }
+            }
 
             let config = serde_json::json!({
                 "model_dir": requested_model_dir.clone(),
-                "lora_dir": selected_lora.clone(),
-                "prompt_wav_path": non_empty_option(requested_prompt_wav_path),
-                "prompt_text": non_empty_option(requested_prompt_text),
-                "reference_wav_path": non_empty_option(requested_reference_wav_path),
+                "lora_dir": final_lora.clone(),
+                "prompt_wav_path": non_empty_option(requested_prompt_wav_path.clone()),
+                "prompt_text": non_empty_option(requested_prompt_text.clone()),
+                "reference_wav_path": non_empty_option(requested_reference_wav_path.clone()),
                 "backend": requested_backend.clone(),
-                "audio_host": validated_audio_host,
-                "audio_device": validated_audio_device,
+                "audio_host": validated_audio_host.clone(),
+                "audio_device": validated_audio_device.clone(),
                 "max_chars": requested_max_chars,
                 "dit_steps": requested_dit_steps,
                 "language": requested_language,
             });
             let _ = tauri_api::invoke_unit("save_config", &serde_json::json!({ "config": config })).await;
 
-            if need_reload {
-                match tauri_api::invoke::<_, ModelInfo>(
-                    "load_model",
-                    &LoadModelArgs {
-                        model_dir: requested_model_dir,
-                        backend: requested_backend,
-                    },
-                ).await {
-                    Ok(info) => {
-                        set_engine_ready.set(true);
-                        set_actual_backend.set(info.backend.clone());
-                        set_status.set("ready".into());
-                        set_status_message.set(info.warning.unwrap_or_default());
-                        if let Err(e) = apply_lora_selection(selected_lora).await {
-                            set_status.set(format!("Error: {}", e));
-                            set_status_message.set(e);
-                        }
-                    }
-                    Err(e) => {
-                        set_engine_ready.set(false);
-                        set_status.set(format!("Error: {}", e));
-                        set_status_message.set(e);
-                    }
-                }
-            } else if let Err(e) = apply_lora_selection(selected_lora).await {
-                set_status.set(format!("Error: {}", e));
-                set_status_message.set(e);
-            } else if !had_settings_error {
-                set_status.set("ready".into());
-                set_status_message.set(String::new());
-            }
+            let selected_name = models
+                .get_untracked()
+                .into_iter()
+                .find(|entry| entry.path == requested_model_dir)
+                .map(|entry| entry.name)
+                .unwrap_or_else(|| requested_model_dir.clone());
+
+            set_model_dir.set(requested_model_dir);
+            set_model_name.set(selected_name);
+            set_lora_dir.set(final_lora.unwrap_or_else(|| "None".to_string()));
+            set_loras.set(lora_list);
+            set_backend.set(requested_backend);
+            set_actual_backend.set(final_backend);
+            set_audio_host.set(validated_audio_host);
+            set_audio_device.set(validated_audio_device);
+            set_hosts.set(audio_hosts);
+            set_devices.set(audio_devices);
+            set_max_chars.set(requested_max_chars);
+            set_dit_steps.set(requested_dit_steps);
+            set_prompt_wav_path.set(requested_prompt_wav_path);
+            set_prompt_text.set(requested_prompt_text);
+            set_reference_wav_path.set(requested_reference_wav_path);
+            set_lang.set(next_language);
+            set_engine_ready.set(true);
+            set_status.set("ready".into());
+            set_status_message.set(final_status_message);
         });
     };
 
     view! {
         <div class="flex flex-col h-screen">
-            <Header lang=lang on_settings=move |_| set_show_settings.set(true) />
+            <Header lang=lang on_settings=move |_| {
+                if active_index.get_untracked().is_some()
+                    || matches!(status.get_untracked().as_str(), "generating" | "loading")
+                {
+                    set_status_message.set("Finish the current operation before changing settings".to_string());
+                } else {
+                    set_show_settings.set(true);
+                }
+            } />
             <History lang=lang entries=history />
             <ProgressBar progress=progress status=status lang=lang />
-            <InputBox lang=lang engine_ready=engine_ready on_submit=on_submit />
+            <InputBox lang=lang engine_ready=engine_ready status=status on_submit=on_submit />
             <StatusBar
                 lang=lang
                 status=status

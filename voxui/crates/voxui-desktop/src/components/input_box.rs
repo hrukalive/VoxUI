@@ -6,7 +6,8 @@ use web_sys::KeyboardEvent;
 pub fn InputBox(
     lang: ReadSignal<Language>,
     engine_ready: ReadSignal<bool>,
-    on_submit: impl Fn(String) + 'static + Clone,
+    status: ReadSignal<String>,
+    on_submit: impl Fn(String) -> bool + 'static + Clone,
 ) -> impl IntoView {
     let (text, set_text) = signal(String::new());
     let on_submit_clone = on_submit.clone();
@@ -15,8 +16,7 @@ pub fn InputBox(
         if ev.key() == "Enter" && !ev.shift_key() {
             ev.prevent_default();
             let val = text.get();
-            if !val.trim().is_empty() {
-                on_submit_clone(val);
+            if !val.trim().is_empty() && on_submit_clone(val) {
                 set_text.set(String::new());
             }
         }
@@ -28,7 +28,7 @@ pub fn InputBox(
                 <textarea
                     class="flex-1 px-3 py-2 bg-gray-900 border border-gray-600 rounded text-sm text-gray-100 placeholder-gray-500 focus:outline-none focus:border-blue-500 disabled:opacity-50 min-h-12 max-h-32 resize-y"
                     placeholder=move || lang.get().t("input_placeholder")
-                    disabled=move || !engine_ready.get()
+                    disabled=move || !engine_ready.get() || status.get() == "generating"
                     prop:value=move || text.get()
                     on:input=move |ev| {
                         set_text.set(event_target_value(&ev));
@@ -37,11 +37,10 @@ pub fn InputBox(
                 />
                 <button
                     class="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 disabled:cursor-not-allowed rounded text-sm font-medium transition-colors"
-                    disabled=move || !engine_ready.get() || text.get().trim().is_empty()
+                    disabled=move || !engine_ready.get() || status.get() == "generating" || text.get().trim().is_empty()
                     on:click=move |_| {
                         let val = text.get();
-                        if !val.trim().is_empty() {
-                            on_submit(val);
+                        if !val.trim().is_empty() && on_submit(val) {
                             set_text.set(String::new());
                         }
                     }
