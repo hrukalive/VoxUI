@@ -64,8 +64,34 @@ class ExportManifestTests(unittest.TestCase):
             quant_dit=None,
             quant_vae=None,
         )
-        self.assertEqual(quant_args["quant_lm"], "q4")
-        self.assertEqual(quant_args["quant_vae"], "fp16")
+        self.assertEqual(
+            quant_args,
+            {
+                "quant_lm": "q4",
+                "quant_encoder": "fp16",
+                "quant_dit": "fp16",
+                "quant_vae": "fp16",
+            },
+        )
+
+    def test_fp16_profile_for_variant_2_keeps_vae_f32(self):
+        quant_args = resolve_quant_args(
+            variant="2.0",
+            profile="fp16",
+            quant_lm=None,
+            quant_encoder=None,
+            quant_dit=None,
+            quant_vae=None,
+        )
+        self.assertEqual(
+            quant_args,
+            {
+                "quant_lm": "fp16",
+                "quant_encoder": "fp16",
+                "quant_dit": "fp16",
+                "quant_vae": "f32",
+            },
+        )
 
     def test_explicit_component_quantization_overrides_profile_defaults(self):
         quant_args = resolve_quant_args(

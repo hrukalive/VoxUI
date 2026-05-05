@@ -79,7 +79,7 @@ def profile_default_quant_args(profile: str, variant: str) -> dict[str, str]:
             "quant_lm": "fp16",
             "quant_encoder": "fp16",
             "quant_dit": "fp16",
-            "quant_vae": "fp16",
+            "quant_vae": "f32" if variant == "2.0" else "fp16",
         }
     return {
         "quant_lm": "q4",
