@@ -348,7 +348,7 @@ fn resolve_audio_output(config: &AppConfig) -> Result<(String, String), String> 
 }
 
 fn emit_synthesis_error(app: &AppHandle, index: u32, message: String) -> Result<(), String> {
-    if message == engine_busy_message() {
+    if is_busy_message(&message) {
         log::warn!("emit_synthesis_error index={index} message={message}");
     } else {
         log::error!("emit_synthesis_error index={index} message={message}");
@@ -361,6 +361,10 @@ fn emit_synthesis_error(app: &AppHandle, index: u32, message: String) -> Result<
         },
     );
     Err(message)
+}
+
+fn is_busy_message(message: &str) -> bool {
+    message == engine_busy_message() || message == "Synthesis already in progress"
 }
 
 fn engine_busy_message() -> String {
@@ -393,4 +397,16 @@ fn select_cuda_device() -> (candle_core::Device, String, Option<String>) {
         "CPU".to_string(),
         Some("CUDA was requested, but this build was compiled without CUDA support".to_string()),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{engine_busy_message, is_busy_message};
+
+    #[test]
+    fn classifies_busy_messages() {
+        assert!(is_busy_message(&engine_busy_message()));
+        assert!(is_busy_message("Synthesis already in progress"));
+        assert!(!is_busy_message("generation failed: missing tensor"));
+    }
 }
