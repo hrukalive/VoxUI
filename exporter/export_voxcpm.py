@@ -33,6 +33,8 @@ QUANT_MAP = {
     "q4": (quantize_q4_0, GGML_TYPE_Q4_0),
 }
 
+QUANT_PROFILES = ("manual", "fp16", "q4-lm")
+
 COMPONENT_FILES = {
     "base_lm": "base_lm.gguf",
     "residual_lm": "residual_lm.gguf",
@@ -60,6 +62,56 @@ QUANT_ARG_MAP = {
     "audio_vae.gguf": "quant_vae",
     "projections.gguf": "quant_lm",
 }
+
+
+def profile_default_quant_args(profile: str, variant: str) -> dict[str, str]:
+    if profile not in QUANT_PROFILES:
+        raise ValueError(f"Unknown quantization profile {profile!r}; expected one of {QUANT_PROFILES}")
+    if profile == "manual":
+        return {
+            "quant_lm": "fp16",
+            "quant_encoder": "fp16",
+            "quant_dit": "fp16",
+            "quant_vae": "f32",
+        }
+    if profile == "fp16":
+        return {
+            "quant_lm": "fp16",
+            "quant_encoder": "fp16",
+            "quant_dit": "fp16",
+            "quant_vae": "f32" if variant == "2.0" else "fp16",
+        }
+    return {
+        "quant_lm": "q4",
+        "quant_encoder": "fp16",
+        "quant_dit": "fp16",
+        "quant_vae": "f32" if variant == "2.0" else "fp16",
+    }
+
+
+def resolve_quant_args(
+    *,
+    variant: str,
+    profile: str,
+    quant_lm: str | None,
+    quant_encoder: str | None,
+    quant_dit: str | None,
+    quant_vae: str | None,
+) -> dict[str, str]:
+    quant_args = profile_default_quant_args(profile, variant)
+    overrides = {
+        "quant_lm": quant_lm,
+        "quant_encoder": quant_encoder,
+        "quant_dit": quant_dit,
+        "quant_vae": quant_vae,
+    }
+    for key, value in overrides.items():
+        if value is not None:
+            if value not in QUANT_MAP:
+                raise ValueError(f"Unknown quantization {value!r}; expected one of {sorted(QUANT_MAP)}")
+            quant_args[key] = value
+    return quant_args
+
 
 REQUIRED_PREFIXES = {
     "base_lm.gguf": [
@@ -476,18 +528,21 @@ def main() -> None:
     parser.add_argument("--output-dir", required=True, help="Output directory for GGUF files")
     parser.add_argument("--variant", required=True, choices=["0.5", "1.5", "2.0"], help="VoxCPM variant")
     parser.add_argument("--lora-dir", default=None, help="Path to LoRA adapter directory")
-    parser.add_argument("--quant-lm", default="fp16", choices=sorted(QUANT_MAP))
-    parser.add_argument("--quant-encoder", default="fp16", choices=sorted(QUANT_MAP))
-    parser.add_argument("--quant-dit", default="fp16", choices=sorted(QUANT_MAP))
-    parser.add_argument("--quant-vae", default="f32", choices=sorted(QUANT_MAP))
+    parser.add_argument("--quant-profile", default="manual", choices=QUANT_PROFILES)
+    parser.add_argument("--quant-lm", default=None, choices=sorted(QUANT_MAP))
+    parser.add_argument("--quant-encoder", default=None, choices=sorted(QUANT_MAP))
+    parser.add_argument("--quant-dit", default=None, choices=sorted(QUANT_MAP))
+    parser.add_argument("--quant-vae", default=None, choices=sorted(QUANT_MAP))
     args = parser.parse_args()
 
-    quant_args = {
-        "quant_lm": args.quant_lm,
-        "quant_encoder": args.quant_encoder,
-        "quant_dit": args.quant_dit,
-        "quant_vae": args.quant_vae,
-    }
+    quant_args = resolve_quant_args(
+        variant=args.variant,
+        profile=args.quant_profile,
+        quant_lm=args.quant_lm,
+        quant_encoder=args.quant_encoder,
+        quant_dit=args.quant_dit,
+        quant_vae=args.quant_vae,
+    )
 
     export(args.model_dir, args.output_dir, quant_args, args.variant)
     if args.lora_dir:

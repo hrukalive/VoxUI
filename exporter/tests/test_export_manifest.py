@@ -1,19 +1,24 @@
 import unittest
 from pathlib import Path
 
-import torch
+import numpy as np
 
-from exporter.export_voxcpm import build_manifest, partition_weights, validate_required_tensors
+from exporter.export_voxcpm import (
+    build_manifest,
+    partition_weights,
+    resolve_quant_args,
+    validate_required_tensors,
+)
 
 
 class ExportManifestTests(unittest.TestCase):
     def test_partition_uses_python_component_names(self):
         weights = {
-            "base_lm.layers.0.self_attn.q_proj.weight": torch.zeros(2, 2),
-            "residual_lm.layers.0.self_attn.q_proj.weight": torch.zeros(2, 2),
-            "feat_encoder.in_proj.weight": torch.zeros(2, 2),
-            "feat_decoder.input_embed.weight": torch.zeros(2, 2),
-            "fsq_layer.project_in.weight": torch.zeros(2, 2),
+            "base_lm.layers.0.self_attn.q_proj.weight": np.zeros((2, 2), dtype=np.float32),
+            "residual_lm.layers.0.self_attn.q_proj.weight": np.zeros((2, 2), dtype=np.float32),
+            "feat_encoder.in_proj.weight": np.zeros((2, 2), dtype=np.float32),
+            "feat_decoder.input_embed.weight": np.zeros((2, 2), dtype=np.float32),
+            "fsq_layer.project_in.weight": np.zeros((2, 2), dtype=np.float32),
         }
         buckets = partition_weights(weights, None)
         self.assertIn("base_lm.gguf", buckets)
@@ -26,10 +31,81 @@ class ExportManifestTests(unittest.TestCase):
 
     def test_missing_required_tensor_is_hard_error(self):
         buckets = {
-            "base_lm.gguf": [("base_lm.norm.weight", torch.zeros(2))],
+            "base_lm.gguf": [("base_lm.norm.weight", np.zeros(2, dtype=np.float32))],
         }
         with self.assertRaisesRegex(ValueError, "missing required tensor"):
             validate_required_tensors(buckets, variant="2.0")
+
+    def test_q4_lm_profile_for_variant_2_keeps_vae_f32(self):
+        quant_args = resolve_quant_args(
+            variant="2.0",
+            profile="q4-lm",
+            quant_lm=None,
+            quant_encoder=None,
+            quant_dit=None,
+            quant_vae=None,
+        )
+        self.assertEqual(
+            quant_args,
+            {
+                "quant_lm": "q4",
+                "quant_encoder": "fp16",
+                "quant_dit": "fp16",
+                "quant_vae": "f32",
+            },
+        )
+
+    def test_q4_lm_profile_for_variant_15_uses_fp16_vae(self):
+        quant_args = resolve_quant_args(
+            variant="1.5",
+            profile="q4-lm",
+            quant_lm=None,
+            quant_encoder=None,
+            quant_dit=None,
+            quant_vae=None,
+        )
+        self.assertEqual(
+            quant_args,
+            {
+                "quant_lm": "q4",
+                "quant_encoder": "fp16",
+                "quant_dit": "fp16",
+                "quant_vae": "fp16",
+            },
+        )
+
+    def test_fp16_profile_for_variant_2_keeps_vae_f32(self):
+        quant_args = resolve_quant_args(
+            variant="2.0",
+            profile="fp16",
+            quant_lm=None,
+            quant_encoder=None,
+            quant_dit=None,
+            quant_vae=None,
+        )
+        self.assertEqual(
+            quant_args,
+            {
+                "quant_lm": "fp16",
+                "quant_encoder": "fp16",
+                "quant_dit": "fp16",
+                "quant_vae": "f32",
+            },
+        )
+
+    def test_explicit_component_quantization_overrides_profile_defaults(self):
+        quant_args = resolve_quant_args(
+            variant="2.0",
+            profile="q4-lm",
+            quant_lm=None,
+            quant_encoder=None,
+            quant_dit="q8",
+            quant_vae="fp16",
+        )
+        self.assertEqual(quant_args["quant_lm"], "q4")
+        self.assertEqual(quant_args["quant_encoder"], "fp16")
+        self.assertEqual(quant_args["quant_dit"], "q8")
+        self.assertEqual(quant_args["quant_vae"], "fp16")
 
     def test_manifest_records_component_files_and_special_tokens(self):
         config = {

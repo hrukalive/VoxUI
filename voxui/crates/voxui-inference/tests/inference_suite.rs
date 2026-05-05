@@ -9,8 +9,16 @@ use candle_core::Device;
 use voxui_inference::{SynthesisRequest, VoxCPMEngine};
 
 const TEST_DIT_STEPS: usize = 10;
-const TEXT_ZH: &str = "你好，欢迎来到直播间！";
-const TEXT_EN: &str = "Hello, welcome to the stream!";
+const TEST_MAX_LEN: usize = 6;
+const TEXT_ZH: &str = "\u{4eca}\u{5929}\u{7684}\u{8bed}\u{97f3}\u{6d4b}\u{8bd5}\u{4f1a}\u{8986}\u{76d6}\u{4e2d}\u{6587}\u{53e5}\u{5b50}\u{957f}\u{5ea6}\u{548c}\u{6a21}\u{578b}\u{63a8}\u{7406}\u{6d41}\u{7a0b}\u{3002}";
+const TEXT_EN: &str =
+    "This inference matrix sentence exercises q4 language model coverage on every backend.";
+
+#[test]
+fn matrix_text_inputs_are_sentence_length() {
+    assert!(TEXT_ZH.chars().count() >= 20);
+    assert!(TEXT_EN.split_whitespace().count() >= 10);
+}
 
 fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -104,7 +112,11 @@ fn find_lora_dirs(model: &Path) -> Vec<PathBuf> {
     dirs
 }
 
-fn run_synthesis(engine: &mut VoxCPMEngine, request: SynthesisRequest, label: &str) -> (usize, f64) {
+fn run_synthesis(
+    engine: &mut VoxCPMEngine,
+    request: SynthesisRequest,
+    label: &str,
+) -> (usize, f64) {
     let t0 = Instant::now();
     let last_step = Cell::new(0usize);
     let last_total = Cell::new(0usize);
@@ -127,7 +139,10 @@ fn run_synthesis(engine: &mut VoxCPMEngine, request: SynthesisRequest, label: &s
     );
 
     assert!(n > 0, "generate returned empty audio for {label}");
-    assert!(samples.iter().all(|s| s.is_finite()), "generate produced NaN/Inf for {label}");
+    assert!(
+        samples.iter().all(|s| s.is_finite()),
+        "generate produced NaN/Inf for {label}"
+    );
     let max_abs = samples.iter().map(|s| s.abs()).fold(0.0f32, f32::max);
     assert!(max_abs > 1e-6, "generate produced near-silence for {label}");
 
@@ -139,12 +154,12 @@ fn run_synthesis(engine: &mut VoxCPMEngine, request: SynthesisRequest, label: &s
     (n, dur)
 }
 
-fn short_request(text: &str) -> SynthesisRequest {
+fn sentence_request(text: &str) -> SynthesisRequest {
     SynthesisRequest {
         text: text.to_string(),
         inference_timesteps: TEST_DIT_STEPS,
         min_len: 1,
-        max_len: 3,
+        max_len: TEST_MAX_LEN,
         retry_badcase: false,
         ..SynthesisRequest::default()
     }
@@ -153,7 +168,10 @@ fn short_request(text: &str) -> SynthesisRequest {
 fn test_model_on_device(model_name: &str, device: Device) {
     let dir = model_dir(model_name);
     if !dir.join("manifest.json").exists() {
-        eprintln!("  [SKIP] {model_name}: manifest.json not found at {}", dir.display());
+        eprintln!(
+            "  [SKIP] {model_name}: manifest.json not found at {}",
+            dir.display()
+        );
         return;
     }
 
@@ -173,20 +191,36 @@ fn test_model_on_device(model_name: &str, device: Device) {
         engine.patch_size(),
     );
 
-    run_synthesis(&mut engine, short_request(TEXT_ZH), &format!("{model_name}/{dev_name}/zh/no-lora"));
-    run_synthesis(&mut engine, short_request(TEXT_EN), &format!("{model_name}/{dev_name}/en/no-lora"));
+    run_synthesis(
+        &mut engine,
+        sentence_request(TEXT_ZH),
+        &format!("{model_name}/{dev_name}/zh/no-lora"),
+    );
+    run_synthesis(
+        &mut engine,
+        sentence_request(TEXT_EN),
+        &format!("{model_name}/{dev_name}/en/no-lora"),
+    );
 
     if model_name.contains("voxcpm2") {
         if let Some(wav) = first_test_wav() {
-            let mut request = short_request(TEXT_EN);
+            let mut request = sentence_request(TEXT_EN);
             request.reference_wav_path = Some(wav.clone());
-            run_synthesis(&mut engine, request, &format!("{model_name}/{dev_name}/en/reference"));
+            run_synthesis(
+                &mut engine,
+                request,
+                &format!("{model_name}/{dev_name}/en/reference"),
+            );
 
-            let mut request = short_request(TEXT_EN);
+            let mut request = sentence_request(TEXT_EN);
             request.reference_wav_path = Some(wav.clone());
             request.prompt_wav_path = Some(wav);
             request.prompt_text = Some("Hello, welcome to the stream!".to_string());
-            run_synthesis(&mut engine, request, &format!("{model_name}/{dev_name}/en/ref-cont"));
+            run_synthesis(
+                &mut engine,
+                request,
+                &format!("{model_name}/{dev_name}/en/ref-cont"),
+            );
         }
     }
 
@@ -195,7 +229,11 @@ fn test_model_on_device(model_name: &str, device: Device) {
         engine
             .load_lora(&lora_dir)
             .unwrap_or_else(|e| panic!("  [FAIL] load_lora({lora_name}): {e}"));
-        run_synthesis(&mut engine, short_request(TEXT_EN), &format!("{model_name}/{dev_name}/en/{lora_name}"));
+        run_synthesis(
+            &mut engine,
+            sentence_request(TEXT_EN),
+            &format!("{model_name}/{dev_name}/en/{lora_name}"),
+        );
         engine.unload_lora();
     }
 
@@ -215,6 +253,21 @@ fn voxcpm15_fp16_cpu() {
 #[test]
 fn voxcpm2_fp16_cpu() {
     test_model_on_device("voxcpm2-fp16", get_cpu_device());
+}
+
+#[test]
+fn voxcpm05_q4_lm_cpu() {
+    test_model_on_device("voxcpm05-q4-lm", get_cpu_device());
+}
+
+#[test]
+fn voxcpm15_q4_lm_cpu() {
+    test_model_on_device("voxcpm15-q4-lm", get_cpu_device());
+}
+
+#[test]
+fn voxcpm2_q4_lm_cpu() {
+    test_model_on_device("voxcpm2-q4-lm", get_cpu_device());
 }
 
 #[test]
@@ -245,6 +298,33 @@ fn voxcpm2_fp16_cuda() {
 }
 
 #[test]
+fn voxcpm05_q4_lm_cuda() {
+    let Some(device) = get_cuda_device() else {
+        eprintln!("[SKIP] CUDA not available");
+        return;
+    };
+    test_model_on_device("voxcpm05-q4-lm", device);
+}
+
+#[test]
+fn voxcpm15_q4_lm_cuda() {
+    let Some(device) = get_cuda_device() else {
+        eprintln!("[SKIP] CUDA not available");
+        return;
+    };
+    test_model_on_device("voxcpm15-q4-lm", device);
+}
+
+#[test]
+fn voxcpm2_q4_lm_cuda() {
+    let Some(device) = get_cuda_device() else {
+        eprintln!("[SKIP] CUDA not available");
+        return;
+    };
+    test_model_on_device("voxcpm2-q4-lm", device);
+}
+
+#[test]
 fn full_matrix() {
     let models_path = repo_root().join("models");
     let mut model_dirs = std::fs::read_dir(&models_path)
@@ -253,7 +333,10 @@ fn full_matrix() {
         .flat_map(|entries| entries.flatten())
         .map(|entry| entry.path())
         .filter(|path| path.join("manifest.json").exists())
-        .filter_map(|path| path.file_name().map(|name| name.to_string_lossy().to_string()))
+        .filter_map(|path| {
+            path.file_name()
+                .map(|name| name.to_string_lossy().to_string())
+        })
         .collect::<Vec<_>>();
     model_dirs.sort();
 
