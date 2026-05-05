@@ -112,7 +112,11 @@ fn find_lora_dirs(model: &Path) -> Vec<PathBuf> {
     dirs
 }
 
-fn run_synthesis(engine: &mut VoxCPMEngine, request: SynthesisRequest, label: &str) -> (usize, f64) {
+fn run_synthesis(
+    engine: &mut VoxCPMEngine,
+    request: SynthesisRequest,
+    label: &str,
+) -> (usize, f64) {
     let t0 = Instant::now();
     let last_step = Cell::new(0usize);
     let last_total = Cell::new(0usize);
@@ -135,7 +139,10 @@ fn run_synthesis(engine: &mut VoxCPMEngine, request: SynthesisRequest, label: &s
     );
 
     assert!(n > 0, "generate returned empty audio for {label}");
-    assert!(samples.iter().all(|s| s.is_finite()), "generate produced NaN/Inf for {label}");
+    assert!(
+        samples.iter().all(|s| s.is_finite()),
+        "generate produced NaN/Inf for {label}"
+    );
     let max_abs = samples.iter().map(|s| s.abs()).fold(0.0f32, f32::max);
     assert!(max_abs > 1e-6, "generate produced near-silence for {label}");
 
@@ -161,7 +168,10 @@ fn sentence_request(text: &str) -> SynthesisRequest {
 fn test_model_on_device(model_name: &str, device: Device) {
     let dir = model_dir(model_name);
     if !dir.join("manifest.json").exists() {
-        eprintln!("  [SKIP] {model_name}: manifest.json not found at {}", dir.display());
+        eprintln!(
+            "  [SKIP] {model_name}: manifest.json not found at {}",
+            dir.display()
+        );
         return;
     }
 
@@ -181,20 +191,36 @@ fn test_model_on_device(model_name: &str, device: Device) {
         engine.patch_size(),
     );
 
-    run_synthesis(&mut engine, sentence_request(TEXT_ZH), &format!("{model_name}/{dev_name}/zh/no-lora"));
-    run_synthesis(&mut engine, sentence_request(TEXT_EN), &format!("{model_name}/{dev_name}/en/no-lora"));
+    run_synthesis(
+        &mut engine,
+        sentence_request(TEXT_ZH),
+        &format!("{model_name}/{dev_name}/zh/no-lora"),
+    );
+    run_synthesis(
+        &mut engine,
+        sentence_request(TEXT_EN),
+        &format!("{model_name}/{dev_name}/en/no-lora"),
+    );
 
     if model_name.contains("voxcpm2") {
         if let Some(wav) = first_test_wav() {
             let mut request = sentence_request(TEXT_EN);
             request.reference_wav_path = Some(wav.clone());
-            run_synthesis(&mut engine, request, &format!("{model_name}/{dev_name}/en/reference"));
+            run_synthesis(
+                &mut engine,
+                request,
+                &format!("{model_name}/{dev_name}/en/reference"),
+            );
 
             let mut request = sentence_request(TEXT_EN);
             request.reference_wav_path = Some(wav.clone());
             request.prompt_wav_path = Some(wav);
             request.prompt_text = Some("Hello, welcome to the stream!".to_string());
-            run_synthesis(&mut engine, request, &format!("{model_name}/{dev_name}/en/ref-cont"));
+            run_synthesis(
+                &mut engine,
+                request,
+                &format!("{model_name}/{dev_name}/en/ref-cont"),
+            );
         }
     }
 
@@ -203,7 +229,11 @@ fn test_model_on_device(model_name: &str, device: Device) {
         engine
             .load_lora(&lora_dir)
             .unwrap_or_else(|e| panic!("  [FAIL] load_lora({lora_name}): {e}"));
-        run_synthesis(&mut engine, sentence_request(TEXT_EN), &format!("{model_name}/{dev_name}/en/{lora_name}"));
+        run_synthesis(
+            &mut engine,
+            sentence_request(TEXT_EN),
+            &format!("{model_name}/{dev_name}/en/{lora_name}"),
+        );
         engine.unload_lora();
     }
 
@@ -303,7 +333,10 @@ fn full_matrix() {
         .flat_map(|entries| entries.flatten())
         .map(|entry| entry.path())
         .filter(|path| path.join("manifest.json").exists())
-        .filter_map(|path| path.file_name().map(|name| name.to_string_lossy().to_string()))
+        .filter_map(|path| {
+            path.file_name()
+                .map(|name| name.to_string_lossy().to_string())
+        })
         .collect::<Vec<_>>();
     model_dirs.sort();
 
