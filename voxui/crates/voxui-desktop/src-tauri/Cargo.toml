@@ -2,6 +2,7 @@
 name = "voxui-desktop"
 version = "0.1.0"
 edition = "2021"
+workspace = "../../.."
 
 [dependencies]
 tauri = { version = "2", features = [] }

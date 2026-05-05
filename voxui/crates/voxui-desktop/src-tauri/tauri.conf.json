@@ -5,8 +5,14 @@
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:8080",
-    "beforeDevCommand": "trunk serve --port 8080 --open=false",
-    "beforeBuildCommand": "trunk build --release"
+    "beforeDevCommand": {
+      "script": "trunk serve --port 8080 --open=false",
+      "cwd": ".."
+    },
+    "beforeBuildCommand": {
+      "script": "trunk build --release",
+      "cwd": ".."
+    }
   },
   "app": {
     "windows": [
