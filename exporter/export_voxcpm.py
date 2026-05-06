@@ -543,29 +543,45 @@ def _safe_lora_file_name(lora_dir: Path) -> str:
     return f"lora_{_safe_lora_name(lora_dir)}.gguf"
 
 
-def validate_lora_pairs(tensor_names: list[str], rank: int) -> None:
+def validate_lora_pairs(tensors: list[tuple[str, Any]], rank: int) -> None:
     if rank <= 0:
         raise ValueError(f"LoRA rank must be positive, got {rank}")
 
-    names = set(tensor_names)
-    for name in tensor_names:
+    names = {name for name, _ in tensors}
+    for name, tensor in tensors:
+        shape = tuple(tensor.shape)
         if name.endswith(".lora_A"):
             pair_name = name.removesuffix(".lora_A") + ".lora_B"
             if pair_name not in names:
                 raise ValueError(f"missing LoRA B tensor for {name!r}")
+            if len(shape) != 2 or shape[0] != rank:
+                raise ValueError(f"LoRA rank mismatch for {name!r}: expected A shape[0] == {rank}, got {shape}")
             continue
         if name.endswith(".lora_B"):
             pair_name = name.removesuffix(".lora_B") + ".lora_A"
             if pair_name not in names:
                 raise ValueError(f"missing LoRA A tensor for {name!r}")
+            if len(shape) != 2 or shape[1] != rank:
+                raise ValueError(f"LoRA rank mismatch for {name!r}: expected B shape[1] == {rank}, got {shape}")
             continue
         raise ValueError(f"LoRA tensor key must end with .lora_A or .lora_B: {name}")
 
 
-def _numeric_lora_value(config: dict[str, Any], key: str, default: int | float | None = None) -> int | float:
-    value = config.get(key, default)
+def _lora_rank(config: dict[str, Any]) -> int:
+    rank = config.get("r", 0)
+    if isinstance(rank, bool) or not isinstance(rank, int):
+        raise ValueError(f"LoRA rank must be an integer, got {rank!r}")
+    if rank <= 0:
+        raise ValueError(f"LoRA rank must be positive, got {rank}")
+    return rank
+
+
+def _lora_alpha(config: dict[str, Any], default: int) -> int | float:
+    value = config.get("alpha", default)
     if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise ValueError(f"LoRA {key} must be numeric, got {value!r}")
+        raise ValueError(f"LoRA alpha must be numeric, got {value!r}")
+    if value <= 0:
+        raise ValueError(f"LoRA alpha must be positive, got {value}")
     return value
 
 
@@ -591,10 +607,9 @@ def export_lora(lora_dir: str | Path, output_dir: str | Path, config_path: str |
     for key, tensor in lora_weights.items():
         tensors.append((_normalize_lora_key(key), tensor))
 
-    rank = int(_numeric_lora_value(lc, "r", 0))
-    alpha = _numeric_lora_value(lc, "alpha", rank)
-    tensor_names = [name for name, _ in tensors]
-    validate_lora_pairs(tensor_names, rank)
+    rank = _lora_rank(lc)
+    alpha = _lora_alpha(lc, rank)
+    validate_lora_pairs(tensors, rank)
 
     filename = _safe_lora_file_name(lora_dir)
     lora_name = _safe_lora_name(lora_dir)

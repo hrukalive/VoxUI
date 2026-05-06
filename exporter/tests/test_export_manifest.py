@@ -432,6 +432,72 @@ class ExportManifestTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "rank must be positive"):
                     export_lora(lora_dir, output_dir, config_path, "2.0")
 
+    def test_lora_export_rejects_fractional_rank(self):
+        config = {"architecture": "voxcpm2"}
+        lora_config = {"lora_config": {"r": 8.5, "alpha": 16}}
+        lora_weights = {
+            "base_lm.layers.0.self_attn.q_proj.lora_A.weight": np.zeros((8, 2), dtype=np.float32),
+            "base_lm.layers.0.self_attn.q_proj.lora_B.weight": np.zeros((2, 8), dtype=np.float32),
+        }
+
+        with TemporaryDirectory() as lora_tmp, TemporaryDirectory() as output_tmp, TemporaryDirectory() as model_tmp:
+            model_dir = Path(model_tmp)
+            output_dir = Path(output_tmp)
+            lora_dir = Path(lora_tmp) / "ft_unit"
+            lora_dir.mkdir()
+            config_path = model_dir / "config.json"
+            config_path.write_text(json.dumps(config), encoding="utf-8")
+            (lora_dir / "lora_config.json").write_text(json.dumps(lora_config), encoding="utf-8")
+            (lora_dir / "lora_weights.safetensors").write_bytes(b"placeholder")
+
+            with patch.dict(sys.modules, fake_safetensors_torch(lora_weights)):
+                with self.assertRaisesRegex(ValueError, "rank must be an integer"):
+                    export_lora(lora_dir, output_dir, config_path, "2.0")
+
+    def test_lora_export_rejects_non_positive_alpha(self):
+        config = {"architecture": "voxcpm2"}
+        lora_config = {"lora_config": {"r": 8, "alpha": 0}}
+        lora_weights = {
+            "base_lm.layers.0.self_attn.q_proj.lora_A.weight": np.zeros((8, 2), dtype=np.float32),
+            "base_lm.layers.0.self_attn.q_proj.lora_B.weight": np.zeros((2, 8), dtype=np.float32),
+        }
+
+        with TemporaryDirectory() as lora_tmp, TemporaryDirectory() as output_tmp, TemporaryDirectory() as model_tmp:
+            model_dir = Path(model_tmp)
+            output_dir = Path(output_tmp)
+            lora_dir = Path(lora_tmp) / "ft_unit"
+            lora_dir.mkdir()
+            config_path = model_dir / "config.json"
+            config_path.write_text(json.dumps(config), encoding="utf-8")
+            (lora_dir / "lora_config.json").write_text(json.dumps(lora_config), encoding="utf-8")
+            (lora_dir / "lora_weights.safetensors").write_bytes(b"placeholder")
+
+            with patch.dict(sys.modules, fake_safetensors_torch(lora_weights)):
+                with self.assertRaisesRegex(ValueError, "alpha must be positive"):
+                    export_lora(lora_dir, output_dir, config_path, "2.0")
+
+    def test_lora_export_rejects_shape_rank_mismatch(self):
+        config = {"architecture": "voxcpm2"}
+        lora_config = {"lora_config": {"r": 8, "alpha": 16}}
+        lora_weights = {
+            "base_lm.layers.0.self_attn.q_proj.lora_A.weight": np.zeros((7, 2), dtype=np.float32),
+            "base_lm.layers.0.self_attn.q_proj.lora_B.weight": np.zeros((2, 8), dtype=np.float32),
+        }
+
+        with TemporaryDirectory() as lora_tmp, TemporaryDirectory() as output_tmp, TemporaryDirectory() as model_tmp:
+            model_dir = Path(model_tmp)
+            output_dir = Path(output_tmp)
+            lora_dir = Path(lora_tmp) / "ft_unit"
+            lora_dir.mkdir()
+            config_path = model_dir / "config.json"
+            config_path.write_text(json.dumps(config), encoding="utf-8")
+            (lora_dir / "lora_config.json").write_text(json.dumps(lora_config), encoding="utf-8")
+            (lora_dir / "lora_weights.safetensors").write_bytes(b"placeholder")
+
+            with patch.dict(sys.modules, fake_safetensors_torch(lora_weights)):
+                with self.assertRaisesRegex(ValueError, "rank mismatch"):
+                    export_lora(lora_dir, output_dir, config_path, "2.0")
+
     def test_lora_export_rejects_unmapped_prefix(self):
         config = {"architecture": "voxcpm2"}
         lora_config = {"lora_config": {"r": 8, "alpha": 16}}
