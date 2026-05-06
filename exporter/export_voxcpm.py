@@ -514,11 +514,20 @@ def export(
     }
 
 
-def _validate_lora_key(key: str) -> str:
-    if key.startswith(("base_lm.", "residual_lm.", "feat_decoder.")):
-        return key
-    if key.startswith(PROJECTION_PREFIXES):
-        return key
+def _normalize_lora_key(key: str) -> str:
+    if key.endswith(".lora_A.weight"):
+        normalized = key.removesuffix(".weight")
+    elif key.endswith(".lora_B.weight"):
+        normalized = key.removesuffix(".weight")
+    elif key.endswith((".lora_A", ".lora_B")):
+        normalized = key
+    else:
+        raise ValueError(f"LoRA tensor key must end with .lora_A or .lora_B: {key}")
+
+    if normalized.startswith(("base_lm.", "residual_lm.", "feat_decoder.")):
+        return normalized
+    if normalized.startswith(PROJECTION_PREFIXES):
+        return normalized
     raise ValueError(f"unmapped LoRA tensor key: {key}")
 
 
@@ -540,17 +549,24 @@ def validate_lora_pairs(tensor_names: list[str], rank: int) -> None:
 
     names = set(tensor_names)
     for name in tensor_names:
-        if ".lora_A." in name:
-            pair_name = name.replace(".lora_A.", ".lora_B.", 1)
+        if name.endswith(".lora_A"):
+            pair_name = name.removesuffix(".lora_A") + ".lora_B"
             if pair_name not in names:
                 raise ValueError(f"missing LoRA B tensor for {name!r}")
             continue
-        if ".lora_B." in name:
-            pair_name = name.replace(".lora_B.", ".lora_A.", 1)
+        if name.endswith(".lora_B"):
+            pair_name = name.removesuffix(".lora_B") + ".lora_A"
             if pair_name not in names:
                 raise ValueError(f"missing LoRA A tensor for {name!r}")
             continue
-        raise ValueError(f"LoRA tensor key must contain .lora_A. or .lora_B.: {name}")
+        raise ValueError(f"LoRA tensor key must end with .lora_A or .lora_B: {name}")
+
+
+def _numeric_lora_value(config: dict[str, Any], key: str, default: int | float | None = None) -> int | float:
+    value = config.get(key, default)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"LoRA {key} must be numeric, got {value!r}")
+    return value
 
 
 def export_lora(lora_dir: str | Path, output_dir: str | Path, config_path: str | Path, variant: str) -> dict[str, Any]:
@@ -573,10 +589,10 @@ def export_lora(lora_dir: str | Path, output_dir: str | Path, config_path: str |
     lora_weights = load_file(str(lora_weights_path), device="cpu")
     tensors: list[tuple[str, Any]] = []
     for key, tensor in lora_weights.items():
-        tensors.append((_validate_lora_key(key), tensor))
+        tensors.append((_normalize_lora_key(key), tensor))
 
-    rank = int(lc.get("r", 0))
-    alpha = lc.get("alpha", rank)
+    rank = int(_numeric_lora_value(lc, "r", 0))
+    alpha = _numeric_lora_value(lc, "alpha", rank)
     tensor_names = [name for name, _ in tensors]
     validate_lora_pairs(tensor_names, rank)
 
