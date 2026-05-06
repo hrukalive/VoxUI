@@ -4,6 +4,7 @@ use std::path::Path;
 use anyhow::{bail, Context, Result};
 use candle_core::{DType, Device, Tensor};
 use serde::Deserialize;
+use voxui_gguf::MetadataValue;
 
 use crate::manifest::{ModelConfig, ModelVariant};
 use crate::model_loader::GgufModelLoader;
@@ -198,9 +199,7 @@ impl LoraMetadata {
             .unwrap_or(rank as f32);
         let target_modules = metadata
             .get("voxcpm.lora.target_modules")
-            .and_then(|v| v.as_str())
-            .and_then(|text| serde_json::from_str::<LoraTargetModules>(text).ok())
-            .unwrap_or_default();
+            .map_or_else(|| Ok(LoraTargetModules::default()), parse_target_modules_metadata)?;
         Ok(Self {
             architecture,
             variant,
@@ -281,4 +280,60 @@ fn validate_lora_shapes(base: &str, a: &Tensor, b: &Tensor, rank: usize) -> Resu
         );
     }
     Ok(())
+}
+
+fn parse_target_modules_metadata(value: &MetadataValue) -> Result<LoraTargetModules> {
+    let text = value
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("voxcpm.lora.target_modules must be JSON string metadata"))?;
+    serde_json::from_str::<LoraTargetModules>(text)
+        .context("parse voxcpm.lora.target_modules JSON")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn absent_target_modules_metadata_defaults_empty() {
+        let targets = LoraTargetModules::default();
+
+        assert!(targets.lm.is_empty());
+        assert!(targets.dit.is_empty());
+        assert!(targets.projections.is_empty());
+    }
+
+    #[test]
+    fn valid_target_modules_metadata_is_parsed() {
+        let value = MetadataValue::String(
+            r#"{"lm":["q_proj"],"dit":["to_q"],"projections":["lm_to_dit_proj"]}"#.to_string(),
+        );
+        let targets = parse_target_modules_metadata(&value).unwrap();
+
+        assert_eq!(targets.lm, ["q_proj"]);
+        assert_eq!(targets.dit, ["to_q"]);
+        assert_eq!(targets.projections, ["lm_to_dit_proj"]);
+    }
+
+    #[test]
+    fn invalid_target_modules_metadata_is_rejected() {
+        let value = MetadataValue::String("{not-json".to_string());
+        let error = parse_target_modules_metadata(&value).unwrap_err();
+
+        assert!(
+            error.to_string().contains("voxcpm.lora.target_modules"),
+            "{error:#}"
+        );
+    }
+
+    #[test]
+    fn non_string_target_modules_metadata_is_rejected() {
+        let value = MetadataValue::Uint32(1);
+        let error = parse_target_modules_metadata(&value).unwrap_err();
+
+        assert!(
+            error.to_string().contains("voxcpm.lora.target_modules"),
+            "{error:#}"
+        );
+    }
 }
