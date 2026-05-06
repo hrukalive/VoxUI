@@ -100,16 +100,23 @@ fn first_test_wav() -> Option<PathBuf> {
         .find(|p| p.extension().and_then(|v| v.to_str()) == Some("wav"))
 }
 
-fn find_lora_dirs(model: &Path) -> Vec<PathBuf> {
-    let mut dirs = std::fs::read_dir(model)
+fn find_lora_files(model: &Path) -> Vec<PathBuf> {
+    let mut files = std::fs::read_dir(model)
         .ok()
         .into_iter()
         .flat_map(|entries| entries.flatten())
         .map(|entry| entry.path())
-        .filter(|path| path.is_dir() && path.join("lora_manifest.json").exists())
+        .filter(|path| {
+            path.is_file()
+                && path.extension().and_then(|v| v.to_str()) == Some("gguf")
+                && path
+                    .file_stem()
+                    .map(|stem| stem.to_string_lossy().starts_with("lora_"))
+                    .unwrap_or(false)
+        })
         .collect::<Vec<_>>();
-    dirs.sort();
-    dirs
+    files.sort();
+    files
 }
 
 fn run_synthesis(
@@ -167,9 +174,9 @@ fn sentence_request(text: &str) -> SynthesisRequest {
 
 fn test_model_on_device(model_name: &str, device: Device) {
     let dir = model_dir(model_name);
-    if !dir.join("manifest.json").exists() {
+    if !dir.join("model.gguf").exists() {
         eprintln!(
-            "  [SKIP] {model_name}: manifest.json not found at {}",
+            "  [SKIP] {model_name}: model.gguf not found at {}",
             dir.display()
         );
         return;
@@ -224,10 +231,10 @@ fn test_model_on_device(model_name: &str, device: Device) {
         }
     }
 
-    for lora_dir in find_lora_dirs(&dir) {
-        let lora_name = lora_dir.file_name().unwrap().to_string_lossy();
+    for lora_file in find_lora_files(&dir) {
+        let lora_name = lora_file.file_stem().unwrap().to_string_lossy();
         engine
-            .load_lora(&lora_dir)
+            .load_lora(&lora_file)
             .unwrap_or_else(|e| panic!("  [FAIL] load_lora({lora_name}): {e}"));
         run_synthesis(
             &mut engine,
@@ -332,7 +339,7 @@ fn full_matrix() {
         .into_iter()
         .flat_map(|entries| entries.flatten())
         .map(|entry| entry.path())
-        .filter(|path| path.join("manifest.json").exists())
+        .filter(|path| path.join("model.gguf").exists())
         .filter_map(|path| {
             path.file_name()
                 .map(|name| name.to_string_lossy().to_string())

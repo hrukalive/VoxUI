@@ -1,35 +1,8 @@
 use std::path::{Path, PathBuf};
 
 use candle_core::Device;
-use serde::Deserialize;
+use voxui_inference::manifest::{ModelConfig, ModelVariant};
 use voxui_inference::{BaseLM, BaseLMConfig, GgufModelLoader};
-
-#[derive(Deserialize)]
-struct TestComponents {
-    base_lm: String,
-}
-
-#[derive(Deserialize)]
-struct TestManifest {
-    components: TestComponents,
-    #[serde(default)]
-    lm_config: serde_json::Value,
-    #[serde(default)]
-    residual_lm_num_layers: Option<usize>,
-    #[serde(default)]
-    residual_lm_no_rope: Option<bool>,
-}
-
-impl TestManifest {
-    fn load(model_dir: &Path) -> Self {
-        let text = std::fs::read_to_string(model_dir.join("manifest.json")).unwrap();
-        serde_json::from_str(&text).unwrap()
-    }
-
-    fn base_lm_path(&self, model_dir: &Path) -> PathBuf {
-        model_dir.join(&self.components.base_lm)
-    }
-}
 
 fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -46,9 +19,9 @@ fn repo_root() -> PathBuf {
 fn base_lm_prefill_matches_python_trace() {
     let root = repo_root();
     let model_dir = root.join("models/voxcpm2-fp16");
-    let manifest = TestManifest::load(&model_dir);
-    let loader = GgufModelLoader::new(&manifest.base_lm_path(&model_dir), Device::Cpu).unwrap();
-    let config = base_lm_config(&manifest, "base_lm");
+    let model = ModelConfig::load(&model_dir, ModelVariant::VoxCpm2).unwrap();
+    let loader = GgufModelLoader::from_model_dir(&model_dir, Device::Cpu).unwrap();
+    let config = base_lm_config(&model, "base_lm");
     let mut lm = BaseLM::load(&loader, config, &Device::Cpu).unwrap();
 
     let trace =
@@ -66,8 +39,8 @@ fn rope_rotate_half_matches_python_layout() {
     assert_eq!(rotated, vec![-3.0, -4.0, 1.0, 2.0]);
 }
 
-fn base_lm_config(manifest: &TestManifest, component: &str) -> BaseLMConfig {
-    let cfg = &manifest.lm_config;
+fn base_lm_config(model: &ModelConfig, component: &str) -> BaseLMConfig {
+    let cfg = &model.lm_config;
     let hidden_size = get_usize_any(cfg, component, &["hidden_size", "hidden_dim"]);
     let num_heads = get_usize_any(cfg, component, &["num_attention_heads", "num_heads"]);
     let head_dim = cfg
@@ -83,7 +56,7 @@ fn base_lm_config(manifest: &TestManifest, component: &str) -> BaseLMConfig {
     BaseLMConfig {
         hidden_size,
         num_layers: if component == "residual_lm" {
-            manifest.residual_lm_num_layers.unwrap_or(get_usize_any(
+            model.residual_lm_num_layers.unwrap_or(get_usize_any(
                 cfg,
                 component,
                 &["num_hidden_layers", "num_layers"],
@@ -120,7 +93,7 @@ fn base_lm_config(manifest: &TestManifest, component: &str) -> BaseLMConfig {
             .and_then(|v| v.as_u64())
             .unwrap_or(4096) as usize,
         prefix: component.to_string(),
-        no_rope: component == "residual_lm" && manifest.residual_lm_no_rope.unwrap_or(false),
+        no_rope: component == "residual_lm" && model.residual_lm_no_rope.unwrap_or(false),
         is_causal: true,
     }
 }

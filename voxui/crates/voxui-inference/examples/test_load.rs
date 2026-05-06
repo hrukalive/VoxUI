@@ -11,7 +11,7 @@ fn main() -> Result<()> {
     let device = Device::Cpu;
 
     // 1. Load GGUF file
-    let gguf_path = Path::new(r"D:\Sandbox_Share\VoxUI\models\voxcpm2-q4\base_lm.gguf");
+    let gguf_path = Path::new(r"D:\Sandbox_Share\VoxUI\models\voxcpm2-q4-lm\model.gguf");
     println!("Loading GGUF from: {}", gguf_path.display());
     let loader = GgufModelLoader::new(gguf_path, device.clone())?;
     println!("GGUF loaded. Tensor count: {}", loader.tensor_names().len());
@@ -59,11 +59,18 @@ fn main() -> Result<()> {
         intermediate_size,
         rms_norm_eps,
         rope_theta,
-        rope_factors,
+        rope_factors: rope_factors.clone(),
+        use_mup: false,
+        scale_emb: 1.0,
+        scale_depth: 1.0,
+        original_max_position_embeddings: None,
+        rope_short_factors: rope_factors.clone(),
+        rope_long_factors: rope_factors,
         vocab_size,
         max_position: 4096,
         prefix: prefix.to_string(),
         no_rope: false,
+        is_causal: true,
     };
 
     println!("\nBaseLMConfig:");

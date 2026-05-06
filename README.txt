@@ -19,15 +19,20 @@ python exporter/export_voxcpm.py --model-dir VoxCPM/models/VoxCPM-0.5B --output-
 python exporter/export_voxcpm.py --model-dir VoxCPM/models/VoxCPM1.5 --output-dir models/voxcpm15-fp16 --variant 1.5 --quant-profile fp16
 python exporter/export_voxcpm.py --model-dir VoxCPM/models/VoxCPM2 --output-dir models/voxcpm2-fp16 --variant 2.0 --quant-profile fp16
 
+Export fp16 bundles with LoRA:
+python exporter/export_voxcpm.py --model-dir VoxCPM/models/VoxCPM-0.5B --output-dir models/voxcpm05-fp16 --variant 0.5 --quant-profile fp16 --lora-dir VoxCPM/ft0.5/latest
+python exporter/export_voxcpm.py --model-dir VoxCPM/models/VoxCPM1.5 --output-dir models/voxcpm15-fp16 --variant 1.5 --quant-profile fp16 --lora-dir VoxCPM/ft1.5/latest
+python exporter/export_voxcpm.py --model-dir VoxCPM/models/VoxCPM2 --output-dir models/voxcpm2-fp16 --variant 2.0 --quant-profile fp16 --lora-dir VoxCPM/ft2/latest
+
 Export q4-lm bundles:
 python exporter/export_voxcpm.py --model-dir VoxCPM/models/VoxCPM-0.5B --output-dir models/voxcpm05-q4-lm --variant 0.5 --quant-profile q4-lm
 python exporter/export_voxcpm.py --model-dir VoxCPM/models/VoxCPM1.5 --output-dir models/voxcpm15-q4-lm --variant 1.5 --quant-profile q4-lm
 python exporter/export_voxcpm.py --model-dir VoxCPM/models/VoxCPM2 --output-dir models/voxcpm2-q4-lm --variant 2.0 --quant-profile q4-lm
 
-Verify GGUF bundles:
-python exporter/verify_gguf.py models/voxcpm05-q4-lm
-python exporter/verify_gguf.py models/voxcpm15-q4-lm
-python exporter/verify_gguf.py models/voxcpm2-q4-lm
+Verify GGUF exports:
+python exporter/verify_gguf.py models/voxcpm05-q4-lm/model.gguf
+python exporter/verify_gguf.py models/voxcpm15-q4-lm/model.gguf
+python exporter/verify_gguf.py models/voxcpm2-q4-lm/model.gguf
 
 Run tests:
 python -m unittest exporter.tests.test_export_manifest -v
