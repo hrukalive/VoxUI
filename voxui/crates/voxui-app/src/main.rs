@@ -134,7 +134,7 @@ async fn main() -> Result<()> {
 
     // Check if model exists before starting engine
     let model_path = PathBuf::from(&saved_config.model_dir);
-    let has_model = model_path.join("manifest.json").exists();
+    let has_model = model_path.join("model.gguf").exists();
 
     // Load engine in background, then serve TTS requests
     let engine_ui_tx = ui_tx.clone();

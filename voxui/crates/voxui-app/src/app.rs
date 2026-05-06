@@ -104,7 +104,10 @@ impl App {
         let dit_steps_options: Vec<String> = vec!["5".into(), "10".into(), "15".into(), "20".into(), "30".into()];
         let dit_steps_idx = dit_steps_options.iter().position(|s| s == &config.dit_steps.to_string()).unwrap_or(1);
         let lora_idx = if let Some(ref lp) = config.lora_path {
-            lora_options.iter().position(|s| s == lp).unwrap_or(0)
+            lora_options
+                .iter()
+                .position(|s| lora_option_matches_saved(s, lp))
+                .unwrap_or(0)
         } else {
             0
         };
@@ -358,7 +361,7 @@ impl App {
         let path_str = self.model_select_input.text.trim().to_string();
         // Accept both forward and backslash paths on Windows
         let path = std::path::PathBuf::from(&path_str);
-        if path.join("manifest.json").exists() {
+        if path.join("model.gguf").exists() {
             // Normalize path for storage (use OS-native separators)
             let normalized = path.to_string_lossy().to_string();
             self.model_dir = normalized.clone();
@@ -499,14 +502,14 @@ fn backend_options() -> Vec<String> {
     opts
 }
 
-/// Scan `models/` directory for subdirectories containing GGUF files.
+/// Scan `models/` directory for subdirectories containing direct model GGUF files.
 fn scan_model_dirs(base: &str) -> Vec<String> {
     let base_path = Path::new(base);
     let mut dirs = Vec::new();
     if let Ok(entries) = std::fs::read_dir(base_path) {
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.is_dir() && path.join("manifest.json").exists() {
+            if path.is_dir() && path.join("model.gguf").exists() {
                 if let Some(name) = path.to_str() {
                     dirs.push(name.replace('\\', "/"));
                 }
@@ -520,20 +523,26 @@ fn scan_model_dirs(base: &str) -> Vec<String> {
     dirs
 }
 
-/// Scan model directory for LoRA subdirectories (names starting with `lora_`).
+/// Scan model directory for direct LoRA GGUF files (names starting with `lora_`).
 fn scan_lora_dirs(model_dir: &str) -> Vec<String> {
     let mut options = vec!["None".to_string()];
     let path = std::path::Path::new(model_dir);
     if let Ok(entries) = std::fs::read_dir(path) {
         for entry in entries.flatten() {
             let name = entry.file_name().to_string_lossy().to_string();
-            if name.starts_with("lora_") && entry.path().is_dir() {
-                // Verify it contains at least one lora_*.gguf file
-                if entry.path().join("lora_manifest.json").exists() {
-                    options.push(name);
-                }
+            let entry_path = entry.path();
+            let is_lora_file = entry_path.is_file()
+                && entry_path.extension().and_then(|v| v.to_str()) == Some("gguf")
+                && name.starts_with("lora_");
+            if is_lora_file {
+                options.push(name);
             }
         }
     }
+    options.sort();
     options
+}
+
+fn lora_option_matches_saved(option: &str, saved: &str) -> bool {
+    option == saved || option.strip_suffix(".gguf") == Some(saved)
 }

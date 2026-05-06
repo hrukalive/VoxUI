@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "crates/voxui-app",
     "crates/voxui-gguf",
     "crates/voxui-inference",
     "crates/voxui-audio",

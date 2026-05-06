@@ -59,7 +59,7 @@ pub fn scan_model_entries(models_root: &Path) -> Vec<ModelEntry> {
         .flatten()
         .filter_map(|entry| {
             let path = entry.path();
-            if !path.is_dir() || !path.join("manifest.json").is_file() {
+            if !path.is_dir() || !path.join("model.gguf").is_file() {
                 return None;
             }
             Some(ModelEntry {
@@ -81,14 +81,19 @@ pub fn scan_lora_entries(model_dir: &Path) -> Vec<LoraEntry> {
         .filter_map(|entry| {
             let path = entry.path();
             let name = entry.file_name().to_string_lossy().into_owned();
-            if !name.starts_with("lora_")
-                || !path.is_dir()
-                || !path.join("lora_manifest.json").is_file()
-            {
+            let is_lora_file = path.is_file()
+                && path.extension().and_then(|v| v.to_str()) == Some("gguf")
+                && name.starts_with("lora_");
+            if !is_lora_file {
                 return None;
             }
+            let display_name = name
+                .strip_prefix("lora_")
+                .and_then(|v| v.strip_suffix(".gguf"))
+                .unwrap_or(&name)
+                .to_string();
             Some(LoraEntry {
-                name,
+                name: display_name,
                 path: Some(display_path(&path)),
             })
         })
@@ -136,18 +141,18 @@ mod tests {
 
     static CURRENT_DIR_LOCK: Mutex<()> = Mutex::new(());
 
-    fn create_manifest_dir(root: &std::path::Path, name: &str) -> std::path::PathBuf {
+    fn create_model_dir(root: &std::path::Path, name: &str) -> std::path::PathBuf {
         let path = root.join(name);
         fs::create_dir_all(&path).unwrap();
-        fs::write(path.join("manifest.json"), "{}").unwrap();
+        fs::write(path.join("model.gguf"), b"placeholder").unwrap();
         path
     }
 
     #[test]
     fn scan_model_entries_returns_only_manifest_dirs_sorted() {
         let tmp = tempdir().unwrap();
-        create_manifest_dir(tmp.path(), "voxcpm2-fp16");
-        create_manifest_dir(tmp.path(), "voxcpm05-fp16");
+        create_model_dir(tmp.path(), "voxcpm2-fp16");
+        create_model_dir(tmp.path(), "voxcpm05-fp16");
         fs::create_dir_all(tmp.path().join("not-a-model")).unwrap();
 
         let entries = super::scan_model_entries(tmp.path());
@@ -159,24 +164,21 @@ mod tests {
     }
 
     #[test]
-    fn scan_lora_entries_includes_none_and_manifest_dirs_sorted() {
+    fn scan_lora_entries_includes_none_and_direct_gguf_files_sorted() {
         let tmp = tempdir().unwrap();
-        let model = create_manifest_dir(tmp.path(), "voxcpm2-fp16");
-        let lora_b = model.join("lora_b");
-        let lora_a = model.join("lora_a");
-        fs::create_dir_all(&lora_b).unwrap();
-        fs::create_dir_all(&lora_a).unwrap();
-        fs::write(lora_b.join("lora_manifest.json"), "{}").unwrap();
-        fs::write(lora_a.join("lora_manifest.json"), "{}").unwrap();
-        fs::create_dir_all(model.join("lora_without_manifest")).unwrap();
+        let model = create_model_dir(tmp.path(), "voxcpm2-fp16");
+        fs::write(model.join("lora_b.gguf"), b"placeholder").unwrap();
+        fs::write(model.join("lora_a.gguf"), b"placeholder").unwrap();
+        fs::create_dir_all(model.join("lora_old_dir")).unwrap();
+        fs::write(model.join("not_lora.gguf"), b"placeholder").unwrap();
 
         let entries = super::scan_lora_entries(&model);
 
         assert_eq!(entries.len(), 3);
         assert_eq!(entries[0], super::LoraEntry::none());
-        assert_eq!(entries[1].name, "lora_a");
-        assert_eq!(entries[2].name, "lora_b");
-        assert!(entries[1].path.as_ref().unwrap().ends_with("lora_a"));
+        assert_eq!(entries[1].name, "a");
+        assert_eq!(entries[2].name, "b");
+        assert!(entries[1].path.as_ref().unwrap().ends_with("lora_a.gguf"));
     }
 
     #[test]
