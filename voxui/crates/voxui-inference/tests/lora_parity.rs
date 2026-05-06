@@ -33,18 +33,27 @@ fn lora_linear_delta_matches_formula() {
 fn lora_adapter_changes_generation_without_breaking_audio() {
     let root = repo_root();
     let model_dir = root.join("models/voxcpm2-fp16");
-    let lora_dir = std::fs::read_dir(&model_dir)
-        .unwrap()
+    let Ok(entries) = std::fs::read_dir(&model_dir) else {
+        eprintln!("skip: model directory not found at {}", model_dir.display());
+        return;
+    };
+    let lora_file = entries
         .flatten()
         .map(|e| e.path())
-        .find(|p| p.join("lora_manifest.json").exists());
-    let Some(lora_dir) = lora_dir else {
-        eprintln!("skip: no LoRA adapter exported");
+        .find(|p| {
+            p.is_file()
+                && p.extension().and_then(|v| v.to_str()) == Some("gguf")
+                && p.file_stem()
+                    .map(|s| s.to_string_lossy().starts_with("lora_"))
+                    .unwrap_or(false)
+        });
+    let Some(lora_file) = lora_file else {
+        eprintln!("skip: no single-file LoRA adapter exported");
         return;
     };
 
     let mut engine = VoxCPMEngine::load(&model_dir, Device::Cpu).unwrap();
-    engine.load_lora(&lora_dir).unwrap();
+    engine.load_lora(&lora_file).unwrap();
     let samples = engine
         .generate(
             SynthesisRequest {

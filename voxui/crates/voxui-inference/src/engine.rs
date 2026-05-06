@@ -207,7 +207,7 @@ impl VoxCPMEngine {
     }
 
     pub fn load_lora(&mut self, path: &Path) -> Result<()> {
-        self.lora = Some(LoraAdapter::load_from_dir_for_model(
+        self.lora = Some(LoraAdapter::load_file_for_model(
             path,
             &self.device,
             &self.manifest,

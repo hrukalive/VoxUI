@@ -15,18 +15,6 @@ pub struct LoraAdapter {
     pub rank: usize,
 }
 
-#[derive(Debug, Deserialize)]
-struct LoraManifest {
-    schema_version: u32,
-    architecture: String,
-    variant: ModelVariant,
-    rank: usize,
-    alpha: f32,
-    #[serde(default)]
-    target_modules: LoraTargetModules,
-    components: HashMap<String, String>,
-}
-
 #[derive(Debug, Default, Deserialize)]
 struct LoraTargetModules {
     #[serde(default)]
@@ -35,6 +23,16 @@ struct LoraTargetModules {
     dit: Vec<String>,
     #[serde(default)]
     projections: Vec<String>,
+}
+
+#[derive(Debug)]
+struct LoraMetadata {
+    architecture: String,
+    variant: ModelVariant,
+    name: String,
+    rank: usize,
+    alpha: f32,
+    target_modules: LoraTargetModules,
 }
 
 impl LoraAdapter {
@@ -59,16 +57,26 @@ impl LoraAdapter {
         Ok(adapter)
     }
 
-    pub fn load_from_dir(dir: &Path, device: &Device) -> Result<Self> {
-        Self::load_from_dir_inner(dir, device, None)
-    }
-
-    pub fn load_from_dir_for_model(
-        dir: &Path,
+    pub fn load_file_for_model(
+        path: &Path,
         device: &Device,
         model: &ModelConfig,
     ) -> Result<Self> {
-        Self::load_from_dir_inner(dir, device, Some(model))
+        if path.extension().and_then(|v| v.to_str()) != Some("gguf") {
+            bail!("LoRA path must be a .gguf file: {}", path.display());
+        }
+        let loader = GgufModelLoader::new(path, device.clone())?;
+        let metadata = LoraMetadata::from_loader(&loader)?;
+        metadata.validate(model)?;
+        let mut adapter = Self {
+            layers: HashMap::new(),
+            alpha: metadata.alpha,
+            rank: metadata.rank,
+        };
+        adapter.load_component(&loader, Some(&metadata.target_modules))?;
+        adapter.validate_non_empty()?;
+        log::debug!("loaded LoRA adapter `{}` from {}", metadata.name, path.display());
+        Ok(adapter)
     }
 
     pub fn apply_raw(
@@ -99,71 +107,6 @@ impl LoraAdapter {
         }
     }
 
-    fn load_from_dir_inner(
-        dir: &Path,
-        device: &Device,
-        model: Option<&ModelConfig>,
-    ) -> Result<Self> {
-        let manifest_path = dir.join("lora_manifest.json");
-        if manifest_path.exists() {
-            let text = std::fs::read_to_string(&manifest_path)
-                .with_context(|| format!("read {}", manifest_path.display()))?;
-            let manifest: LoraManifest = serde_json::from_str(&text)
-                .with_context(|| format!("parse {}", manifest_path.display()))?;
-            manifest.validate(model)?;
-
-            let mut adapter = Self {
-                layers: HashMap::new(),
-                alpha: manifest.alpha,
-                rank: manifest.rank,
-            };
-            for file in manifest.components.values() {
-                let path = dir.join(file);
-                if !path.exists() {
-                    bail!("missing LoRA component {}", path.display());
-                }
-                let loader = GgufModelLoader::new(&path, device.clone())?;
-                adapter.load_component(&loader, Some(&manifest.target_modules))?;
-            }
-            adapter.validate_non_empty()?;
-            return Ok(adapter);
-        }
-
-        let mut adapter = Self {
-            layers: HashMap::new(),
-            alpha: 32.0,
-            rank: 32,
-        };
-        for entry in std::fs::read_dir(dir)?.flatten() {
-            let path = entry.path();
-            let is_lora_gguf = path.extension().and_then(|v| v.to_str()) == Some("gguf")
-                && path
-                    .file_stem()
-                    .map(|s| s.to_string_lossy().starts_with("lora_"))
-                    .unwrap_or(false);
-            if is_lora_gguf {
-                let loader = GgufModelLoader::new(&path, device.clone())?;
-                if let Some(rank) = loader
-                    .metadata()
-                    .get("voxcpm.lora.rank")
-                    .and_then(|v| v.as_u32())
-                {
-                    adapter.rank = rank as usize;
-                }
-                if let Some(alpha) = loader
-                    .metadata()
-                    .get("voxcpm.lora.alpha")
-                    .and_then(|v| v.as_f32())
-                {
-                    adapter.alpha = alpha;
-                }
-                adapter.load_component(&loader, None)?;
-            }
-        }
-        adapter.validate_non_empty()?;
-        Ok(adapter)
-    }
-
     fn load_component(
         &mut self,
         loader: &GgufModelLoader,
@@ -182,7 +125,7 @@ impl LoraAdapter {
         for (base, a) in a_tensors {
             if let Some(targets) = targets {
                 if !targets.allows(&base) {
-                    bail!("LoRA tensor target `{base}` is not enabled by lora_manifest.json");
+                    bail!("LoRA tensor target `{base}` is not enabled by LoRA metadata");
                 }
             }
             let b = b_tensors
@@ -215,32 +158,79 @@ impl LoraAdapter {
     }
 }
 
-impl LoraManifest {
-    fn validate(&self, model: Option<&ModelConfig>) -> Result<()> {
-        if self.schema_version != 1 {
-            bail!("unsupported LoRA manifest schema {}", self.schema_version);
+impl LoraMetadata {
+    fn from_loader(loader: &GgufModelLoader) -> Result<Self> {
+        let metadata = loader.metadata();
+        let kind = metadata
+            .get("voxcpm.kind")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        if kind != "lora" {
+            bail!("LoRA GGUF voxcpm.kind must be `lora`, got `{kind}`");
         }
+        let architecture = metadata
+            .get("voxcpm.architecture")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("LoRA GGUF missing voxcpm.architecture"))?
+            .to_string();
+        let variant = match metadata
+            .get("voxcpm.variant")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("LoRA GGUF missing voxcpm.variant"))?
+        {
+            "0.5" => ModelVariant::VoxCpm05,
+            "1.5" => ModelVariant::VoxCpm15,
+            "2.0" => ModelVariant::VoxCpm2,
+            other => bail!("unsupported LoRA variant `{other}`"),
+        };
+        let name = metadata
+            .get("voxcpm.lora.name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("adapter")
+            .to_string();
+        let rank = metadata
+            .get("voxcpm.lora.rank")
+            .and_then(|v| v.as_u32())
+            .unwrap_or(0) as usize;
+        let alpha = metadata
+            .get("voxcpm.lora.alpha")
+            .and_then(|v| v.as_f32())
+            .unwrap_or(rank as f32);
+        let target_modules = metadata
+            .get("voxcpm.lora.target_modules")
+            .and_then(|v| v.as_str())
+            .and_then(|text| serde_json::from_str::<LoraTargetModules>(text).ok())
+            .unwrap_or_default();
+        Ok(Self {
+            architecture,
+            variant,
+            name,
+            rank,
+            alpha,
+            target_modules,
+        })
+    }
+
+    fn validate(&self, model: &ModelConfig) -> Result<()> {
         if self.rank == 0 {
             bail!("LoRA rank must be positive");
         }
         if self.alpha <= 0.0 {
             bail!("LoRA alpha must be positive");
         }
-        if let Some(model) = model {
-            if self.architecture != model.architecture {
-                bail!(
-                    "LoRA architecture `{}` does not match model `{}`",
-                    self.architecture,
-                    model.architecture
-                );
-            }
-            if self.variant != model.variant {
-                bail!(
-                    "LoRA variant {:?} does not match model {:?}",
-                    self.variant,
-                    model.variant
-                );
-            }
+        if self.architecture != model.architecture {
+            bail!(
+                "LoRA architecture `{}` does not match model `{}`",
+                self.architecture,
+                model.architecture
+            );
+        }
+        if self.variant != model.variant {
+            bail!(
+                "LoRA variant {:?} does not match model {:?}",
+                self.variant,
+                model.variant
+            );
         }
         Ok(())
     }
