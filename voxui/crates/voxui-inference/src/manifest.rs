@@ -203,48 +203,48 @@ fn validate_config_architecture(architecture: &str, variant: ModelVariant) -> Re
 
 #[derive(Debug, Clone, Deserialize)]
 // Legacy component manifest retained until engine/component loading moves to ModelConfig.
-pub struct ComponentFiles {
-    pub base_lm: String,
-    pub residual_lm: String,
-    pub feat_encoder: String,
-    pub feat_decoder: String,
-    pub audio_vae: String,
-    pub projections: String,
+pub(crate) struct ComponentFiles {
+    pub(crate) base_lm: String,
+    pub(crate) residual_lm: String,
+    pub(crate) feat_encoder: String,
+    pub(crate) feat_decoder: String,
+    pub(crate) audio_vae: String,
+    pub(crate) projections: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 // Legacy component manifest retained until engine/component loading moves to ModelConfig.
-pub struct BundleManifest {
-    pub schema_version: u32,
-    pub architecture: String,
-    pub variant: ModelVariant,
+pub(crate) struct BundleManifest {
+    pub(crate) schema_version: u32,
+    pub(crate) architecture: String,
+    pub(crate) variant: ModelVariant,
     #[serde(default)]
-    pub source_model_dir: Option<String>,
+    pub(crate) source_model_dir: Option<String>,
     #[serde(default)]
-    pub source_weight_format: Option<String>,
-    pub special_tokens: SpecialTokens,
-    pub patch_size: usize,
-    pub feat_dim: usize,
-    pub scalar_quantization_latent_dim: usize,
-    pub scalar_quantization_scale: f32,
-    pub audio_vae: AudioVaeManifest,
-    pub components: ComponentFiles,
+    pub(crate) source_weight_format: Option<String>,
+    pub(crate) special_tokens: SpecialTokens,
+    pub(crate) patch_size: usize,
+    pub(crate) feat_dim: usize,
+    pub(crate) scalar_quantization_latent_dim: usize,
+    pub(crate) scalar_quantization_scale: f32,
+    pub(crate) audio_vae: AudioVaeManifest,
+    pub(crate) components: ComponentFiles,
     #[serde(default)]
-    pub lm_config: serde_json::Value,
+    pub(crate) lm_config: serde_json::Value,
     #[serde(default)]
-    pub encoder_config: serde_json::Value,
+    pub(crate) encoder_config: serde_json::Value,
     #[serde(default)]
-    pub dit_config: serde_json::Value,
+    pub(crate) dit_config: serde_json::Value,
     #[serde(default)]
-    pub residual_lm_num_layers: Option<usize>,
+    pub(crate) residual_lm_num_layers: Option<usize>,
     #[serde(default)]
-    pub residual_lm_no_rope: Option<bool>,
+    pub(crate) residual_lm_no_rope: Option<bool>,
     #[serde(default)]
-    pub quantization: HashMap<String, String>,
+    pub(crate) quantization: HashMap<String, String>,
 }
 
 impl BundleManifest {
-    pub fn load(model_dir: &Path) -> Result<Self> {
+    pub(crate) fn load(model_dir: &Path) -> Result<Self> {
         let manifest_path = model_dir.join("manifest.json");
         let text = std::fs::read_to_string(&manifest_path)
             .with_context(|| format!("read {}", manifest_path.display()))?;
@@ -254,13 +254,13 @@ impl BundleManifest {
         Ok(manifest)
     }
 
-    pub fn output_sample_rate(&self) -> u32 {
+    pub(crate) fn output_sample_rate(&self) -> u32 {
         self.audio_vae
             .out_sample_rate
             .unwrap_or(self.audio_vae.sample_rate)
     }
 
-    pub fn component_path(&self, model_dir: &Path, component: &str) -> Result<PathBuf> {
+    pub(crate) fn component_path(&self, model_dir: &Path, component: &str) -> Result<PathBuf> {
         let file = match component {
             "base_lm" => &self.components.base_lm,
             "residual_lm" => &self.components.residual_lm,

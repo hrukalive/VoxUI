@@ -8,7 +8,7 @@ pub mod encoder;
 pub mod engine;
 pub mod fsq;
 pub mod lora;
-pub mod manifest;
+mod manifest;
 pub mod model_loader;
 pub mod request;
 pub mod residual_lm;
