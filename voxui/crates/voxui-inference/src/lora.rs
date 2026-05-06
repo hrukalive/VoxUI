@@ -26,6 +26,26 @@ struct LoraTargetModules {
     projections: Vec<String>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+struct LoraEnabledTargets {
+    #[serde(default = "enabled_by_default")]
+    lm: bool,
+    #[serde(default = "enabled_by_default")]
+    dit: bool,
+    #[serde(default = "enabled_by_default")]
+    projections: bool,
+}
+
+impl Default for LoraEnabledTargets {
+    fn default() -> Self {
+        Self {
+            lm: true,
+            dit: true,
+            projections: true,
+        }
+    }
+}
+
 #[derive(Debug)]
 struct LoraMetadata {
     architecture: String,
@@ -33,6 +53,7 @@ struct LoraMetadata {
     name: String,
     rank: usize,
     alpha: f32,
+    enabled_targets: LoraEnabledTargets,
     target_modules: LoraTargetModules,
 }
 
@@ -74,7 +95,7 @@ impl LoraAdapter {
             alpha: metadata.alpha,
             rank: metadata.rank,
         };
-        adapter.load_component(&loader, Some(&metadata.target_modules))?;
+        adapter.load_component(&loader, Some(&metadata))?;
         adapter.validate_non_empty()?;
         log::debug!("loaded LoRA adapter `{}` from {}", metadata.name, path.display());
         Ok(adapter)
@@ -111,7 +132,7 @@ impl LoraAdapter {
     fn load_component(
         &mut self,
         loader: &GgufModelLoader,
-        targets: Option<&LoraTargetModules>,
+        metadata: Option<&LoraMetadata>,
     ) -> Result<()> {
         let mut a_tensors: HashMap<String, Tensor> = HashMap::new();
         let mut b_tensors: HashMap<String, Tensor> = HashMap::new();
@@ -124,8 +145,8 @@ impl LoraAdapter {
         }
 
         for (base, a) in a_tensors {
-            if let Some(targets) = targets {
-                if !targets.allows(&base) {
+            if let Some(metadata) = metadata {
+                if !metadata.allows(&base) {
                     bail!("LoRA tensor target `{base}` is not enabled by LoRA metadata");
                 }
             }
@@ -197,6 +218,9 @@ impl LoraMetadata {
             .get("voxcpm.lora.alpha")
             .and_then(|v| v.as_f32())
             .unwrap_or(rank as f32);
+        let enabled_targets = metadata
+            .get("voxcpm.lora.enabled_targets")
+            .map_or_else(|| Ok(LoraEnabledTargets::default()), parse_enabled_targets_metadata)?;
         let target_modules = metadata
             .get("voxcpm.lora.target_modules")
             .map_or_else(|| Ok(LoraTargetModules::default()), parse_target_modules_metadata)?;
@@ -206,6 +230,7 @@ impl LoraMetadata {
             name,
             rank,
             alpha,
+            enabled_targets,
             target_modules,
         })
     }
@@ -233,6 +258,10 @@ impl LoraMetadata {
         }
         Ok(())
     }
+
+    fn allows(&self, base: &str) -> bool {
+        self.enabled_targets.allows(base) && self.target_modules.allows(base)
+    }
 }
 
 impl LoraTargetModules {
@@ -253,6 +282,22 @@ impl LoraTargetModules {
             .collect::<HashSet<_>>();
         allowed.contains(base)
     }
+}
+
+impl LoraEnabledTargets {
+    fn allows(&self, base: &str) -> bool {
+        if base.starts_with("base_lm.") || base.starts_with("residual_lm.") {
+            return self.lm;
+        }
+        if base.starts_with("feat_decoder.") {
+            return self.dit;
+        }
+        self.projections
+    }
+}
+
+fn enabled_by_default() -> bool {
+    true
 }
 
 fn target_suffix_allowed(base: &str, allowed: &[String]) -> bool {
@@ -282,6 +327,14 @@ fn validate_lora_shapes(base: &str, a: &Tensor, b: &Tensor, rank: usize) -> Resu
     Ok(())
 }
 
+fn parse_enabled_targets_metadata(value: &MetadataValue) -> Result<LoraEnabledTargets> {
+    let text = value
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("voxcpm.lora.enabled_targets must be JSON string metadata"))?;
+    serde_json::from_str::<LoraEnabledTargets>(text)
+        .context("parse voxcpm.lora.enabled_targets JSON")
+}
+
 fn parse_target_modules_metadata(value: &MetadataValue) -> Result<LoraTargetModules> {
     let text = value
         .as_str()
@@ -293,6 +346,70 @@ fn parse_target_modules_metadata(value: &MetadataValue) -> Result<LoraTargetModu
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn valid_enabled_targets_metadata_is_parsed() {
+        let value = MetadataValue::String(
+            r#"{"lm":true,"dit":false,"projections":true}"#.to_string(),
+        );
+        let targets = parse_enabled_targets_metadata(&value).unwrap();
+
+        assert!(targets.lm);
+        assert!(!targets.dit);
+        assert!(targets.projections);
+    }
+
+    #[test]
+    fn absent_enabled_targets_metadata_defaults_enabled() {
+        let targets = LoraEnabledTargets::default();
+
+        assert!(targets.lm);
+        assert!(targets.dit);
+        assert!(targets.projections);
+    }
+
+    #[test]
+    fn invalid_enabled_targets_metadata_is_rejected() {
+        let value = MetadataValue::String("{not-json".to_string());
+        let error = parse_enabled_targets_metadata(&value).unwrap_err();
+
+        assert!(
+            error.to_string().contains("voxcpm.lora.enabled_targets"),
+            "{error:#}"
+        );
+    }
+
+    #[test]
+    fn non_string_enabled_targets_metadata_is_rejected() {
+        let value = MetadataValue::Uint32(1);
+        let error = parse_enabled_targets_metadata(&value).unwrap_err();
+
+        assert!(
+            error.to_string().contains("voxcpm.lora.enabled_targets"),
+            "{error:#}"
+        );
+    }
+
+    #[test]
+    fn disabled_enabled_target_rejects_tensor_even_when_module_list_allows_all() {
+        let metadata = LoraMetadata {
+            architecture: "voxcpm2".to_string(),
+            variant: ModelVariant::VoxCpm2,
+            name: "adapter".to_string(),
+            rank: 8,
+            alpha: 16.0,
+            enabled_targets: LoraEnabledTargets {
+                lm: true,
+                dit: true,
+                projections: false,
+            },
+            target_modules: LoraTargetModules::default(),
+        };
+
+        assert!(metadata.allows("base_lm.layers.0.self_attn.q_proj"));
+        assert!(metadata.allows("feat_decoder.layers.0.self_attn.q_proj"));
+        assert!(!metadata.allows("lm_to_dit_proj"));
+    }
 
     #[test]
     fn absent_target_modules_metadata_defaults_empty() {

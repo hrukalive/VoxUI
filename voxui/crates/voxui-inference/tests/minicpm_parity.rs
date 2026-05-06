@@ -1,8 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use candle_core::Device;
-use voxui_inference::manifest::{ModelConfig, ModelVariant};
-use voxui_inference::{BaseLM, BaseLMConfig, GgufModelLoader};
+use voxui_inference::{BaseLM, BaseLMConfig, GgufModelLoader, ModelConfig, ModelVariant};
 
 fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
