@@ -221,6 +221,65 @@ class ExportManifestTests(unittest.TestCase):
             self.assertEqual(summary["schema_version"], 2)
             self.assertEqual(summary["model_file"], BASE_MODEL_FILE)
 
+    def test_base_export_removes_stale_legacy_base_outputs_only(self):
+        main_weights = {
+            "base_lm.norm.weight": np.zeros(2, dtype=np.float32),
+            "base_lm.layers.0.self_attn.q_proj.weight": np.zeros((2, 2), dtype=np.float32),
+            "residual_lm.norm.weight": np.zeros(2, dtype=np.float32),
+            "residual_lm.layers.0.self_attn.q_proj.weight": np.zeros((2, 2), dtype=np.float32),
+            "feat_encoder.in_proj.weight": np.zeros((2, 2), dtype=np.float32),
+            "feat_encoder.special_token": np.zeros(2, dtype=np.float32),
+            "feat_decoder.input_embed.weight": np.zeros((2, 2), dtype=np.float32),
+            "fsq_layer.project_in.weight": np.zeros((2, 2), dtype=np.float32),
+            "enc_to_lm_proj.weight": np.zeros((2, 2), dtype=np.float32),
+            "lm_to_dit_proj.weight": np.zeros((2, 2), dtype=np.float32),
+            "res_to_dit_proj.weight": np.zeros((2, 2), dtype=np.float32),
+            "stop_proj.weight": np.zeros((2, 2), dtype=np.float32),
+            "stop_head.weight": np.zeros((2, 2), dtype=np.float32),
+        }
+        vae_weights = {"encoder.conv.weight": np.zeros((2, 2), dtype=np.float32)}
+        config = {"architecture": "voxcpm2"}
+        stale_names = [
+            "manifest.json",
+            "base_lm.gguf",
+            "residual_lm.gguf",
+            "feat_encoder.gguf",
+            "feat_decoder.gguf",
+            "audio_vae.gguf",
+            "projections.gguf",
+        ]
+
+        with TemporaryDirectory() as model_tmp, TemporaryDirectory() as output_tmp:
+            model_dir = Path(model_tmp)
+            output_dir = Path(output_tmp)
+            (model_dir / "config.json").write_text(json.dumps(config), encoding="utf-8")
+            for name in stale_names + ["notes.txt", "lora_manifest.json", "lora_base_lm.gguf"]:
+                (output_dir / name).write_text("stale", encoding="utf-8")
+
+            RecordingWriter.instances = []
+            with (
+                patch("exporter.export_voxcpm.GGUFWriter", RecordingWriter),
+                patch("exporter.export_voxcpm.load_weights", return_value=(main_weights, vae_weights, "safetensors")),
+            ):
+                export(
+                    model_dir,
+                    output_dir,
+                    {
+                        "quant_lm": "fp16",
+                        "quant_encoder": "fp16",
+                        "quant_dit": "fp16",
+                        "quant_vae": "f32",
+                    },
+                    "2.0",
+                )
+
+            self.assertTrue((output_dir / BASE_MODEL_FILE).exists())
+            for name in stale_names:
+                self.assertFalse((output_dir / name).exists(), name)
+            self.assertTrue((output_dir / "notes.txt").exists())
+            self.assertTrue((output_dir / "lora_manifest.json").exists())
+            self.assertTrue((output_dir / "lora_base_lm.gguf").exists())
+
 
 if __name__ == "__main__":
     unittest.main()

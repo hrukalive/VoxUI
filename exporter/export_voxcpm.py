@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import re
 import shutil
 import sys
@@ -51,6 +50,16 @@ BASE_COMPONENTS = (
     FEAT_DECODER,
     AUDIO_VAE,
     PROJECTIONS,
+)
+
+STALE_BASE_OUTPUTS = (
+    "manifest.json",
+    "base_lm.gguf",
+    "residual_lm.gguf",
+    "feat_encoder.gguf",
+    "feat_decoder.gguf",
+    "audio_vae.gguf",
+    "projections.gguf",
 )
 
 PROJECTION_PREFIXES = (
@@ -452,6 +461,13 @@ def copy_bundle_files(model_dir: Path, output_dir: Path) -> None:
         shutil.copy2(src, output_dir / name)
 
 
+def remove_stale_base_outputs(output_dir: Path) -> None:
+    for name in STALE_BASE_OUTPUTS:
+        path = output_dir / name
+        if path.is_file():
+            path.unlink()
+
+
 def export(
     model_dir: str | Path,
     output_dir: str | Path,
@@ -471,6 +487,7 @@ def export(
     validate_required_tensors(buckets, variant=variant)
 
     output_dir.mkdir(parents=True, exist_ok=True)
+    remove_stale_base_outputs(output_dir)
     print(f"Writing {BASE_MODEL_FILE} ({sum(len(tensors) for tensors in buckets.values())} tensors)")
     component_quantization = write_base_gguf(
         output_dir=output_dir,
