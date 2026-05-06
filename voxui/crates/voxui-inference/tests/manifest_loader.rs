@@ -1,6 +1,13 @@
 use std::fs;
 
-use voxui_inference::{ModelConfig, ModelVariant};
+use voxui_inference::{GgufModelLoader, ModelConfig, ModelVariant};
+
+#[test]
+fn model_loader_requires_model_gguf_in_directory() {
+    let dir = tempfile::tempdir().unwrap();
+    let err = GgufModelLoader::from_model_dir(dir.path(), candle_core::Device::Cpu).unwrap_err();
+    assert!(err.to_string().contains("model.gguf"));
+}
 
 #[test]
 fn model_config_parses_variant_and_audio_vae_from_config_json() {

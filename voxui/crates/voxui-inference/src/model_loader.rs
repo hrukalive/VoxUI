@@ -1,33 +1,96 @@
 //! Load tensors from GGUF files into candle Tensors.
 
-use std::path::Path;
+use std::{
+    collections::HashMap,
+    fmt,
+    path::{Path, PathBuf},
+    sync::{Arc, Mutex},
+};
 
 use anyhow::Result;
 use candle_core::{DType, Device, Tensor};
 use voxui_gguf::{GgufFile, MetadataValue, TensorInfo};
 
-/// Loads tensors from a GGUF file into candle Tensors.
-pub struct GgufModelLoader {
+struct GgufTensorStore {
     gguf: GgufFile,
+    cache: Mutex<HashMap<String, Tensor>>,
+    path: PathBuf,
+}
+
+/// Loads tensors from a GGUF file into candle Tensors.
+#[derive(Clone)]
+pub struct GgufModelLoader {
+    store: Arc<GgufTensorStore>,
     device: Device,
+}
+
+impl fmt::Debug for GgufModelLoader {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("GgufModelLoader")
+            .field("path", &self.store.path)
+            .field("device", &self.device)
+            .finish_non_exhaustive()
+    }
 }
 
 impl GgufModelLoader {
     /// Open a GGUF file and prepare for tensor loading.
     pub fn new(path: &Path, device: Device) -> Result<Self> {
         let gguf = GgufFile::open(path)?;
-        Ok(Self { gguf, device })
+        let store = GgufTensorStore {
+            gguf,
+            cache: Mutex::new(HashMap::new()),
+            path: path.to_path_buf(),
+        };
+        Ok(Self {
+            store: Arc::new(store),
+            device,
+        })
+    }
+
+    /// Open the canonical single-file GGUF export from a model directory.
+    pub fn from_model_dir(model_dir: &Path, device: Device) -> Result<Self> {
+        let path = model_dir.join("model.gguf");
+        if !path.exists() {
+            anyhow::bail!("model.gguf not found in model directory '{}'", model_dir.display());
+        }
+        Self::new(&path, device)
     }
 
     /// Load a tensor by name, dequantizing to f32, and place it on the configured device.
     pub fn load_tensor(&self, name: &str) -> Result<Tensor> {
+        if let Some(tensor) = self
+            .store
+            .cache
+            .lock()
+            .map_err(|_| anyhow::anyhow!("GGUF tensor cache lock poisoned"))?
+            .get(name)
+            .cloned()
+        {
+            return Ok(tensor);
+        }
+
         let info = self
+            .store
             .gguf
             .tensor_info(name)
-            .ok_or_else(|| anyhow::anyhow!("Tensor '{}' not found in GGUF file", name))?;
-        let data = self.gguf.tensor_f32(name)?;
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Tensor '{}' not found in GGUF file '{}'",
+                    name,
+                    self.store.path.display()
+                )
+            })?;
+        let data = self.store.gguf.tensor_f32(name)?;
         let shape: Vec<usize> = info.shape.iter().map(|&s| s as usize).collect();
         let tensor = Tensor::from_vec(data, shape.as_slice(), &self.device)?;
+
+        self.store
+            .cache
+            .lock()
+            .map_err(|_| anyhow::anyhow!("GGUF tensor cache lock poisoned"))?
+            .insert(name.to_string(), tensor.clone());
+
         Ok(tensor)
     }
 
@@ -56,21 +119,21 @@ impl GgufModelLoader {
 
     /// Check if a tensor exists in the file.
     pub fn has_tensor(&self, name: &str) -> bool {
-        self.gguf.tensor_info(name).is_some()
+        self.store.gguf.tensor_info(name).is_some()
     }
 
     /// Access file metadata.
-    pub fn metadata(&self) -> &std::collections::HashMap<String, MetadataValue> {
-        &self.gguf.metadata
+    pub fn metadata(&self) -> &HashMap<String, MetadataValue> {
+        &self.store.gguf.metadata
     }
 
     /// List all tensor names in the file.
     pub fn tensor_names(&self) -> Vec<&str> {
-        self.gguf.tensor_names()
+        self.store.gguf.tensor_names()
     }
 
     /// Get tensor info (shape, dtype, etc.) without loading data.
     pub fn tensor_info(&self, name: &str) -> Option<&TensorInfo> {
-        self.gguf.tensor_info(name)
+        self.store.gguf.tensor_info(name)
     }
 }
