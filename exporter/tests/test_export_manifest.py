@@ -1,14 +1,38 @@
 import unittest
+import json
 from pathlib import Path
+from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 import numpy as np
 
 from exporter.export_voxcpm import (
-    build_manifest,
+    BASE_MODEL_FILE,
     partition_weights,
     resolve_quant_args,
     validate_required_tensors,
+    export,
 )
+
+
+class RecordingWriter:
+    instances = []
+
+    def __init__(self):
+        self.metadata = {}
+        self.tensors = []
+        self.path = None
+        RecordingWriter.instances.append(self)
+
+    def add_metadata(self, key, value, value_type=None):
+        self.metadata[key] = value
+
+    def add_tensor(self, name, data, shape, dtype):
+        self.tensors.append((name, data, shape, dtype))
+
+    def write(self, path):
+        self.path = Path(path)
+        self.path.write_bytes(b"recorded gguf")
 
 
 class ExportManifestTests(unittest.TestCase):
@@ -21,17 +45,17 @@ class ExportManifestTests(unittest.TestCase):
             "fsq_layer.project_in.weight": np.zeros((2, 2), dtype=np.float32),
         }
         buckets = partition_weights(weights, None)
-        self.assertIn("base_lm.gguf", buckets)
-        self.assertIn("residual_lm.gguf", buckets)
-        self.assertIn("feat_encoder.gguf", buckets)
-        self.assertIn("feat_decoder.gguf", buckets)
-        self.assertIn("projections.gguf", buckets)
-        names = {name for name, _ in buckets["feat_encoder.gguf"]}
+        self.assertIn("base_lm", buckets)
+        self.assertIn("residual_lm", buckets)
+        self.assertIn("feat_encoder", buckets)
+        self.assertIn("feat_decoder", buckets)
+        self.assertIn("projections", buckets)
+        names = {name for name, _ in buckets["feat_encoder"]}
         self.assertIn("feat_encoder.in_proj.weight", names)
 
     def test_missing_required_tensor_is_hard_error(self):
         buckets = {
-            "base_lm.gguf": [("base_lm.norm.weight", np.zeros(2, dtype=np.float32))],
+            "base_lm": [("base_lm.norm.weight", np.zeros(2, dtype=np.float32))],
         }
         with self.assertRaisesRegex(ValueError, "missing required tensor"):
             validate_required_tensors(buckets, variant="2.0")
@@ -107,7 +131,23 @@ class ExportManifestTests(unittest.TestCase):
         self.assertEqual(quant_args["quant_dit"], "q8")
         self.assertEqual(quant_args["quant_vae"], "fp16")
 
-    def test_manifest_records_component_files_and_special_tokens(self):
+    def test_base_export_writes_single_model_gguf_without_manifest(self):
+        main_weights = {
+            "base_lm.norm.weight": np.zeros(2, dtype=np.float32),
+            "base_lm.layers.0.self_attn.q_proj.weight": np.zeros((2, 2), dtype=np.float32),
+            "residual_lm.norm.weight": np.zeros(2, dtype=np.float32),
+            "residual_lm.layers.0.self_attn.q_proj.weight": np.zeros((2, 2), dtype=np.float32),
+            "feat_encoder.in_proj.weight": np.zeros((2, 2), dtype=np.float32),
+            "feat_encoder.special_token": np.zeros(2, dtype=np.float32),
+            "feat_decoder.input_embed.weight": np.zeros((2, 2), dtype=np.float32),
+            "fsq_layer.project_in.weight": np.zeros((2, 2), dtype=np.float32),
+            "enc_to_lm_proj.weight": np.zeros((2, 2), dtype=np.float32),
+            "lm_to_dit_proj.weight": np.zeros((2, 2), dtype=np.float32),
+            "res_to_dit_proj.weight": np.zeros((2, 2), dtype=np.float32),
+            "stop_proj.weight": np.zeros((2, 2), dtype=np.float32),
+            "stop_head.weight": np.zeros((2, 2), dtype=np.float32),
+        }
+        vae_weights = {"encoder.conv.weight": np.zeros((2, 2), dtype=np.float32)}
         config = {
             "architecture": "voxcpm2",
             "patch_size": 4,
@@ -136,18 +176,50 @@ class ExportManifestTests(unittest.TestCase):
                 "scale_depth": 1.4,
             },
         }
-        manifest = build_manifest(
-            model_dir=Path("VoxCPM/models/VoxCPM2"),
-            config=config,
-            variant="2.0",
-            source_weight_format="safetensors",
-            component_quantization={"base_lm.gguf": "fp16"},
-        )
-        self.assertEqual(manifest["schema_version"], 1)
-        self.assertEqual(manifest["architecture"], "voxcpm2")
-        self.assertEqual(manifest["special_tokens"]["audio_start"], 101)
-        self.assertEqual(manifest["special_tokens"]["ref_audio_start"], 103)
-        self.assertEqual(manifest["components"]["feat_decoder"], "feat_decoder.gguf")
+
+        with TemporaryDirectory() as model_tmp, TemporaryDirectory() as output_tmp:
+            model_dir = Path(model_tmp)
+            output_dir = Path(output_tmp)
+            (model_dir / "config.json").write_text(json.dumps(config), encoding="utf-8")
+            (model_dir / "tokenizer.json").write_text("{}", encoding="utf-8")
+
+            RecordingWriter.instances = []
+            with (
+                patch("exporter.export_voxcpm.GGUFWriter", RecordingWriter),
+                patch("exporter.export_voxcpm.load_weights", return_value=(main_weights, vae_weights, "safetensors")),
+            ):
+                summary = export(
+                    model_dir,
+                    output_dir,
+                    {
+                        "quant_lm": "q4",
+                        "quant_encoder": "fp16",
+                        "quant_dit": "q8",
+                        "quant_vae": "f32",
+                    },
+                    "2.0",
+                )
+
+            self.assertEqual([writer.path.name for writer in RecordingWriter.instances], [BASE_MODEL_FILE])
+            self.assertTrue((output_dir / BASE_MODEL_FILE).exists())
+            self.assertTrue((output_dir / "tokenizer.json").exists())
+            self.assertFalse((output_dir / "manifest.json").exists())
+
+            writer = RecordingWriter.instances[0]
+            self.assertEqual(writer.metadata["voxcpm.schema_version"], 2)
+            self.assertEqual(writer.metadata["voxcpm.kind"], "base")
+            self.assertEqual(writer.metadata["voxcpm.architecture"], "voxcpm2")
+            self.assertEqual(writer.metadata["voxcpm.variant"], "2.0")
+            self.assertEqual(writer.metadata["voxcpm.quant_profile"], "manual")
+            self.assertEqual(writer.metadata["voxcpm.source_weight_format"], "safetensors")
+            self.assertEqual(writer.metadata["voxcpm.quantization.base_lm"], "q4")
+            self.assertEqual(writer.metadata["voxcpm.quantization.feat_encoder"], "fp16")
+            self.assertEqual(writer.metadata["voxcpm.quantization.feat_decoder"], "q8")
+            self.assertEqual(writer.metadata["voxcpm.quantization.audio_vae"], "f32")
+            self.assertIn("audio_vae.encoder.conv.weight", {name for name, *_ in writer.tensors})
+
+            self.assertEqual(summary["schema_version"], 2)
+            self.assertEqual(summary["model_file"], BASE_MODEL_FILE)
 
 
 if __name__ == "__main__":

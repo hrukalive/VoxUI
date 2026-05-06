@@ -1,4 +1,4 @@
-"""Export VoxCPM model weights to native multi-file GGUF bundles."""
+"""Export VoxCPM model weights to native GGUF bundles."""
 
 from __future__ import annotations
 
@@ -35,14 +35,23 @@ QUANT_MAP = {
 
 QUANT_PROFILES = ("manual", "fp16", "q4-lm")
 
-COMPONENT_FILES = {
-    "base_lm": "base_lm.gguf",
-    "residual_lm": "residual_lm.gguf",
-    "feat_encoder": "feat_encoder.gguf",
-    "feat_decoder": "feat_decoder.gguf",
-    "audio_vae": "audio_vae.gguf",
-    "projections": "projections.gguf",
-}
+BASE_MODEL_FILE = "model.gguf"
+
+BASE_LM = "base_lm"
+RESIDUAL_LM = "residual_lm"
+FEAT_ENCODER = "feat_encoder"
+FEAT_DECODER = "feat_decoder"
+AUDIO_VAE = "audio_vae"
+PROJECTIONS = "projections"
+
+BASE_COMPONENTS = (
+    BASE_LM,
+    RESIDUAL_LM,
+    FEAT_ENCODER,
+    FEAT_DECODER,
+    AUDIO_VAE,
+    PROJECTIONS,
+)
 
 PROJECTION_PREFIXES = (
     "fsq_layer.",
@@ -55,12 +64,12 @@ PROJECTION_PREFIXES = (
 )
 
 QUANT_ARG_MAP = {
-    "base_lm.gguf": "quant_lm",
-    "residual_lm.gguf": "quant_lm",
-    "feat_encoder.gguf": "quant_encoder",
-    "feat_decoder.gguf": "quant_dit",
-    "audio_vae.gguf": "quant_vae",
-    "projections.gguf": "quant_lm",
+    BASE_LM: "quant_lm",
+    RESIDUAL_LM: "quant_lm",
+    FEAT_ENCODER: "quant_encoder",
+    FEAT_DECODER: "quant_dit",
+    AUDIO_VAE: "quant_vae",
+    PROJECTIONS: "quant_lm",
 }
 
 
@@ -114,21 +123,21 @@ def resolve_quant_args(
 
 
 REQUIRED_PREFIXES = {
-    "base_lm.gguf": [
+    BASE_LM: [
         "base_lm.norm.weight",
         "base_lm.layers.0.self_attn.q_proj.weight",
     ],
-    "residual_lm.gguf": [
+    RESIDUAL_LM: [
         "residual_lm.norm.weight",
         "residual_lm.layers.0.self_attn.q_proj.weight",
     ],
-    "feat_encoder.gguf": [
+    FEAT_ENCODER: [
         "feat_encoder.in_proj.weight",
         "feat_encoder.special_token",
     ],
-    "feat_decoder.gguf": ["feat_decoder."],
-    "audio_vae.gguf": ["audio_vae."],
-    "projections.gguf": [
+    FEAT_DECODER: ["feat_decoder."],
+    AUDIO_VAE: ["audio_vae."],
+    PROJECTIONS: [
         "fsq_layer.",
         "enc_to_lm_proj.weight",
         "lm_to_dit_proj.weight",
@@ -139,18 +148,18 @@ REQUIRED_PREFIXES = {
 }
 
 
-def get_component_for_key(key: str):
+def classify_tensor_key(key: str) -> tuple[str | None, str | None]:
     if key.startswith("base_lm."):
-        return "base_lm.gguf", lambda k: k, "lm"
+        return BASE_LM, key
     if key.startswith("residual_lm."):
-        return "residual_lm.gguf", lambda k: k, "lm"
+        return RESIDUAL_LM, key
     if key.startswith("feat_encoder."):
-        return "feat_encoder.gguf", lambda k: k, "encoder"
+        return FEAT_ENCODER, key
     if key.startswith("feat_decoder."):
-        return "feat_decoder.gguf", lambda k: k, "dit"
+        return FEAT_DECODER, key
     if key.startswith(PROJECTION_PREFIXES):
-        return "projections.gguf", lambda k: k, "projections"
-    return None, None, None
+        return PROJECTIONS, key
+    return None, None
 
 
 def tensor_to_f32_numpy(tensor) -> np.ndarray:
@@ -203,15 +212,15 @@ def partition_weights(main_weights: dict[str, Any], vae_weights: dict[str, Any] 
     unmapped_keys: list[str] = []
 
     for key, tensor in main_weights.items():
-        filename, transform, _ = get_component_for_key(key)
-        if filename is None or transform is None:
+        component, tensor_name = classify_tensor_key(key)
+        if component is None or tensor_name is None:
             unmapped_keys.append(key)
             continue
-        buckets.setdefault(filename, []).append((transform(key), tensor))
+        buckets.setdefault(component, []).append((tensor_name, tensor))
 
     if vae_weights:
         for key, tensor in vae_weights.items():
-            buckets.setdefault("audio_vae.gguf", []).append((f"audio_vae.{key}", tensor))
+            buckets.setdefault(AUDIO_VAE, []).append((f"audio_vae.{key}", tensor))
 
     if unmapped_keys:
         sample = ", ".join(unmapped_keys[:10])
@@ -225,20 +234,20 @@ def _matches_required(name: str, required: str) -> bool:
 
 
 def validate_required_tensors(buckets: dict[str, list[tuple[str, Any]]], variant: str):
-    for filename, required_names in REQUIRED_PREFIXES.items():
-        tensor_names = [name for name, _ in buckets.get(filename, [])]
+    for component, required_names in REQUIRED_PREFIXES.items():
+        tensor_names = [name for name, _ in buckets.get(component, [])]
         if not tensor_names:
-            raise ValueError(f"missing required tensor component {filename} for variant {variant}")
+            raise ValueError(f"missing required tensor component {component} for variant {variant}")
 
         seen: set[str] = set()
         for name in tensor_names:
             if name in seen:
-                raise ValueError(f"duplicate tensor {name!r} in {filename}")
+                raise ValueError(f"duplicate tensor {name!r} in {component}")
             seen.add(name)
 
         for required in required_names:
             if not any(_matches_required(name, required) for name in tensor_names):
-                raise ValueError(f"missing required tensor {required!r} in {filename}")
+                raise ValueError(f"missing required tensor {required!r} in {component}")
 
 
 def _audio_vae_manifest(config: dict[str, Any]) -> dict[str, Any]:
@@ -252,49 +261,6 @@ def _audio_vae_manifest(config: dict[str, Any]) -> dict[str, Any]:
     vae.setdefault("encoder_rates", [])
     vae.setdefault("decoder_rates", [])
     return vae
-
-
-def build_manifest(
-    *,
-    model_dir: Path,
-    config: dict[str, Any],
-    variant: str,
-    source_weight_format: str,
-    component_quantization: dict[str, str],
-) -> dict[str, Any]:
-    architecture = config.get("architecture", "voxcpm")
-    special_tokens = {
-        "audio_start": 101,
-        "audio_end": 102,
-    }
-    if variant == "2.0" or architecture == "voxcpm2":
-        special_tokens["ref_audio_start"] = 103
-        special_tokens["ref_audio_end"] = 104
-
-    manifest = {
-        "schema_version": 1,
-        "architecture": architecture,
-        "variant": variant,
-        "source_model_dir": str(Path(model_dir).resolve()),
-        "source_weight_format": source_weight_format,
-        "special_tokens": special_tokens,
-        "patch_size": config.get("patch_size", 4),
-        "feat_dim": config.get("feat_dim", 64),
-        "scalar_quantization_latent_dim": config.get(
-            "scalar_quantization_latent_dim",
-            512 if architecture == "voxcpm2" else 256,
-        ),
-        "scalar_quantization_scale": float(config.get("scalar_quantization_scale", 9.0)),
-        "audio_vae": _audio_vae_manifest(config),
-        "lm_config": config.get("lm_config", {}),
-        "encoder_config": config.get("encoder_config", {}),
-        "dit_config": config.get("dit_config", {}),
-        "residual_lm_num_layers": config.get("residual_lm_num_layers"),
-        "residual_lm_no_rope": config.get("residual_lm_no_rope", architecture == "voxcpm2"),
-        "components": dict(COMPONENT_FILES),
-        "quantization": component_quantization,
-    }
-    return manifest
 
 
 def _add_metadata_if_supported(writer: GGUFWriter, key: str, value: Any) -> None:
@@ -351,12 +317,12 @@ def add_projections_metadata(writer: GGUFWriter, config: dict[str, Any], quant_n
 
 
 METADATA_ADDERS = {
-    "base_lm.gguf": lambda w, c, q: add_lm_metadata(w, c, "base_lm", q),
-    "residual_lm.gguf": lambda w, c, q: add_lm_metadata(w, c, "residual_lm", q),
-    "feat_encoder.gguf": add_encoder_metadata,
-    "feat_decoder.gguf": add_dit_metadata,
-    "audio_vae.gguf": add_vae_metadata,
-    "projections.gguf": add_projections_metadata,
+    BASE_LM: lambda w, c, q: add_lm_metadata(w, c, BASE_LM, q),
+    RESIDUAL_LM: lambda w, c, q: add_lm_metadata(w, c, RESIDUAL_LM, q),
+    FEAT_ENCODER: add_encoder_metadata,
+    FEAT_DECODER: add_dit_metadata,
+    AUDIO_VAE: add_vae_metadata,
+    PROJECTIONS: add_projections_metadata,
 }
 
 
@@ -384,6 +350,98 @@ def write_component_gguf(
     writer.write(str(output_dir / filename))
 
 
+def add_base_metadata(
+    writer: GGUFWriter,
+    *,
+    model_dir: Path,
+    config: dict[str, Any],
+    variant: str,
+    quant_profile: str,
+    source_weight_format: str,
+    component_quantization: dict[str, str],
+) -> None:
+    architecture = config.get("architecture", "voxcpm")
+    writer.add_metadata("voxcpm.schema_version", 2)
+    writer.add_metadata("voxcpm.kind", "base")
+    writer.add_metadata("voxcpm.architecture", architecture)
+    writer.add_metadata("voxcpm.variant", variant)
+    writer.add_metadata("voxcpm.quant_profile", quant_profile)
+    writer.add_metadata("voxcpm.source_model_dir", str(model_dir.resolve()))
+    writer.add_metadata("voxcpm.source_weight_format", source_weight_format)
+    writer.add_metadata("voxcpm.patch_size", int(config.get("patch_size", 4)))
+    writer.add_metadata("voxcpm.feat_dim", int(config.get("feat_dim", 64)))
+    _add_metadata_if_supported(
+        writer,
+        "voxcpm.scalar_quantization_latent_dim",
+        config.get("scalar_quantization_latent_dim", 512 if architecture == "voxcpm2" else 256),
+    )
+    _add_metadata_if_supported(
+        writer,
+        "voxcpm.scalar_quantization_scale",
+        float(config.get("scalar_quantization_scale", 9.0)),
+    )
+    _add_metadata_if_supported(writer, "voxcpm.audio_vae", _audio_vae_manifest(config))
+    _add_metadata_if_supported(writer, "voxcpm.lm_config", config.get("lm_config", {}))
+    _add_metadata_if_supported(writer, "voxcpm.encoder_config", config.get("encoder_config", {}))
+    _add_metadata_if_supported(writer, "voxcpm.dit_config", config.get("dit_config", {}))
+    _add_metadata_if_supported(writer, "voxcpm.residual_lm_num_layers", config.get("residual_lm_num_layers"))
+    _add_metadata_if_supported(
+        writer,
+        "voxcpm.residual_lm_no_rope",
+        config.get("residual_lm_no_rope", architecture == "voxcpm2"),
+    )
+    for component in BASE_COMPONENTS:
+        _add_metadata_if_supported(
+            writer,
+            f"voxcpm.quantization.{component}",
+            component_quantization.get(component),
+        )
+
+
+def write_base_gguf(
+    *,
+    output_dir: Path,
+    buckets: dict[str, list[tuple[str, Any]]],
+    config: dict[str, Any],
+    quant_args: dict[str, str],
+    model_dir: Path,
+    variant: str,
+    quant_profile: str,
+    source_weight_format: str,
+) -> dict[str, str]:
+    component_quantization: dict[str, str] = {}
+    for component in BASE_COMPONENTS:
+        if component in buckets:
+            quant_key = QUANT_ARG_MAP.get(component, "quant_lm")
+            component_quantization[component] = quant_args.get(quant_key, "fp16")
+
+    writer = GGUFWriter()
+    add_base_metadata(
+        writer,
+        model_dir=model_dir,
+        config=config,
+        variant=variant,
+        quant_profile=quant_profile,
+        source_weight_format=source_weight_format,
+        component_quantization=component_quantization,
+    )
+
+    for component in BASE_COMPONENTS:
+        tensors = buckets.get(component, [])
+        if not tensors:
+            continue
+        quant_name = component_quantization[component]
+        if quant_name not in QUANT_MAP:
+            raise ValueError(f"Unknown quantization {quant_name!r}; expected one of {sorted(QUANT_MAP)}")
+        quant_fn, ggml_dtype = QUANT_MAP[quant_name]
+        for tensor_name, tensor in tensors:
+            arr = tensor_to_f32_numpy(tensor)
+            writer.add_tensor(tensor_name, quant_fn(arr), list(arr.shape), ggml_dtype)
+
+    writer.write(str(output_dir / BASE_MODEL_FILE))
+    return component_quantization
+
+
 def copy_bundle_files(model_dir: Path, output_dir: Path) -> None:
     for name in ("tokenizer.json", "tokenizer_config.json", "special_tokens_map.json", "config.json"):
         src = model_dir / name
@@ -394,7 +452,13 @@ def copy_bundle_files(model_dir: Path, output_dir: Path) -> None:
         shutil.copy2(src, output_dir / name)
 
 
-def export(model_dir: str | Path, output_dir: str | Path, quant_args: dict[str, str], variant: str) -> dict[str, Any]:
+def export(
+    model_dir: str | Path,
+    output_dir: str | Path,
+    quant_args: dict[str, str],
+    variant: str,
+    quant_profile: str = "manual",
+) -> dict[str, Any]:
     model_dir = Path(model_dir)
     output_dir = Path(output_dir)
     config_path = model_dir / "config.json"
@@ -407,30 +471,30 @@ def export(model_dir: str | Path, output_dir: str | Path, quant_args: dict[str, 
     validate_required_tensors(buckets, variant=variant)
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    component_quantization: dict[str, str] = {}
-    for filename, tensors in sorted(buckets.items()):
-        quant_key = QUANT_ARG_MAP.get(filename, "quant_lm")
-        quant_name = quant_args.get(quant_key, "fp16")
-        component_quantization[filename] = quant_name
-        print(f"Writing {filename} ({len(tensors)} tensors, quant={quant_name})")
-        write_component_gguf(
-            output_dir=output_dir,
-            filename=filename,
-            tensors=tensors,
-            config=config,
-            quant_name=quant_name,
-        )
+    print(f"Writing {BASE_MODEL_FILE} ({sum(len(tensors) for tensors in buckets.values())} tensors)")
+    component_quantization = write_base_gguf(
+        output_dir=output_dir,
+        buckets=buckets,
+        config=config,
+        quant_args=quant_args,
+        model_dir=model_dir,
+        variant=variant,
+        quant_profile=quant_profile,
+        source_weight_format=source_weight_format,
+    )
 
     copy_bundle_files(model_dir, output_dir)
-    manifest = build_manifest(
-        model_dir=model_dir,
-        config=config,
-        variant=variant,
-        source_weight_format=source_weight_format,
-        component_quantization=component_quantization,
-    )
-    (output_dir / "manifest.json").write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")
-    return manifest
+    return {
+        "schema_version": 2,
+        "kind": "base",
+        "architecture": config.get("architecture", "voxcpm"),
+        "variant": variant,
+        "model_file": BASE_MODEL_FILE,
+        "source_model_dir": str(model_dir.resolve()),
+        "source_weight_format": source_weight_format,
+        "quant_profile": quant_profile,
+        "quantization": component_quantization,
+    }
 
 
 def _lora_key_transform(key: str):
@@ -523,7 +587,7 @@ def export_lora(lora_dir: str | Path, output_dir: str | Path, config_path: str |
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Export VoxCPM model to native multi-file GGUF bundle")
+    parser = argparse.ArgumentParser(description="Export VoxCPM model to native GGUF bundle")
     parser.add_argument("--model-dir", required=True, help="Path to VoxCPM model directory")
     parser.add_argument("--output-dir", required=True, help="Output directory for GGUF files")
     parser.add_argument("--variant", required=True, choices=["0.5", "1.5", "2.0"], help="VoxCPM variant")
@@ -544,7 +608,7 @@ def main() -> None:
         quant_vae=args.quant_vae,
     )
 
-    export(args.model_dir, args.output_dir, quant_args, args.variant)
+    export(args.model_dir, args.output_dir, quant_args, args.variant, quant_profile=args.quant_profile)
     if args.lora_dir:
         export_lora(args.lora_dir, args.output_dir, Path(args.model_dir) / "config.json", args.variant)
 
