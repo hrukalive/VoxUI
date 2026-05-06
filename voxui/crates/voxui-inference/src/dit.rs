@@ -23,10 +23,10 @@ pub struct DiTConfig {
     pub original_max_position_embeddings: Option<usize>,
     pub rope_short_factors: Vec<f32>,
     pub rope_long_factors: Vec<f32>,
-    pub cfg_value: f64,      // 2.0
-    pub n_steps: usize,      // 10
-    pub sway_coef: f64,      // 1.0
-    pub latent_dim: usize,   // 64
+    pub cfg_value: f64,    // 2.0
+    pub n_steps: usize,    // 10
+    pub sway_coef: f64,    // 1.0
+    pub latent_dim: usize, // 64
 }
 
 impl Default for DiTConfig {
@@ -100,10 +100,9 @@ fn rms_norm(x: &Tensor, weight: &Tensor, eps: f64) -> Result<Tensor> {
     let x = x.to_dtype(DType::F32)?;
     let sq = x.sqr()?;
     let mean_sq = sq.mean_keepdim(D::Minus1)?;
-    let eps_t =
-        mean_sq
-            .zeros_like()?
-            .broadcast_add(&Tensor::new(&[eps as f32], mean_sq.device())?)?;
+    let eps_t = mean_sq
+        .zeros_like()?
+        .broadcast_add(&Tensor::new(&[eps as f32], mean_sq.device())?)?;
     let norm = (mean_sq + eps_t)?.sqrt()?.recip()?;
     let out = x.broadcast_mul(&norm)?;
     let weight = weight.to_dtype(DType::F32)?;
@@ -193,18 +192,19 @@ fn read_f32_array(value: &serde_json::Value, key: &str, len: usize) -> Vec<f32> 
     value
         .get(key)
         .and_then(|v| v.as_array())
-        .map(|arr| arr.iter().map(|v| v.as_f64().unwrap_or(1.0) as f32).collect())
+        .map(|arr| {
+            arr.iter()
+                .map(|v| v.as_f64().unwrap_or(1.0) as f32)
+                .collect()
+        })
         .filter(|arr: &Vec<f32>| arr.len() == len)
         .unwrap_or_else(|| vec![1.0; len])
 }
 
 impl DiT {
-    pub fn load_from_manifest(
-        loader: &GgufModelLoader,
-        manifest: &crate::BundleManifest,
-    ) -> Result<Self> {
-        let dit = &manifest.dit_config;
-        let lm = &manifest.lm_config;
+    pub fn load_from_config(loader: &GgufModelLoader, model: &crate::ModelConfig) -> Result<Self> {
+        let dit = &model.dit_config;
+        let lm = &model.lm_config;
         let hidden_dim = get_usize(dit, &["hidden_dim", "hidden_size"], 1024);
         let num_heads = get_usize(dit, &["num_heads", "num_attention_heads"], 16);
         let head_dim = dit
@@ -241,7 +241,7 @@ impl DiT {
             cfg_value: get_f64(cfm, "inference_cfg_rate", 1.0),
             n_steps: 10,
             sway_coef: get_f64(dit, "sway_sampling_coef", 1.0),
-            latent_dim: manifest.feat_dim,
+            latent_dim: model.feat_dim,
         };
         Self::load(loader, config, loader.device())
     }
@@ -310,7 +310,10 @@ impl DiT {
 
     fn build_rope_cache(config: &DiTConfig, device: &Device) -> Result<(Tensor, Tensor)> {
         let half_dim = config.head_dim / 2;
-        let max_pos = config.original_max_position_embeddings.unwrap_or(8192).max(8192);
+        let max_pos = config
+            .original_max_position_embeddings
+            .unwrap_or(8192)
+            .max(8192);
         let factors = if let Some(original) = config.original_max_position_embeddings {
             if max_pos > original {
                 &config.rope_long_factors
@@ -322,9 +325,9 @@ impl DiT {
         };
         let mut freqs = vec![0f32; half_dim];
         for i in 0..half_dim {
-            freqs[i] =
-                1.0 / (config.rope_theta as f32).powf(2.0 * i as f32 / config.head_dim as f32)
-                    / factors[i];
+            freqs[i] = 1.0
+                / (config.rope_theta as f32).powf(2.0 * i as f32 / config.head_dim as f32)
+                / factors[i];
         }
         let freqs = Tensor::new(freqs.as_slice(), device)?;
         let scaling_factor = config
@@ -337,8 +340,13 @@ impl DiT {
             .unwrap_or(1.0);
         let positions: Vec<f32> = (0..max_pos).map(|p| p as f32).collect();
         let positions = Tensor::new(positions.as_slice(), device)?;
-        let angles = positions.unsqueeze(1)?.broadcast_mul(&freqs.unsqueeze(0)?)?;
-        Ok(((angles.cos()? * scaling_factor)?, (angles.sin()? * scaling_factor)?))
+        let angles = positions
+            .unsqueeze(1)?
+            .broadcast_mul(&freqs.unsqueeze(0)?)?;
+        Ok((
+            (angles.cos()? * scaling_factor)?,
+            (angles.sin()? * scaling_factor)?,
+        ))
     }
 
     /// Run the DiT forward pass (single evaluation).
@@ -463,10 +471,11 @@ impl DiT {
             let attn_weights = crate::softmax_last_dim(&scores)?;
             let attn_out = attn_weights.matmul(&v)?;
 
-            let attn_out = attn_out
-                .transpose(1, 2)?
-                .contiguous()?
-                .reshape((b, total_len, self.config.num_heads * self.config.head_dim))?;
+            let attn_out = attn_out.transpose(1, 2)?.contiguous()?.reshape((
+                b,
+                total_len,
+                self.config.num_heads * self.config.head_dim,
+            ))?;
             let o_input = attn_out.clone();
             let mut attn_out = linear_no_bias(&attn_out, &layer.o_proj)?;
             if let Some(lora) = lora {
@@ -481,23 +490,35 @@ impl DiT {
 
             // Post-attention MLP
             let residual = hidden.clone();
-            hidden =
-                rms_norm(&hidden, &layer.post_attention_layernorm, self.config.rms_norm_eps)?;
+            hidden = rms_norm(
+                &hidden,
+                &layer.post_attention_layernorm,
+                self.config.rms_norm_eps,
+            )?;
 
             let mlp_input = hidden.clone();
             let mut gate = linear_no_bias(&hidden, &layer.gate_proj)?;
             let mut up = linear_no_bias(&hidden, &layer.up_proj)?;
             if let Some(lora) = lora {
-                let name = format!("{}.decoder.layers.{}.mlp.gate_proj", self.config.prefix, layer_idx);
+                let name = format!(
+                    "{}.decoder.layers.{}.mlp.gate_proj",
+                    self.config.prefix, layer_idx
+                );
                 gate = lora.apply(&name, &gate, &mlp_input)?;
-                let name = format!("{}.decoder.layers.{}.mlp.up_proj", self.config.prefix, layer_idx);
+                let name = format!(
+                    "{}.decoder.layers.{}.mlp.up_proj",
+                    self.config.prefix, layer_idx
+                );
                 up = lora.apply(&name, &up, &mlp_input)?;
             }
             let gate = silu(&gate)?;
             let down_input = (gate * up)?;
             let mut mlp_out = linear_no_bias(&down_input, &layer.down_proj)?;
             if let Some(lora) = lora {
-                let name = format!("{}.decoder.layers.{}.mlp.down_proj", self.config.prefix, layer_idx);
+                let name = format!(
+                    "{}.decoder.layers.{}.mlp.down_proj",
+                    self.config.prefix, layer_idx
+                );
                 mlp_out = lora.apply(&name, &mlp_out, &down_input)?;
             }
             hidden = (residual + (mlp_out * residual_scale)?)?;
@@ -520,9 +541,20 @@ impl DiT {
     /// mu: [B, N*hidden_dim] from LM output (N=1 or N=2 for VoxCPM2)
     /// cond: [B, latent_dim, T'] conditioning latent
     /// patch_size: number of output time frames
-    pub fn generate(&self, mu: &Tensor, cond: &Tensor, patch_size: usize, n_steps: usize) -> Result<Tensor> {
+    pub fn generate(
+        &self,
+        mu: &Tensor,
+        cond: &Tensor,
+        patch_size: usize,
+        n_steps: usize,
+    ) -> Result<Tensor> {
         let b = mu.dims()[0];
-        let noise = Tensor::randn(0f32, 1f32, (b, self.config.latent_dim, patch_size), &self.device)?;
+        let noise = Tensor::randn(
+            0f32,
+            1f32,
+            (b, self.config.latent_dim, patch_size),
+            &self.device,
+        )?;
         self.solve_euler_with_noise(mu, cond, &noise, n_steps, self.config.cfg_value as f32)
     }
 
@@ -579,7 +611,11 @@ impl DiT {
             let dt_val = t_val - t_span[step];
 
             let dphi_dt = if step <= zero_init_steps {
-                Tensor::zeros((b, self.config.latent_dim, patch_size), DType::F32, &self.device)?
+                Tensor::zeros(
+                    (b, self.config.latent_dim, patch_size),
+                    DType::F32,
+                    &self.device,
+                )?
             } else {
                 // Classifier-free guidance: double batch
                 let x_doubled = Tensor::cat(&[&x, &x], 0)?; // [2B, 64, T]
@@ -623,7 +659,7 @@ impl DiT {
                 // dot product per sample: sum(vc * vu, dim=-1)
                 let dot = (&vc_flat * &vu_flat)?.sum(D::Minus1)?; // [B]
                 let vu_sq = vu_flat.sqr()?.sum(D::Minus1)?; // [B]
-                // Avoid division by zero
+                                                            // Avoid division by zero
                 let eps = Tensor::new(&[1e-8f32], &self.device)?;
                 let vu_sq_safe = (vu_sq + eps.broadcast_as((b,))?)?;
                 let st_star = (dot / vu_sq_safe)?; // [B]

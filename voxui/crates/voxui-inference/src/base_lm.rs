@@ -4,31 +4,31 @@ use anyhow::{bail, Result};
 use candle_core::{DType, Device, Tensor, D};
 use candle_nn::ops::silu;
 
-use crate::manifest::BundleManifest;
+use crate::manifest::ModelConfig;
 use crate::model_loader::GgufModelLoader;
 
 /// Configuration for the base LM transformer.
 pub struct BaseLMConfig {
-    pub hidden_size: usize,      // 2048
-    pub num_layers: usize,       // 28
-    pub num_heads: usize,        // 16 (query heads)
-    pub num_kv_heads: usize,     // 2 (GQA)
-    pub head_dim: usize,         // 128
+    pub hidden_size: usize,       // 2048
+    pub num_layers: usize,        // 28
+    pub num_heads: usize,         // 16 (query heads)
+    pub num_kv_heads: usize,      // 2 (GQA)
+    pub head_dim: usize,          // 128
     pub intermediate_size: usize, // 6144
-    pub rms_norm_eps: f64,       // 1e-5
-    pub rope_theta: f64,         // 10000
-    pub rope_factors: Vec<f32>,  // LongRope factors (64 elements = head_dim/2)
+    pub rms_norm_eps: f64,        // 1e-5
+    pub rope_theta: f64,          // 10000
+    pub rope_factors: Vec<f32>,   // LongRope factors (64 elements = head_dim/2)
     pub use_mup: bool,
     pub scale_emb: f64,
     pub scale_depth: f64,
     pub original_max_position_embeddings: Option<usize>,
     pub rope_short_factors: Vec<f32>,
     pub rope_long_factors: Vec<f32>,
-    pub vocab_size: usize,       // 73448
-    pub max_position: usize,     // max sequence length for cache/rope precomputation
-    pub prefix: String,          // tensor name prefix: "base_lm" or "residual_lm"
-    pub no_rope: bool,           // skip RoPE (used by residual LM)
-    pub is_causal: bool,         // true for LMs, false for encoder
+    pub vocab_size: usize,   // 73448
+    pub max_position: usize, // max sequence length for cache/rope precomputation
+    pub prefix: String,      // tensor name prefix: "base_lm" or "residual_lm"
+    pub no_rope: bool,       // skip RoPE (used by residual LM)
+    pub is_causal: bool,     // true for LMs, false for encoder
 }
 
 impl Default for BaseLMConfig {
@@ -59,26 +59,40 @@ impl Default for BaseLMConfig {
 }
 
 impl BaseLMConfig {
-    pub fn from_manifest(manifest: &BundleManifest, component: &str) -> Result<Self> {
+    pub fn from_model_config(model: &ModelConfig, component: &str) -> Result<Self> {
         let cfg = match component {
-            "base_lm" | "residual_lm" => &manifest.lm_config,
-            "feat_encoder" => &manifest.encoder_config,
+            "base_lm" | "residual_lm" => &model.lm_config,
+            "feat_encoder" => &model.encoder_config,
             other => bail!("unsupported MiniCPM component `{other}`"),
         };
         let fallback_cfg = if component == "feat_encoder" {
-            Some(&manifest.lm_config)
+            Some(&model.lm_config)
         } else {
             None
         };
-        let hidden_size = get_usize_any(cfg, fallback_cfg, component, &["hidden_size", "hidden_dim"])?;
+        let hidden_size =
+            get_usize_any(cfg, fallback_cfg, component, &["hidden_size", "hidden_dim"])?;
         let num_layers = if component == "residual_lm" {
-            manifest
-                .residual_lm_num_layers
-                .unwrap_or(get_usize_any(cfg, fallback_cfg, component, &["num_hidden_layers", "num_layers"])?)
+            model.residual_lm_num_layers.unwrap_or(get_usize_any(
+                cfg,
+                fallback_cfg,
+                component,
+                &["num_hidden_layers", "num_layers"],
+            )?)
         } else {
-            get_usize_any(cfg, fallback_cfg, component, &["num_hidden_layers", "num_layers"])?
+            get_usize_any(
+                cfg,
+                fallback_cfg,
+                component,
+                &["num_hidden_layers", "num_layers"],
+            )?
         };
-        let num_heads = get_usize_any(cfg, fallback_cfg, component, &["num_attention_heads", "num_heads"])?;
+        let num_heads = get_usize_any(
+            cfg,
+            fallback_cfg,
+            component,
+            &["num_attention_heads", "num_heads"],
+        )?;
         let num_kv_heads = cfg
             .get("num_key_value_heads")
             .or_else(|| fallback_cfg.and_then(|v| v.get("num_key_value_heads")))
@@ -104,7 +118,12 @@ impl BaseLMConfig {
             num_heads,
             num_kv_heads,
             head_dim,
-            intermediate_size: get_usize_any(cfg, fallback_cfg, component, &["intermediate_size", "ffn_dim"])?,
+            intermediate_size: get_usize_any(
+                cfg,
+                fallback_cfg,
+                component,
+                &["intermediate_size", "ffn_dim"],
+            )?,
             rms_norm_eps: get_f64(cfg, fallback_cfg, "rms_norm_eps", 1e-5),
             rope_theta: get_f64(cfg, fallback_cfg, "rope_theta", 10000.0),
             rope_factors: rope_short_factors.clone(),
@@ -136,7 +155,7 @@ impl BaseLMConfig {
             } else {
                 component.to_string()
             },
-            no_rope: component == "residual_lm" && manifest.residual_lm_no_rope.unwrap_or(false),
+            no_rope: component == "residual_lm" && model.residual_lm_no_rope.unwrap_or(false),
             is_causal: component != "feat_encoder",
         })
     }
@@ -179,7 +198,11 @@ fn read_f32_array(value: &serde_json::Value, key: &str, len: usize) -> Vec<f32> 
     value
         .get(key)
         .and_then(|v| v.as_array())
-        .map(|arr| arr.iter().map(|v| v.as_f64().unwrap_or(1.0) as f32).collect())
+        .map(|arr| {
+            arr.iter()
+                .map(|v| v.as_f64().unwrap_or(1.0) as f32)
+                .collect()
+        })
         .filter(|arr: &Vec<f32>| arr.len() == len)
         .unwrap_or_else(|| vec![1.0; len])
 }
@@ -229,9 +252,9 @@ fn rms_norm(x: &Tensor, weight: &Tensor, eps: f64) -> Result<Tensor> {
     let x = x.to_dtype(DType::F32)?;
     let sq = x.sqr()?;
     let mean_sq = sq.mean_keepdim(D::Minus1)?;
-    let eps_t = mean_sq.zeros_like()?.broadcast_add(
-        &Tensor::new(&[eps as f32], mean_sq.device())?,
-    )?;
+    let eps_t = mean_sq
+        .zeros_like()?
+        .broadcast_add(&Tensor::new(&[eps as f32], mean_sq.device())?)?;
     let norm = (mean_sq + eps_t)?.sqrt()?.recip()?;
     let out = x.broadcast_mul(&norm)?;
     let weight = weight.to_dtype(DType::F32)?;
@@ -347,7 +370,11 @@ impl BaseLM {
         } else {
             &config.rope_factors
         };
-        assert_eq!(factors.len(), half_dim, "rope factors must have head_dim/2 elements");
+        assert_eq!(
+            factors.len(),
+            half_dim,
+            "rope factors must have head_dim/2 elements"
+        );
         let scaling_factor = config
             .original_max_position_embeddings
             .filter(|v| *v > 1)
@@ -361,9 +388,8 @@ impl BaseLM {
         // scaled_freq[i] = base_freq[i] / factor[i]
         let mut freqs = vec![0f32; half_dim];
         for i in 0..half_dim {
-            let base = 1.0
-                / (config.rope_theta as f32)
-                    .powf(2.0 * i as f32 / config.head_dim as f32);
+            let base =
+                1.0 / (config.rope_theta as f32).powf(2.0 * i as f32 / config.head_dim as f32);
             freqs[i] = base / factors[i];
         }
         let freqs = Tensor::new(freqs.as_slice(), device)?; // [half_dim]
@@ -373,7 +399,9 @@ impl BaseLM {
         let positions = Tensor::new(positions.as_slice(), device)?; // [max_pos]
 
         // outer product: [max_pos, half_dim]
-        let angles = positions.unsqueeze(1)?.broadcast_mul(&freqs.unsqueeze(0)?)?;
+        let angles = positions
+            .unsqueeze(1)?
+            .broadcast_mul(&freqs.unsqueeze(0)?)?;
 
         let cos_cache = (angles.cos()? * scaling_factor)?;
         let sin_cache = (angles.sin()? * scaling_factor)?;
@@ -396,8 +424,11 @@ impl BaseLM {
     /// Embed token IDs into hidden states [1, T, hidden_size].
     /// Only works for models with an embedding table (base_lm). Panics otherwise.
     pub fn embed(&self, token_ids: &[u32]) -> Result<Tensor> {
-        let embed = self.embed_tokens.as_ref()
-            .ok_or_else(|| anyhow::anyhow!("This model has no embed_tokens (residual_lm/encoder don't support embed)"))?;
+        let embed = self.embed_tokens.as_ref().ok_or_else(|| {
+            anyhow::anyhow!(
+                "This model has no embed_tokens (residual_lm/encoder don't support embed)"
+            )
+        })?;
         let seq_len = token_ids.len();
         let ids_tensor = Tensor::new(token_ids, &self.device)?;
         let hidden = embed.index_select(&ids_tensor, 0)?;
@@ -458,10 +489,20 @@ impl BaseLM {
                 .reshape((batch, seq_len, self.config.num_heads, self.config.head_dim))?
                 .transpose(1, 2)?; // [1, 16, T, 128]
             let k = k
-                .reshape((batch, seq_len, self.config.num_kv_heads, self.config.head_dim))?
+                .reshape((
+                    batch,
+                    seq_len,
+                    self.config.num_kv_heads,
+                    self.config.head_dim,
+                ))?
                 .transpose(1, 2)?; // [1, 2, T, 128]
             let v = v
-                .reshape((batch, seq_len, self.config.num_kv_heads, self.config.head_dim))?
+                .reshape((
+                    batch,
+                    seq_len,
+                    self.config.num_kv_heads,
+                    self.config.head_dim,
+                ))?
                 .transpose(1, 2)?; // [1, 2, T, 128]
 
             // Apply RoPE (unless disabled)
@@ -472,14 +513,14 @@ impl BaseLM {
             };
 
             // Update KV cache
-            let (k_full, v_full) = if use_cache && self.k_cache.len() > layer_idx && self.cache_len > 0 {
-                let k_full =
-                    Tensor::cat(&[&self.k_cache[layer_idx], &k], 2)?; // [1, 2, cache+T, 128]
-                let v_full = Tensor::cat(&[&self.v_cache[layer_idx], &v], 2)?;
-                (k_full, v_full)
-            } else {
-                (k.clone(), v.clone())
-            };
+            let (k_full, v_full) =
+                if use_cache && self.k_cache.len() > layer_idx && self.cache_len > 0 {
+                    let k_full = Tensor::cat(&[&self.k_cache[layer_idx], &k], 2)?; // [1, 2, cache+T, 128]
+                    let v_full = Tensor::cat(&[&self.v_cache[layer_idx], &v], 2)?;
+                    (k_full, v_full)
+                } else {
+                    (k.clone(), v.clone())
+                };
 
             // Store updated cache
             if use_cache {
@@ -492,7 +533,11 @@ impl BaseLM {
                 }
             }
 
-            let total_len = if use_cache { start_pos + seq_len } else { seq_len };
+            let total_len = if use_cache {
+                start_pos + seq_len
+            } else {
+                seq_len
+            };
 
             // GQA: expand KV heads
             let q = q.contiguous()?;
@@ -518,10 +563,11 @@ impl BaseLM {
             let attn_out = attn_weights.matmul(&v_exp)?; // [1, 16, T, 128]
 
             // Reshape back: [1, T, num_heads * head_dim]
-            let attn_out = attn_out
-                .transpose(1, 2)?
-                .contiguous()?
-                .reshape((batch, seq_len, self.config.num_heads * self.config.head_dim))?;
+            let attn_out = attn_out.transpose(1, 2)?.contiguous()?.reshape((
+                batch,
+                seq_len,
+                self.config.num_heads * self.config.head_dim,
+            ))?;
 
             // Output projection
             let attn_out = Self::linear(&attn_out, &layer.o_proj)?;
@@ -529,8 +575,11 @@ impl BaseLM {
 
             // Post-attention norm + MLP
             let residual = hidden.clone();
-            hidden =
-                rms_norm(&hidden, &layer.post_attention_layernorm, self.config.rms_norm_eps)?;
+            hidden = rms_norm(
+                &hidden,
+                &layer.post_attention_layernorm,
+                self.config.rms_norm_eps,
+            )?;
 
             let gate = silu(&Self::linear(&hidden, &layer.gate_proj)?)?;
             let up = Self::linear(&hidden, &layer.up_proj)?;
@@ -549,7 +598,11 @@ impl BaseLM {
 
     /// Run forward pass with pre-computed embeddings and optional LoRA adapter.
     /// Returns hidden_states [1, seq_len, hidden_size].
-    pub fn forward_embed_with_lora(&mut self, hidden: &Tensor, lora: Option<&crate::lora::LoraAdapter>) -> Result<Tensor> {
+    pub fn forward_embed_with_lora(
+        &mut self,
+        hidden: &Tensor,
+        lora: Option<&crate::lora::LoraAdapter>,
+    ) -> Result<Tensor> {
         let (batch, seq_len, _) = hidden.dims3()?;
         let mut hidden = hidden.clone();
 
@@ -578,11 +631,20 @@ impl BaseLM {
             let mut k = Self::linear(&hidden, &layer.k_proj)?;
             let mut v = Self::linear(&hidden, &layer.v_proj)?;
             if let Some(lora) = lora {
-                let name = format!("{}.layers.{}.self_attn.q_proj", self.config.prefix, layer_idx);
+                let name = format!(
+                    "{}.layers.{}.self_attn.q_proj",
+                    self.config.prefix, layer_idx
+                );
                 q = lora.apply(&name, &q, &q_input)?;
-                let name = format!("{}.layers.{}.self_attn.k_proj", self.config.prefix, layer_idx);
+                let name = format!(
+                    "{}.layers.{}.self_attn.k_proj",
+                    self.config.prefix, layer_idx
+                );
                 k = lora.apply(&name, &k, &q_input)?;
-                let name = format!("{}.layers.{}.self_attn.v_proj", self.config.prefix, layer_idx);
+                let name = format!(
+                    "{}.layers.{}.self_attn.v_proj",
+                    self.config.prefix, layer_idx
+                );
                 v = lora.apply(&name, &v, &q_input)?;
             }
 
@@ -590,10 +652,20 @@ impl BaseLM {
                 .reshape((batch, seq_len, self.config.num_heads, self.config.head_dim))?
                 .transpose(1, 2)?;
             let k = k
-                .reshape((batch, seq_len, self.config.num_kv_heads, self.config.head_dim))?
+                .reshape((
+                    batch,
+                    seq_len,
+                    self.config.num_kv_heads,
+                    self.config.head_dim,
+                ))?
                 .transpose(1, 2)?;
             let v = v
-                .reshape((batch, seq_len, self.config.num_kv_heads, self.config.head_dim))?
+                .reshape((
+                    batch,
+                    seq_len,
+                    self.config.num_kv_heads,
+                    self.config.head_dim,
+                ))?
                 .transpose(1, 2)?;
 
             let (q, k) = if self.config.no_rope {
@@ -602,13 +674,14 @@ impl BaseLM {
                 (apply_rope(&q, &cos, &sin)?, apply_rope(&k, &cos, &sin)?)
             };
 
-            let (k_full, v_full) = if use_cache && self.k_cache.len() > layer_idx && self.cache_len > 0 {
-                let k_full = Tensor::cat(&[&self.k_cache[layer_idx], &k], 2)?;
-                let v_full = Tensor::cat(&[&self.v_cache[layer_idx], &v], 2)?;
-                (k_full, v_full)
-            } else {
-                (k.clone(), v.clone())
-            };
+            let (k_full, v_full) =
+                if use_cache && self.k_cache.len() > layer_idx && self.cache_len > 0 {
+                    let k_full = Tensor::cat(&[&self.k_cache[layer_idx], &k], 2)?;
+                    let v_full = Tensor::cat(&[&self.v_cache[layer_idx], &v], 2)?;
+                    (k_full, v_full)
+                } else {
+                    (k.clone(), v.clone())
+                };
 
             if use_cache {
                 if self.k_cache.len() <= layer_idx {
@@ -620,7 +693,11 @@ impl BaseLM {
                 }
             }
 
-            let total_len = if use_cache { start_pos + seq_len } else { seq_len };
+            let total_len = if use_cache {
+                start_pos + seq_len
+            } else {
+                seq_len
+            };
 
             let q = q.contiguous()?;
             let k_exp = repeat_kv(&k_full, num_kv_groups)?.contiguous()?;
@@ -640,23 +717,31 @@ impl BaseLM {
             let attn_weights = crate::softmax_last_dim(&scores)?;
             let attn_out = attn_weights.matmul(&v_exp)?;
 
-            let attn_out = attn_out
-                .transpose(1, 2)?
-                .contiguous()?
-                .reshape((batch, seq_len, self.config.num_heads * self.config.head_dim))?;
+            let attn_out = attn_out.transpose(1, 2)?.contiguous()?.reshape((
+                batch,
+                seq_len,
+                self.config.num_heads * self.config.head_dim,
+            ))?;
 
             // O projection with LoRA
             let o_input = attn_out.clone();
             let mut attn_out = Self::linear(&attn_out, &layer.o_proj)?;
             if let Some(lora) = lora {
-                let name = format!("{}.layers.{}.self_attn.o_proj", self.config.prefix, layer_idx);
+                let name = format!(
+                    "{}.layers.{}.self_attn.o_proj",
+                    self.config.prefix, layer_idx
+                );
                 attn_out = lora.apply(&name, &attn_out, &o_input)?;
             }
             hidden = residual_add(&residual, &attn_out, residual_scale)?;
 
             // Post-attention norm + MLP with LoRA
             let residual = hidden.clone();
-            hidden = rms_norm(&hidden, &layer.post_attention_layernorm, self.config.rms_norm_eps)?;
+            hidden = rms_norm(
+                &hidden,
+                &layer.post_attention_layernorm,
+                self.config.rms_norm_eps,
+            )?;
 
             let mlp_input = hidden.clone();
             let mut gate = Self::linear(&hidden, &layer.gate_proj)?;

@@ -1,31 +1,8 @@
 use std::path::{Path, PathBuf};
 
 use candle_core::Device;
-use serde::Deserialize;
 use voxui_inference::audio_io::load_wav_mono_resampled;
-use voxui_inference::{AudioVAE, AudioVaeManifest, GgufModelLoader};
-
-#[derive(Deserialize)]
-struct TestComponents {
-    audio_vae: String,
-}
-
-#[derive(Deserialize)]
-struct TestManifest {
-    audio_vae: AudioVaeManifest,
-    components: TestComponents,
-}
-
-impl TestManifest {
-    fn load(model_dir: &Path) -> Self {
-        let text = std::fs::read_to_string(model_dir.join("manifest.json")).unwrap();
-        serde_json::from_str(&text).unwrap()
-    }
-
-    fn audio_vae_path(&self, model_dir: &Path) -> PathBuf {
-        model_dir.join(&self.components.audio_vae)
-    }
-}
+use voxui_inference::{AudioVAE, GgufModelLoader, ModelConfig, ModelVariant};
 
 fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -79,7 +56,7 @@ fn audiovae_encode_matches_python_trace() {
 
 fn load_voxcpm2_vae(root: &Path) -> AudioVAE {
     let model_dir = root.join("models/voxcpm2-fp16");
-    let manifest = TestManifest::load(&model_dir);
-    let loader = GgufModelLoader::new(&manifest.audio_vae_path(&model_dir), Device::Cpu).unwrap();
-    AudioVAE::load_from_manifest(&loader, &manifest.audio_vae).unwrap()
+    let loader = GgufModelLoader::from_model_dir(&model_dir, Device::Cpu).unwrap();
+    let config = ModelConfig::load(&model_dir, ModelVariant::VoxCpm2).unwrap();
+    AudioVAE::load_from_config(&loader, &config.audio_vae).unwrap()
 }

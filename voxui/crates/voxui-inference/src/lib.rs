@@ -1,7 +1,7 @@
 //! Inference engine for VoxUI.
 
-pub mod audiovae;
 pub mod audio_io;
+pub mod audiovae;
 pub mod base_lm;
 pub mod dit;
 pub mod encoder;
@@ -12,8 +12,8 @@ mod manifest;
 pub mod model_loader;
 pub mod request;
 pub mod residual_lm;
-pub mod trace;
 pub mod tokenizer;
+pub mod trace;
 
 pub use audiovae::AudioVAE;
 pub use base_lm::{BaseLM, BaseLMConfig};
@@ -21,7 +21,6 @@ pub use dit::DiT;
 pub use encoder::LocalEncoder;
 pub use engine::VoxCPMEngine;
 pub use lora::LoraAdapter;
-pub(crate) use manifest::BundleManifest;
 pub use manifest::{AudioVaeManifest, ModelConfig, ModelVariant, SpecialTokens};
 pub use model_loader::GgufModelLoader;
 pub use request::SynthesisRequest;

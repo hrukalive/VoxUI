@@ -14,7 +14,7 @@ use crate::dit::DiT;
 use crate::encoder::LocalEncoder;
 use crate::fsq::FSQLayer;
 use crate::lora::LoraAdapter;
-use crate::manifest::{BundleManifest, ModelVariant};
+use crate::manifest::{ModelConfig, ModelVariant};
 use crate::model_loader::GgufModelLoader;
 use crate::request::SynthesisRequest;
 use crate::tokenizer::VoxTokenizer;
@@ -67,7 +67,7 @@ struct GenerationOutput {
 }
 
 pub struct VoxCPMEngine {
-    manifest: BundleManifest,
+    manifest: ModelConfig,
     tokenizer: VoxTokenizer,
     base_lm: BaseLM,
     residual_lm: BaseLM,
@@ -94,7 +94,10 @@ impl VoxCPMEngine {
             model_dir.display()
         );
 
-        let manifest = BundleManifest::load(model_dir)?;
+        let base_loader = GgufModelLoader::from_model_dir(model_dir, device.clone())?;
+        let variant = read_variant_from_loader(&base_loader)?;
+        let manifest = ModelConfig::load(model_dir, variant)?;
+        validate_base_metadata(&base_loader, &manifest)?;
         let tokenizer = VoxTokenizer::from_dir(model_dir)
             .with_context(|| format!("load tokenizer from {}", model_dir.display()))?;
         log::debug!(
@@ -104,88 +107,44 @@ impl VoxCPMEngine {
             manifest.patch_size
         );
 
-        let base_lm_path = manifest.component_path(model_dir, "base_lm")?;
-        let residual_lm_path = manifest.component_path(model_dir, "residual_lm")?;
-        let feat_encoder_path = manifest.component_path(model_dir, "feat_encoder")?;
-        let feat_decoder_path = manifest.component_path(model_dir, "feat_decoder")?;
-        let audio_vae_path = manifest.component_path(model_dir, "audio_vae")?;
-        let projections_path = manifest.component_path(model_dir, "projections")?;
-        let component_paths = [
-            ("base_lm", &base_lm_path),
-            ("residual_lm", &residual_lm_path),
-            ("feat_encoder", &feat_encoder_path),
-            ("feat_decoder", &feat_decoder_path),
-            ("audio_vae", &audio_vae_path),
-            ("projections", &projections_path),
-        ];
-        for (name, path) in &component_paths {
-            if !path.exists() {
-                bail!("missing VoxCPM component file {name} at {}", path.display());
-            }
-        }
-
-        log::debug!(
-            "VoxCPMEngine::load component start name=base_lm path={}",
-            base_lm_path.display()
-        );
-        let base_lm_loader = GgufModelLoader::new(&base_lm_path, device.clone())?;
-        let base_lm_config = BaseLMConfig::from_manifest(&manifest, "base_lm")?;
-        let base_lm = BaseLM::load(&base_lm_loader, base_lm_config, &device)?;
+        log::debug!("VoxCPMEngine::load component start name=base_lm");
+        let base_lm_config = BaseLMConfig::from_model_config(&manifest, "base_lm")?;
+        let base_lm = BaseLM::load(&base_loader, base_lm_config, &device)?;
         log::debug!("VoxCPMEngine::load component done name=base_lm");
 
-        log::debug!(
-            "VoxCPMEngine::load component start name=residual_lm path={}",
-            residual_lm_path.display()
-        );
-        let residual_lm_loader = GgufModelLoader::new(&residual_lm_path, device.clone())?;
-        let residual_lm_config = BaseLMConfig::from_manifest(&manifest, "residual_lm")?;
-        let residual_lm = BaseLM::load(&residual_lm_loader, residual_lm_config, &device)?;
+        log::debug!("VoxCPMEngine::load component start name=residual_lm");
+        let residual_lm_config = BaseLMConfig::from_model_config(&manifest, "residual_lm")?;
+        let residual_lm = BaseLM::load(&base_loader, residual_lm_config, &device)?;
         log::debug!("VoxCPMEngine::load component done name=residual_lm");
 
-        log::debug!(
-            "VoxCPMEngine::load component start name=feat_encoder path={}",
-            feat_encoder_path.display()
-        );
-        let encoder_loader = GgufModelLoader::new(&feat_encoder_path, device.clone())?;
-        let encoder = LocalEncoder::load_from_manifest(&encoder_loader, &manifest)?;
+        log::debug!("VoxCPMEngine::load component start name=feat_encoder");
+        let encoder = LocalEncoder::load_from_config(&base_loader, &manifest)?;
         log::debug!("VoxCPMEngine::load component done name=feat_encoder");
 
-        log::debug!(
-            "VoxCPMEngine::load component start name=feat_decoder path={}",
-            feat_decoder_path.display()
-        );
-        let dit_loader = GgufModelLoader::new(&feat_decoder_path, device.clone())?;
-        let dit = DiT::load_from_manifest(&dit_loader, &manifest)?;
+        log::debug!("VoxCPMEngine::load component start name=feat_decoder");
+        let dit = DiT::load_from_config(&base_loader, &manifest)?;
         log::debug!("VoxCPMEngine::load component done name=feat_decoder");
 
-        log::debug!(
-            "VoxCPMEngine::load component start name=audio_vae path={}",
-            audio_vae_path.display()
-        );
-        let vae_loader = GgufModelLoader::new(&audio_vae_path, device.clone())?;
-        let vae = AudioVAE::load_from_manifest(&vae_loader, &manifest.audio_vae)?;
+        log::debug!("VoxCPMEngine::load component start name=audio_vae");
+        let vae = AudioVAE::load_from_config(&base_loader, &manifest.audio_vae)?;
         log::debug!("VoxCPMEngine::load component done name=audio_vae");
 
-        log::debug!(
-            "VoxCPMEngine::load component start name=projections path={}",
-            projections_path.display()
-        );
-        let proj_loader = GgufModelLoader::new(&projections_path, device.clone())?;
+        log::debug!("VoxCPMEngine::load component start name=projections");
         let fsq = FSQLayer::load(
-            &proj_loader,
+            &base_loader,
             manifest.scalar_quantization_latent_dim,
             manifest.scalar_quantization_scale as f64,
         )?;
-        let lm_to_dit_proj = load_projection(&proj_loader, "lm_to_dit_proj")?;
-        let res_to_dit_proj = load_projection(&proj_loader, "res_to_dit_proj")?;
-        let enc_to_lm_proj = load_projection(&proj_loader, "enc_to_lm_proj")?;
-        let fusion_concat_proj = if proj_loader.has_tensor("fusion_concat_proj.weight") {
-            Some(load_projection(&proj_loader, "fusion_concat_proj")?)
+        let lm_to_dit_proj = load_projection(&base_loader, "lm_to_dit_proj")?;
+        let res_to_dit_proj = load_projection(&base_loader, "res_to_dit_proj")?;
+        let enc_to_lm_proj = load_projection(&base_loader, "enc_to_lm_proj")?;
+        let fusion_concat_proj = if base_loader.has_tensor("fusion_concat_proj.weight") {
+            Some(load_projection(&base_loader, "fusion_concat_proj")?)
         } else {
             None
         };
-        let stop_proj = load_projection(&proj_loader, "stop_proj")?;
-        let stop_head = load_projection(&proj_loader, "stop_head")?;
+        let stop_proj = load_projection(&base_loader, "stop_proj")?;
+        let stop_head = load_projection(&base_loader, "stop_head")?;
         log::debug!("VoxCPMEngine::load component done name=projections");
 
         let audio_chunk_size = product_or_manifest(
@@ -886,6 +845,44 @@ fn bounded_max_len(request: &SynthesisRequest, target_text_token_count: usize) -
     let ratio_limit =
         (target_text_token_count as f32 * request.retry_badcase_ratio_threshold + 10.0) as usize;
     request.max_len.min(ratio_limit)
+}
+
+fn read_variant_from_loader(loader: &GgufModelLoader) -> Result<ModelVariant> {
+    let value = loader
+        .metadata()
+        .get("voxcpm.variant")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow::anyhow!("model.gguf missing voxcpm.variant metadata"))?;
+    match value {
+        "0.5" => Ok(ModelVariant::VoxCpm05),
+        "1.5" => Ok(ModelVariant::VoxCpm15),
+        "2.0" => Ok(ModelVariant::VoxCpm2),
+        other => anyhow::bail!("unsupported voxcpm.variant `{other}`"),
+    }
+}
+
+fn validate_base_metadata(loader: &GgufModelLoader, model: &ModelConfig) -> Result<()> {
+    let kind = loader
+        .metadata()
+        .get("voxcpm.kind")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    if kind != "base" {
+        anyhow::bail!("model.gguf voxcpm.kind must be `base`, got `{kind}`");
+    }
+    let architecture = loader
+        .metadata()
+        .get("voxcpm.architecture")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    if architecture != model.architecture {
+        anyhow::bail!(
+            "model.gguf architecture `{}` does not match config `{}`",
+            architecture,
+            model.architecture
+        );
+    }
+    Ok(())
 }
 
 fn latent_to_patches(latent: &Tensor, patch_size: usize) -> Result<Tensor> {

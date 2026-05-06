@@ -5,7 +5,7 @@ use anyhow::{bail, Context, Result};
 use candle_core::{DType, Device, Tensor};
 use serde::Deserialize;
 
-use crate::manifest::{BundleManifest, ModelVariant};
+use crate::manifest::{ModelConfig, ModelVariant};
 use crate::model_loader::GgufModelLoader;
 
 pub struct LoraAdapter {
@@ -66,7 +66,7 @@ impl LoraAdapter {
     pub fn load_from_dir_for_model(
         dir: &Path,
         device: &Device,
-        model: &BundleManifest,
+        model: &ModelConfig,
     ) -> Result<Self> {
         Self::load_from_dir_inner(dir, device, Some(model))
     }
@@ -102,7 +102,7 @@ impl LoraAdapter {
     fn load_from_dir_inner(
         dir: &Path,
         device: &Device,
-        model: Option<&BundleManifest>,
+        model: Option<&ModelConfig>,
     ) -> Result<Self> {
         let manifest_path = dir.join("lora_manifest.json");
         if manifest_path.exists() {
@@ -143,10 +143,18 @@ impl LoraAdapter {
                     .unwrap_or(false);
             if is_lora_gguf {
                 let loader = GgufModelLoader::new(&path, device.clone())?;
-                if let Some(rank) = loader.metadata().get("voxcpm.lora.rank").and_then(|v| v.as_u32()) {
+                if let Some(rank) = loader
+                    .metadata()
+                    .get("voxcpm.lora.rank")
+                    .and_then(|v| v.as_u32())
+                {
                     adapter.rank = rank as usize;
                 }
-                if let Some(alpha) = loader.metadata().get("voxcpm.lora.alpha").and_then(|v| v.as_f32()) {
+                if let Some(alpha) = loader
+                    .metadata()
+                    .get("voxcpm.lora.alpha")
+                    .and_then(|v| v.as_f32())
+                {
                     adapter.alpha = alpha;
                 }
                 adapter.load_component(&loader, None)?;
@@ -208,7 +216,7 @@ impl LoraAdapter {
 }
 
 impl LoraManifest {
-    fn validate(&self, model: Option<&BundleManifest>) -> Result<()> {
+    fn validate(&self, model: Option<&ModelConfig>) -> Result<()> {
         if self.schema_version != 1 {
             bail!("unsupported LoRA manifest schema {}", self.schema_version);
         }
@@ -227,7 +235,11 @@ impl LoraManifest {
                 );
             }
             if self.variant != model.variant {
-                bail!("LoRA variant {:?} does not match model {:?}", self.variant, model.variant);
+                bail!(
+                    "LoRA variant {:?} does not match model {:?}",
+                    self.variant,
+                    model.variant
+                );
             }
         }
         Ok(())
@@ -245,7 +257,11 @@ impl LoraTargetModules {
         if self.projections.is_empty() {
             return true;
         }
-        let allowed = self.projections.iter().map(String::as_str).collect::<HashSet<_>>();
+        let allowed = self
+            .projections
+            .iter()
+            .map(String::as_str)
+            .collect::<HashSet<_>>();
         allowed.contains(base)
     }
 }

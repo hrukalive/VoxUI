@@ -1,7 +1,6 @@
 //! Manifest types for native VoxCPM model bundles.
 
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use anyhow::{bail, Context, Result};
 use serde::Deserialize;
@@ -199,106 +198,4 @@ fn validate_config_architecture(architecture: &str, variant: ModelVariant) -> Re
         }
     }
     Ok(())
-}
-
-#[derive(Debug, Clone, Deserialize)]
-// Legacy component manifest retained until engine/component loading moves to ModelConfig.
-pub(crate) struct ComponentFiles {
-    pub(crate) base_lm: String,
-    pub(crate) residual_lm: String,
-    pub(crate) feat_encoder: String,
-    pub(crate) feat_decoder: String,
-    pub(crate) audio_vae: String,
-    pub(crate) projections: String,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-// Legacy component manifest retained until engine/component loading moves to ModelConfig.
-pub(crate) struct BundleManifest {
-    pub(crate) schema_version: u32,
-    pub(crate) architecture: String,
-    pub(crate) variant: ModelVariant,
-    #[serde(default)]
-    pub(crate) source_model_dir: Option<String>,
-    #[serde(default)]
-    pub(crate) source_weight_format: Option<String>,
-    pub(crate) special_tokens: SpecialTokens,
-    pub(crate) patch_size: usize,
-    pub(crate) feat_dim: usize,
-    pub(crate) scalar_quantization_latent_dim: usize,
-    pub(crate) scalar_quantization_scale: f32,
-    pub(crate) audio_vae: AudioVaeManifest,
-    pub(crate) components: ComponentFiles,
-    #[serde(default)]
-    pub(crate) lm_config: serde_json::Value,
-    #[serde(default)]
-    pub(crate) encoder_config: serde_json::Value,
-    #[serde(default)]
-    pub(crate) dit_config: serde_json::Value,
-    #[serde(default)]
-    pub(crate) residual_lm_num_layers: Option<usize>,
-    #[serde(default)]
-    pub(crate) residual_lm_no_rope: Option<bool>,
-    #[serde(default)]
-    pub(crate) quantization: HashMap<String, String>,
-}
-
-impl BundleManifest {
-    pub(crate) fn load(model_dir: &Path) -> Result<Self> {
-        let manifest_path = model_dir.join("manifest.json");
-        let text = std::fs::read_to_string(&manifest_path)
-            .with_context(|| format!("read {}", manifest_path.display()))?;
-        let manifest: Self = serde_json::from_str(&text)
-            .with_context(|| format!("parse {}", manifest_path.display()))?;
-        manifest.validate()?;
-        Ok(manifest)
-    }
-
-    pub(crate) fn output_sample_rate(&self) -> u32 {
-        self.audio_vae
-            .out_sample_rate
-            .unwrap_or(self.audio_vae.sample_rate)
-    }
-
-    pub(crate) fn component_path(&self, model_dir: &Path, component: &str) -> Result<PathBuf> {
-        let file = match component {
-            "base_lm" => &self.components.base_lm,
-            "residual_lm" => &self.components.residual_lm,
-            "feat_encoder" => &self.components.feat_encoder,
-            "feat_decoder" => &self.components.feat_decoder,
-            "audio_vae" => &self.components.audio_vae,
-            "projections" => &self.components.projections,
-            other => bail!("unknown component `{other}`"),
-        };
-        Ok(model_dir.join(file))
-    }
-
-    fn validate(&self) -> Result<()> {
-        if self.schema_version != 1 {
-            bail!("unsupported VoxCPM bundle schema {}", self.schema_version);
-        }
-        if self.special_tokens.audio_start != 101 || self.special_tokens.audio_end != 102 {
-            bail!("unexpected audio special tokens");
-        }
-        match self.variant {
-            ModelVariant::VoxCpm2 => {
-                if self.architecture != "voxcpm2" {
-                    bail!("VoxCPM2 variant requires voxcpm2 architecture");
-                }
-                if self.special_tokens.ref_audio_start != Some(103)
-                    || self.special_tokens.ref_audio_end != Some(104)
-                {
-                    bail!("VoxCPM2 manifest must include ref_audio tokens 103 and 104");
-                }
-            }
-            _ => {
-                if self.special_tokens.ref_audio_start.is_some()
-                    || self.special_tokens.ref_audio_end.is_some()
-                {
-                    bail!("ref_audio tokens are only valid for VoxCPM2");
-                }
-            }
-        }
-        Ok(())
-    }
 }

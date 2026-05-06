@@ -96,7 +96,11 @@ fn weight_norm(g: &Tensor, v: &Tensor) -> Result<Tensor> {
 }
 
 /// Load a weight-normed conv1d from the GGUF file.
-fn load_conv(loader: &GgufModelLoader, prefix: &str, requested_groups: usize) -> Result<Conv1dParams> {
+fn load_conv(
+    loader: &GgufModelLoader,
+    prefix: &str,
+    requested_groups: usize,
+) -> Result<Conv1dParams> {
     let g = loader.load_tensor(&format!("{prefix}.weight_g"))?;
     let v = loader.load_tensor(&format!("{prefix}.weight_v"))?;
     let bias = loader.load_tensor(&format!("{prefix}.bias"))?;
@@ -106,7 +110,11 @@ fn load_conv(loader: &GgufModelLoader, prefix: &str, requested_groups: usize) ->
         1
     };
     let weight = weight_norm(&g, &v)?;
-    Ok(Conv1dParams { weight, bias, groups })
+    Ok(Conv1dParams {
+        weight,
+        bias,
+        groups,
+    })
 }
 
 /// Snake activation: x + (1/alpha) * sin(alpha * x)^2.
@@ -168,17 +176,18 @@ fn causal_conv_transpose1d(x: &Tensor, params: &Conv1dParams, stride: usize) -> 
 // ---------------------------------------------------------------------------
 
 impl ResidualUnit {
-    fn load(
-        loader: &GgufModelLoader,
-        prefix: &str,
-        dilation: usize,
-        dim: usize,
-    ) -> Result<Self> {
+    fn load(loader: &GgufModelLoader, prefix: &str, dilation: usize, dim: usize) -> Result<Self> {
         let alpha1 = loader.load_tensor(&format!("{prefix}.block.0.alpha"))?;
         let dw_conv = load_conv(loader, &format!("{prefix}.block.1"), dim)?; // groups=dim
         let alpha2 = loader.load_tensor(&format!("{prefix}.block.2.alpha"))?;
         let pw_conv = load_conv(loader, &format!("{prefix}.block.3"), 1)?;
-        Ok(Self { alpha1, dw_conv, alpha2, pw_conv, dilation })
+        Ok(Self {
+            alpha1,
+            dw_conv,
+            alpha2,
+            pw_conv,
+            dilation,
+        })
     }
 
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
@@ -194,7 +203,7 @@ impl ResidualUnit {
 impl DecoderBlock {
     fn load(
         loader: &GgufModelLoader,
-        block_idx: usize,  // 0..N, maps to model.{2..2+N-1}
+        block_idx: usize, // 0..N, maps to model.{2..2+N-1}
         _in_dim: usize,
         out_dim: usize,
         stride: usize,
@@ -210,7 +219,10 @@ impl DecoderBlock {
             if loader.has_tensor(&scale_name) {
                 let scale_embed = loader.load_tensor(&scale_name)?;
                 let bias_embed = loader.load_tensor(&format!("{sr_prefix}.bias_embed.weight"))?;
-                (Some(scale_embed.get(sr_idx)?), Some(bias_embed.get(sr_idx)?))
+                (
+                    Some(scale_embed.get(sr_idx)?),
+                    Some(bias_embed.get(sr_idx)?),
+                )
             } else {
                 (None, None)
             }
@@ -229,7 +241,14 @@ impl DecoderBlock {
             res_units.push(ResidualUnit::load(loader, &r_prefix, dil, out_dim)?);
         }
 
-        Ok(Self { scale, bias, alpha, trans_conv, stride, res_units })
+        Ok(Self {
+            scale,
+            bias,
+            alpha,
+            trans_conv,
+            stride,
+            res_units,
+        })
     }
 
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
@@ -273,7 +292,12 @@ impl EncoderBlock {
         }
         let alpha = loader.load_tensor(&format!("{prefix}.block.3.alpha"))?;
         let down_conv = load_conv(loader, &format!("{prefix}.block.4"), groups)?;
-        Ok(Self { res_units, alpha, down_conv, stride })
+        Ok(Self {
+            res_units,
+            alpha,
+            down_conv,
+            stride,
+        })
     }
 
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
@@ -304,14 +328,22 @@ impl CausalEncoder {
             hop_length *= stride;
         }
         let fc_mu = load_conv(loader, "audio_vae.encoder.fc_mu", 1)?;
-        Ok(Self { first_conv, blocks, fc_mu, hop_length })
+        Ok(Self {
+            first_conv,
+            blocks,
+            fc_mu,
+            hop_length,
+        })
     }
 
     fn encode(&self, audio: &Tensor) -> Result<Tensor> {
         let mut x = match audio.dims().len() {
             2 => audio.unsqueeze(1)?,
             3 => audio.clone(),
-            _ => anyhow::bail!("audio tensor must be [B, T] or [B, 1, T], got {:?}", audio.dims()),
+            _ => anyhow::bail!(
+                "audio tensor must be [B, T] or [B, 1, T], got {:?}",
+                audio.dims()
+            ),
         };
         let len = x.dim(2)?;
         let right_pad = len.div_ceil(self.hop_length) * self.hop_length - len;
@@ -327,13 +359,16 @@ impl CausalEncoder {
 }
 
 impl AudioVAE {
-    /// Load the AudioVAE decoder using bundle manifest metadata.
-    pub fn load_from_manifest(loader: &GgufModelLoader, manifest: &AudioVaeManifest) -> Result<Self> {
-        let decoder_dim = manifest.decoder_dim.or_else(|| {
-            loader
-                .tensor_info("audio_vae.decoder.model.1.weight_v")
-                .map(|info| info.shape[0] as usize)
-        }).unwrap_or(2048);
+    /// Load the AudioVAE decoder using model config metadata.
+    pub fn load_from_config(loader: &GgufModelLoader, manifest: &AudioVaeManifest) -> Result<Self> {
+        let decoder_dim = manifest
+            .decoder_dim
+            .or_else(|| {
+                loader
+                    .tensor_info("audio_vae.decoder.model.1.weight_v")
+                    .map(|info| info.shape[0] as usize)
+            })
+            .unwrap_or(2048);
         let encoder = if loader.has_tensor("audio_vae.encoder.block.0.weight_v") {
             Some(CausalEncoder::load(loader, manifest)?)
         } else {
@@ -346,7 +381,8 @@ impl AudioVAE {
                 decoder_dim,
                 decoder_rates: manifest.decoder_rates.clone(),
                 sample_rate: manifest.out_sample_rate.unwrap_or(manifest.sample_rate),
-                sr_idx: if loader.has_tensor("audio_vae.decoder.sr_cond_model.2.scale_embed.weight") {
+                sr_idx: if loader.has_tensor("audio_vae.decoder.sr_cond_model.2.scale_embed.weight")
+                {
                     Some(3)
                 } else {
                     None
@@ -389,7 +425,11 @@ impl AudioVAE {
                 }
             }
         }
-        if max_block < 2 { 0 } else { max_block - 2 + 1 }
+        if max_block < 2 {
+            0
+        } else {
+            max_block - 2 + 1
+        }
     }
 
     /// Infer decoder_rates from transposed conv kernel sizes.
@@ -416,28 +456,48 @@ impl AudioVAE {
 
         // Detect block count and rates dynamically
         let num_blocks = Self::count_decoder_blocks(loader);
-        let decoder_rates = if !config.decoder_rates.is_empty() && config.decoder_rates.len() == num_blocks {
-            config.decoder_rates
-        } else {
-            Self::infer_decoder_rates(loader, num_blocks)?
-        };
+        let decoder_rates =
+            if !config.decoder_rates.is_empty() && config.decoder_rates.len() == num_blocks {
+                config.decoder_rates
+            } else {
+                Self::infer_decoder_rates(loader, num_blocks)?
+            };
 
         // Decoder blocks
         let mut blocks = Vec::new();
         let mut dim = config.decoder_dim;
         for (i, &rate) in decoder_rates.iter().enumerate() {
             let out_dim = dim / 2;
-            blocks.push(DecoderBlock::load(loader, i, dim, out_dim, rate, config.sr_idx)?);
+            blocks.push(DecoderBlock::load(
+                loader,
+                i,
+                dim,
+                out_dim,
+                rate,
+                config.sr_idx,
+            )?);
             dim = out_dim;
         }
 
         // Final snake + conv: indices are 2+num_blocks and 2+num_blocks+1
         let final_snake_idx = 2 + num_blocks;
         let final_conv_idx = final_snake_idx + 1;
-        let final_alpha = loader.load_tensor(&format!("audio_vae.decoder.model.{final_snake_idx}.alpha"))?;
-        let final_conv = load_conv(loader, &format!("audio_vae.decoder.model.{final_conv_idx}"), 1)?;
+        let final_alpha =
+            loader.load_tensor(&format!("audio_vae.decoder.model.{final_snake_idx}.alpha"))?;
+        let final_conv = load_conv(
+            loader,
+            &format!("audio_vae.decoder.model.{final_conv_idx}"),
+            1,
+        )?;
 
-        Ok(Self { encoder: None, dw_conv, pw_conv, blocks, final_alpha, final_conv })
+        Ok(Self {
+            encoder: None,
+            dw_conv,
+            pw_conv,
+            blocks,
+            final_alpha,
+            final_conv,
+        })
     }
 
     /// Decode latent to PCM audio.

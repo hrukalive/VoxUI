@@ -9,19 +9,16 @@ use crate::model_loader::GgufModelLoader;
 
 /// The local encoder: in_proj + special_token + non-causal transformer.
 pub struct LocalEncoder {
-    in_proj: Tensor,        // [enc_hidden, 64]
-    in_proj_bias: Tensor,   // [enc_hidden]
-    special_token: Tensor,  // [1, 1, enc_hidden]
+    in_proj: Tensor,       // [enc_hidden, 64]
+    in_proj_bias: Tensor,  // [enc_hidden]
+    special_token: Tensor, // [1, 1, enc_hidden]
     transformer: BaseLM,
     hidden_size: usize,
 }
 
 impl LocalEncoder {
-    pub fn load_from_manifest(
-        loader: &GgufModelLoader,
-        manifest: &crate::BundleManifest,
-    ) -> Result<Self> {
-        let config = BaseLMConfig::from_manifest(manifest, "feat_encoder")?;
+    pub fn load_from_config(loader: &GgufModelLoader, model: &crate::ModelConfig) -> Result<Self> {
+        let config = BaseLMConfig::from_model_config(model, "feat_encoder")?;
         Self::load(loader, config, loader.device())
     }
 
@@ -34,7 +31,13 @@ impl LocalEncoder {
         let hidden = config.hidden_size;
         let special_token = special_token.reshape(&[1, 1, hidden])?;
         let transformer = BaseLM::load(loader, config, device)?;
-        Ok(Self { in_proj, in_proj_bias, special_token, transformer, hidden_size: hidden })
+        Ok(Self {
+            in_proj,
+            in_proj_bias,
+            special_token,
+            transformer,
+            hidden_size: hidden,
+        })
     }
 
     /// Encode latent patches `[B, T, P, D]` into `[B, T, hidden]`.
@@ -45,7 +48,9 @@ impl LocalEncoder {
         let projected = crate::linear(&flat, &self.in_proj)?;
         let bias = self.in_proj_bias.reshape((1, 1, self.hidden_size))?;
         let projected = projected.broadcast_add(&bias)?;
-        let cls = self.special_token.broadcast_as((b * t, 1, self.hidden_size))?;
+        let cls = self
+            .special_token
+            .broadcast_as((b * t, 1, self.hidden_size))?;
         let cls = cls.contiguous()?;
         let input = Tensor::cat(&[&cls, &projected], 1)?;
         self.transformer.reset_cache();
