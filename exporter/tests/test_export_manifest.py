@@ -1,5 +1,7 @@
 import unittest
 import json
+import sys
+import types
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
@@ -8,6 +10,7 @@ import numpy as np
 
 from exporter.export_voxcpm import (
     BASE_MODEL_FILE,
+    export_lora,
     partition_weights,
     resolve_quant_args,
     validate_required_tensors,
@@ -33,6 +36,12 @@ class RecordingWriter:
     def write(self, path):
         self.path = Path(path)
         self.path.write_bytes(b"recorded gguf")
+
+
+def fake_safetensors_torch(weights):
+    module = types.ModuleType("safetensors.torch")
+    module.load_file = unittest.mock.Mock(return_value=weights)
+    return {"safetensors.torch": module}
 
 
 class ExportManifestTests(unittest.TestCase):
@@ -279,6 +288,94 @@ class ExportManifestTests(unittest.TestCase):
             self.assertTrue((output_dir / "notes.txt").exists())
             self.assertTrue((output_dir / "lora_manifest.json").exists())
             self.assertTrue((output_dir / "lora_base_lm.gguf").exists())
+
+    def test_lora_export_writes_single_direct_gguf_without_manifest(self):
+        config = {"architecture": "voxcpm2"}
+        lora_config = {
+            "lora_config": {
+                "r": 8,
+                "alpha": 16,
+                "enable_lm": True,
+                "enable_dit": True,
+                "enable_proj": False,
+                "target_modules_lm": ["q_proj"],
+                "target_modules_dit": ["linear"],
+                "target_proj_modules": [],
+            }
+        }
+        lora_weights = {
+            "feat_decoder.blocks.0.linear.lora_B.weight": np.zeros((2, 8), dtype=np.float32),
+            "base_lm.layers.0.self_attn.q_proj.lora_B.weight": np.zeros((2, 8), dtype=np.float32),
+            "feat_decoder.blocks.0.linear.lora_A.weight": np.zeros((8, 2), dtype=np.float32),
+            "base_lm.layers.0.self_attn.q_proj.lora_A.weight": np.zeros((8, 2), dtype=np.float32),
+        }
+
+        with TemporaryDirectory() as lora_tmp, TemporaryDirectory() as output_tmp, TemporaryDirectory() as model_tmp:
+            model_dir = Path(model_tmp)
+            output_dir = Path(output_tmp)
+            lora_dir = Path(lora_tmp) / "ft_unit"
+            lora_dir.mkdir()
+            config_path = model_dir / "config.json"
+            config_path.write_text(json.dumps(config), encoding="utf-8")
+            (lora_dir / "lora_config.json").write_text(json.dumps(lora_config), encoding="utf-8")
+            (lora_dir / "lora_weights.safetensors").write_bytes(b"placeholder")
+
+            RecordingWriter.instances = []
+            with (
+                patch("exporter.export_voxcpm.GGUFWriter", RecordingWriter),
+                patch.dict(sys.modules, fake_safetensors_torch(lora_weights)),
+            ):
+                summary = export_lora(lora_dir, output_dir, config_path, "2.0")
+
+            self.assertEqual([writer.path.name for writer in RecordingWriter.instances], ["lora_ft_unit.gguf"])
+            self.assertTrue((output_dir / "lora_ft_unit.gguf").exists())
+            self.assertEqual(summary["file"], "lora_ft_unit.gguf")
+
+            writer = RecordingWriter.instances[0]
+            self.assertEqual(writer.metadata["voxcpm.schema_version"], 2)
+            self.assertEqual(writer.metadata["voxcpm.kind"], "lora")
+            self.assertEqual(writer.metadata["voxcpm.architecture"], "voxcpm2")
+            self.assertEqual(writer.metadata["voxcpm.variant"], "2.0")
+            self.assertEqual(writer.metadata["voxcpm.lora.name"], "ft_unit")
+            self.assertEqual(writer.metadata["voxcpm.lora.rank"], 8)
+            self.assertEqual(writer.metadata["voxcpm.lora.alpha"], 16)
+            self.assertEqual(
+                json.loads(writer.metadata["voxcpm.lora.enabled_targets"]),
+                {"lm": True, "dit": True, "projections": False},
+            )
+            self.assertEqual(
+                json.loads(writer.metadata["voxcpm.lora.target_modules"]),
+                {"lm": ["q_proj"], "dit": ["linear"], "projections": []},
+            )
+            self.assertEqual(
+                [name for name, *_ in writer.tensors],
+                sorted(lora_weights),
+            )
+            self.assertFalse((output_dir / "lora_manifest.json").exists())
+            self.assertFalse((output_dir / "ft_unit").exists())
+            self.assertFalse((output_dir / "lora_ft_unit").exists())
+            self.assertFalse((output_dir / "lora_config.json").exists())
+
+    def test_lora_export_rejects_missing_lora_b_pair(self):
+        config = {"architecture": "voxcpm2"}
+        lora_config = {"lora_config": {"r": 8, "alpha": 16}}
+        lora_weights = {
+            "base_lm.layers.0.self_attn.q_proj.lora_A.weight": np.zeros((8, 2), dtype=np.float32),
+        }
+
+        with TemporaryDirectory() as lora_tmp, TemporaryDirectory() as output_tmp, TemporaryDirectory() as model_tmp:
+            model_dir = Path(model_tmp)
+            output_dir = Path(output_tmp)
+            lora_dir = Path(lora_tmp) / "ft_unit"
+            lora_dir.mkdir()
+            config_path = model_dir / "config.json"
+            config_path.write_text(json.dumps(config), encoding="utf-8")
+            (lora_dir / "lora_config.json").write_text(json.dumps(lora_config), encoding="utf-8")
+            (lora_dir / "lora_weights.safetensors").write_bytes(b"placeholder")
+
+            with patch.dict(sys.modules, fake_safetensors_torch(lora_weights)):
+                with self.assertRaisesRegex(ValueError, "missing LoRA B"):
+                    export_lora(lora_dir, output_dir, config_path, "2.0")
 
 
 if __name__ == "__main__":

@@ -514,29 +514,48 @@ def export(
     }
 
 
-def _lora_key_transform(key: str):
-    if key.startswith("base_lm."):
-        return "base_lm", key
-    if key.startswith("residual_lm."):
-        return "residual_lm", key
-    if key.startswith("feat_decoder."):
-        return "feat_decoder", key
+def _validate_lora_key(key: str) -> str:
+    if key.startswith(("base_lm.", "residual_lm.", "feat_decoder.")):
+        return key
     if key.startswith(PROJECTION_PREFIXES):
-        return "projections", key
-    return None, None
+        return key
+    raise ValueError(f"unmapped LoRA tensor key: {key}")
 
 
-def _safe_lora_dir_name(lora_dir: Path) -> str:
+def _safe_lora_name(lora_dir: Path) -> str:
     name = lora_dir.name
     if name == "latest" and lora_dir.parent.name:
         name = lora_dir.parent.name
     name = re.sub(r"[^A-Za-z0-9_.-]+", "_", name).strip("_") or "adapter"
-    return f"lora_{name}"
+    return name
+
+
+def _safe_lora_file_name(lora_dir: Path) -> str:
+    return f"lora_{_safe_lora_name(lora_dir)}.gguf"
+
+
+def validate_lora_pairs(tensor_names: list[str], rank: int) -> None:
+    if rank <= 0:
+        raise ValueError(f"LoRA rank must be positive, got {rank}")
+
+    names = set(tensor_names)
+    for name in tensor_names:
+        if ".lora_A." in name:
+            pair_name = name.replace(".lora_A.", ".lora_B.", 1)
+            if pair_name not in names:
+                raise ValueError(f"missing LoRA B tensor for {name!r}")
+            continue
+        if ".lora_B." in name:
+            pair_name = name.replace(".lora_B.", ".lora_A.", 1)
+            if pair_name not in names:
+                raise ValueError(f"missing LoRA A tensor for {name!r}")
+            continue
+        raise ValueError(f"LoRA tensor key must contain .lora_A. or .lora_B.: {name}")
 
 
 def export_lora(lora_dir: str | Path, output_dir: str | Path, config_path: str | Path, variant: str) -> dict[str, Any]:
     lora_dir = Path(lora_dir)
-    output_dir = Path(output_dir) / _safe_lora_dir_name(lora_dir)
+    output_dir = Path(output_dir)
     config_path = Path(config_path)
     lora_config_path = lora_dir / "lora_config.json"
     lora_weights_path = lora_dir / "lora_weights.safetensors"
@@ -552,55 +571,57 @@ def export_lora(lora_dir: str | Path, output_dir: str | Path, config_path: str |
     from safetensors.torch import load_file
 
     lora_weights = load_file(str(lora_weights_path), device="cpu")
-    buckets: dict[str, list[tuple[str, Any]]] = {}
+    tensors: list[tuple[str, Any]] = []
     for key, tensor in lora_weights.items():
-        component, new_name = _lora_key_transform(key)
-        if component is None:
-            raise ValueError(f"unmapped LoRA tensor key: {key}")
-        buckets.setdefault(component, []).append((new_name, tensor))
+        tensors.append((_validate_lora_key(key), tensor))
 
+    rank = int(lc.get("r", 0))
+    alpha = lc.get("alpha", rank)
+    tensor_names = [name for name, _ in tensors]
+    validate_lora_pairs(tensor_names, rank)
+
+    filename = _safe_lora_file_name(lora_dir)
+    lora_name = _safe_lora_name(lora_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    components: dict[str, str] = {}
-    for component, tensors in sorted(buckets.items()):
-        filename = f"lora_{component}.gguf"
-        components[component] = filename
-        writer = GGUFWriter()
-        writer.add_metadata("voxcpm.architecture", config.get("architecture", "voxcpm"))
-        writer.add_metadata("voxcpm.component", "lora")
-        writer.add_metadata("voxcpm.lora.target_component", component)
-        writer.add_metadata("voxcpm.lora.rank", int(lc.get("r", 0)))
-        writer.add_metadata("voxcpm.lora.alpha", int(lc.get("alpha", lc.get("r", 0))))
-        writer.add_metadata("voxcpm.quantization", "fp16")
-        for tensor_name, tensor in tensors:
-            arr = tensor_to_f32_numpy(tensor)
-            writer.add_tensor(tensor_name, quantize_fp16(arr), list(arr.shape), GGML_TYPE_F16)
-        writer.write(str(output_dir / filename))
+    writer = GGUFWriter()
+    writer.add_metadata("voxcpm.schema_version", 2)
+    writer.add_metadata("voxcpm.kind", "lora")
+    writer.add_metadata("voxcpm.architecture", config.get("architecture", "voxcpm"))
+    writer.add_metadata("voxcpm.variant", variant)
+    writer.add_metadata("voxcpm.lora.name", lora_name)
+    writer.add_metadata("voxcpm.lora.rank", rank)
+    writer.add_metadata("voxcpm.lora.alpha", alpha)
+    enabled_targets = {
+        "lm": bool(lc.get("enable_lm", False)),
+        "dit": bool(lc.get("enable_dit", False)),
+        "projections": bool(lc.get("enable_proj", False)),
+    }
+    target_modules = {
+        "lm": lc.get("target_modules_lm", []),
+        "dit": lc.get("target_modules_dit", []),
+        "projections": lc.get("target_proj_modules", []),
+    }
+    writer.add_metadata("voxcpm.lora.enabled_targets", json.dumps(enabled_targets, ensure_ascii=False))
+    writer.add_metadata("voxcpm.lora.target_modules", json.dumps(target_modules, ensure_ascii=False))
+    writer.add_metadata("voxcpm.quantization", "fp16")
 
-    manifest = {
-        "schema_version": 1,
+    for tensor_name, tensor in sorted(tensors, key=lambda item: item[0]):
+        arr = tensor_to_f32_numpy(tensor)
+        writer.add_tensor(tensor_name, quantize_fp16(arr), list(arr.shape), GGML_TYPE_F16)
+    writer.write(str(output_dir / filename))
+
+    return {
+        "schema_version": 2,
+        "kind": "lora",
         "architecture": config.get("architecture", "voxcpm"),
         "variant": variant,
+        "file": filename,
         "source_lora_dir": str(lora_dir.resolve()),
-        "rank": int(lc.get("r", 0)),
-        "alpha": int(lc.get("alpha", lc.get("r", 0))),
-        "enabled": {
-            "lm": bool(lc.get("enable_lm", False)),
-            "dit": bool(lc.get("enable_dit", False)),
-            "projections": bool(lc.get("enable_proj", False)),
-        },
-        "target_modules": {
-            "lm": lc.get("target_modules_lm", []),
-            "dit": lc.get("target_modules_dit", []),
-            "projections": lc.get("target_proj_modules", []),
-        },
-        "components": components,
+        "rank": rank,
+        "alpha": alpha,
+        "enabled_targets": enabled_targets,
+        "target_modules": target_modules,
     }
-    (output_dir / "lora_manifest.json").write_text(
-        json.dumps(manifest, indent=2, ensure_ascii=False),
-        encoding="utf-8",
-    )
-    shutil.copy2(lora_config_path, output_dir / "lora_config.json")
-    return manifest
 
 
 def main() -> None:
