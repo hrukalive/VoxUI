@@ -70,32 +70,7 @@ impl GgufModelLoader {
             return Ok(tensor);
         }
 
-        let info = self
-            .store
-            .gguf
-            .tensor_info(name)
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "Tensor '{}' not found in GGUF file '{}'",
-                    name,
-                    self.store.path.display()
-                )
-            })?;
-        let data = self.store.gguf.tensor_f32(name).with_context(|| {
-            format!(
-                "Failed to load tensor '{}' from GGUF file '{}'",
-                name,
-                self.store.path.display()
-            )
-        })?;
-        let shape: Vec<usize> = info.shape.iter().map(|&s| s as usize).collect();
-        let tensor = Tensor::from_vec(data, shape.as_slice(), &self.device).with_context(|| {
-            format!(
-                "Failed to create tensor '{}' from GGUF file '{}'",
-                name,
-                self.store.path.display()
-            )
-        })?;
+        let tensor = self.load_tensor_uncached(name)?;
 
         self.store
             .cache
@@ -108,7 +83,7 @@ impl GgufModelLoader {
 
     /// Load a tensor and cast to f16 (useful for saving memory on GPU).
     pub fn load_tensor_f16(&self, name: &str) -> Result<Tensor> {
-        self.load_tensor(name)?
+        self.load_tensor_uncached(name)?
             .to_dtype(DType::F16)
             .map_err(Into::into)
     }
@@ -116,11 +91,11 @@ impl GgufModelLoader {
     /// Load a tensor in the optimal dtype for the target device.
     /// CUDA: f16 (faster, lower VRAM). CPU: f32 (no precision issues).
     pub fn load_tensor_optimal(&self, name: &str) -> Result<Tensor> {
-        let tensor = self.load_tensor(name)?;
         if self.device.is_cuda() {
+            let tensor = self.load_tensor_uncached(name)?;
             tensor.to_dtype(DType::F16).map_err(Into::into)
         } else {
-            Ok(tensor)
+            self.load_tensor(name)
         }
     }
 
@@ -147,5 +122,34 @@ impl GgufModelLoader {
     /// Get tensor info (shape, dtype, etc.) without loading data.
     pub fn tensor_info(&self, name: &str) -> Option<&TensorInfo> {
         self.store.gguf.tensor_info(name)
+    }
+
+    fn load_tensor_uncached(&self, name: &str) -> Result<Tensor> {
+        let info = self
+            .store
+            .gguf
+            .tensor_info(name)
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Tensor '{}' not found in GGUF file '{}'",
+                    name,
+                    self.store.path.display()
+                )
+            })?;
+        let data = self.store.gguf.tensor_f32(name).with_context(|| {
+            format!(
+                "Failed to load tensor '{}' from GGUF file '{}'",
+                name,
+                self.store.path.display()
+            )
+        })?;
+        let shape: Vec<usize> = info.shape.iter().map(|&s| s as usize).collect();
+        Tensor::from_vec(data, shape.as_slice(), &self.device).with_context(|| {
+            format!(
+                "Failed to create tensor '{}' from GGUF file '{}'",
+                name,
+                self.store.path.display()
+            )
+        })
     }
 }
