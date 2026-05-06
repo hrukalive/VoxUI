@@ -7,7 +7,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use candle_core::{DType, Device, Tensor};
 use voxui_gguf::{GgufFile, MetadataValue, TensorInfo};
 
@@ -51,7 +51,7 @@ impl GgufModelLoader {
     /// Open the canonical single-file GGUF export from a model directory.
     pub fn from_model_dir(model_dir: &Path, device: Device) -> Result<Self> {
         let path = model_dir.join("model.gguf");
-        if !path.exists() {
+        if !path.is_file() {
             anyhow::bail!("model.gguf not found in model directory '{}'", model_dir.display());
         }
         Self::new(&path, device)
@@ -81,9 +81,21 @@ impl GgufModelLoader {
                     self.store.path.display()
                 )
             })?;
-        let data = self.store.gguf.tensor_f32(name)?;
+        let data = self.store.gguf.tensor_f32(name).with_context(|| {
+            format!(
+                "Failed to load tensor '{}' from GGUF file '{}'",
+                name,
+                self.store.path.display()
+            )
+        })?;
         let shape: Vec<usize> = info.shape.iter().map(|&s| s as usize).collect();
-        let tensor = Tensor::from_vec(data, shape.as_slice(), &self.device)?;
+        let tensor = Tensor::from_vec(data, shape.as_slice(), &self.device).with_context(|| {
+            format!(
+                "Failed to create tensor '{}' from GGUF file '{}'",
+                name,
+                self.store.path.display()
+            )
+        })?;
 
         self.store
             .cache

@@ -10,6 +10,16 @@ fn model_loader_requires_model_gguf_in_directory() {
 }
 
 #[test]
+fn model_loader_requires_model_gguf_to_be_file() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::create_dir(dir.path().join("model.gguf")).unwrap();
+
+    let err = GgufModelLoader::from_model_dir(dir.path(), candle_core::Device::Cpu).unwrap_err();
+    assert!(err.to_string().contains("model.gguf"));
+    assert!(err.to_string().contains("not found in model directory"));
+}
+
+#[test]
 fn model_config_parses_variant_and_audio_vae_from_config_json() {
     let dir = tempfile::tempdir().unwrap();
     fs::write(
