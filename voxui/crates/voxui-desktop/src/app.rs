@@ -107,6 +107,12 @@ struct ProgressPayload {
 }
 
 #[derive(Deserialize, Debug)]
+struct LoadProgressPayload {
+    step: u32,
+    total: u32,
+}
+
+#[derive(Deserialize, Debug)]
 struct CompletePayload {
     index: u32,
 }
@@ -196,6 +202,7 @@ pub fn App() -> impl IntoView {
     let (engine_ready, set_engine_ready) = signal(false);
     let (next_index, set_next_index) = signal(0u32);
     let (active_index, set_active_index) = signal(None::<u32>);
+    let (load_step, set_load_step) = signal(String::new());
 
     // Config state
     let (model_dir, set_model_dir) = signal(String::new());
@@ -411,6 +418,25 @@ pub fn App() -> impl IntoView {
         });
     }
 
+    // Listen for model load progress events
+    {
+        let set_load_step = set_load_step.clone();
+        spawn_local(async move {
+            let load_cb = Closure::new(move |val: JsValue| {
+                let payload_value = tauri_api::event_payload(val);
+                if let Ok(payload) =
+                    serde_wasm_bindgen::from_value::<LoadProgressPayload>(payload_value)
+                {
+                    if payload.total > 0 {
+                        set_load_step.set(format!("({}/{})", payload.step + 1, payload.total));
+                    }
+                }
+            });
+            let _ = tauri_api::tauri_listen("load-progress", &load_cb).await;
+            load_cb.forget();
+        });
+    }
+
     // Listen for completion events
     {
         let active_index = active_index.clone();
@@ -555,8 +581,11 @@ pub fn App() -> impl IntoView {
     let on_model_selected = move |path: String| {
         set_model_dir.set(path.clone());
         set_no_model.set(false);
+        set_load_step.set(String::new());
         set_status.set("loading".into());
         spawn_local(async move {
+            // Cancel any in-progress model load
+            let _ = tauri_api::invoke_no_args::<()>("cancel_load").await;
             let be = backend.get_untracked();
             debug_log(&format!(
                 "model selection: load start model_dir={} backend={}",
@@ -818,10 +847,15 @@ pub fn App() -> impl IntoView {
             } />
             <History lang=lang entries=history />
             <ProgressBar progress=progress status=status lang=lang />
-            <InputBox lang=lang engine_ready=engine_ready status=status on_submit=on_submit />
+            <InputBox lang=lang engine_ready=engine_ready status=status on_submit=on_submit on_cancel=move |_| {
+                spawn_local(async move {
+                    let _ = tauri_api::invoke_no_args::<()>("cancel_synthesis").await;
+                });
+            } />
             <StatusBar
                 lang=lang
                 status=status
+                load_step=load_step
                 model_name=model_name
                 actual_backend=actual_backend
                 lora_dir=lora_dir

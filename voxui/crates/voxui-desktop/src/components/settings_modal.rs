@@ -1,6 +1,8 @@
-use leptos::prelude::*;
 use crate::app::{LoraEntry, ModelEntry};
 use crate::i18n::Language;
+use crate::tauri_api;
+use leptos::prelude::*;
+use wasm_bindgen_futures::spawn_local;
 
 #[component]
 pub fn SettingsModal(
@@ -39,6 +41,7 @@ pub fn SettingsModal(
         Language::Chinese => "Chinese".to_string(),
         Language::English => "English".to_string(),
     });
+    let (testing_audio, set_testing_audio) = signal(false);
 
     let on_close_apply = on_close.clone();
 
@@ -119,20 +122,41 @@ pub fn SettingsModal(
 
                     // Audio device
                     <SettingsField label=move || lang.get().t("audio_device")>
-                        <select
-                            class="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1 text-sm"
-                            on:change=move |ev| set_sel_device.set(event_target_value(&ev))
-                        >
-                            <For
-                                each=move || devices.get()
-                                key=|d| d.clone()
-                                children=move |d| {
-                                    let selected = d == sel_device.get();
-                                    let d2 = d.clone();
-                                    view! { <option value={d} selected=selected>{d2}</option> }
+                        <div class="flex gap-2">
+                            <select
+                                class="flex-1 bg-gray-900 border border-gray-600 rounded px-2 py-1 text-sm"
+                                on:change=move |ev| set_sel_device.set(event_target_value(&ev))
+                            >
+                                <For
+                                    each=move || devices.get()
+                                    key=|d| d.clone()
+                                    children=move |d| {
+                                        let selected = d == sel_device.get();
+                                        let d2 = d.clone();
+                                        view! { <option value={d} selected=selected>{d2}</option> }
+                                    }
+                                />
+                            </select>
+                            <button
+                                class="px-3 py-1 rounded bg-gray-600 hover:bg-gray-500 text-sm whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed"
+                                disabled=move || testing_audio.get()
+                                on:click=move |_| {
+                                    let host = sel_host.get();
+                                    let device = sel_device.get();
+                                    set_testing_audio.set(true);
+                                    spawn_local(async move {
+                                        let _ = tauri_api::invoke::<_, ()>(
+                                            "test_audio_device",
+                                            &serde_json::json!({ "host": host, "device": device }),
+                                        )
+                                        .await;
+                                        set_testing_audio.set(false);
+                                    });
                                 }
-                            />
-                        </select>
+                            >
+                                {move || if testing_audio.get() { "..." } else { "Test" }}
+                            </button>
+                        </div>
                     </SettingsField>
 
                     // Max chars

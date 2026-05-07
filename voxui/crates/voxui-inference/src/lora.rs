@@ -79,11 +79,7 @@ impl LoraAdapter {
         Ok(adapter)
     }
 
-    pub fn load_file_for_model(
-        path: &Path,
-        device: &Device,
-        model: &ModelConfig,
-    ) -> Result<Self> {
+    pub fn load_file_for_model(path: &Path, device: &Device, model: &ModelConfig) -> Result<Self> {
         if path.extension().and_then(|v| v.to_str()) != Some("gguf") {
             bail!("LoRA path must be a .gguf file: {}", path.display());
         }
@@ -97,7 +93,11 @@ impl LoraAdapter {
         };
         adapter.load_component(&loader, Some(&metadata))?;
         adapter.validate_non_empty()?;
-        log::debug!("loaded LoRA adapter `{}` from {}", metadata.name, path.display());
+        tracing::debug!(
+            "loaded LoRA adapter `{}` from {}",
+            metadata.name,
+            path.display()
+        );
         Ok(adapter)
     }
 
@@ -218,12 +218,14 @@ impl LoraMetadata {
             .get("voxcpm.lora.alpha")
             .and_then(|v| v.as_f32())
             .unwrap_or(rank as f32);
-        let enabled_targets = metadata
-            .get("voxcpm.lora.enabled_targets")
-            .map_or_else(|| Ok(LoraEnabledTargets::default()), parse_enabled_targets_metadata)?;
-        let target_modules = metadata
-            .get("voxcpm.lora.target_modules")
-            .map_or_else(|| Ok(LoraTargetModules::default()), parse_target_modules_metadata)?;
+        let enabled_targets = metadata.get("voxcpm.lora.enabled_targets").map_or_else(
+            || Ok(LoraEnabledTargets::default()),
+            parse_enabled_targets_metadata,
+        )?;
+        let target_modules = metadata.get("voxcpm.lora.target_modules").map_or_else(
+            || Ok(LoraTargetModules::default()),
+            parse_target_modules_metadata,
+        )?;
         Ok(Self {
             architecture,
             variant,
@@ -328,19 +330,18 @@ fn validate_lora_shapes(base: &str, a: &Tensor, b: &Tensor, rank: usize) -> Resu
 }
 
 fn parse_enabled_targets_metadata(value: &MetadataValue) -> Result<LoraEnabledTargets> {
-    let text = value
-        .as_str()
-        .ok_or_else(|| anyhow::anyhow!("voxcpm.lora.enabled_targets must be JSON string metadata"))?;
+    let text = value.as_str().ok_or_else(|| {
+        anyhow::anyhow!("voxcpm.lora.enabled_targets must be JSON string metadata")
+    })?;
     serde_json::from_str::<LoraEnabledTargets>(text)
         .context("parse voxcpm.lora.enabled_targets JSON")
 }
 
 fn parse_target_modules_metadata(value: &MetadataValue) -> Result<LoraTargetModules> {
-    let text = value
-        .as_str()
-        .ok_or_else(|| anyhow::anyhow!("voxcpm.lora.target_modules must be JSON string metadata"))?;
-    serde_json::from_str::<LoraTargetModules>(text)
-        .context("parse voxcpm.lora.target_modules JSON")
+    let text = value.as_str().ok_or_else(|| {
+        anyhow::anyhow!("voxcpm.lora.target_modules must be JSON string metadata")
+    })?;
+    serde_json::from_str::<LoraTargetModules>(text).context("parse voxcpm.lora.target_modules JSON")
 }
 
 #[cfg(test)]
@@ -349,9 +350,8 @@ mod tests {
 
     #[test]
     fn valid_enabled_targets_metadata_is_parsed() {
-        let value = MetadataValue::String(
-            r#"{"lm":true,"dit":false,"projections":true}"#.to_string(),
-        );
+        let value =
+            MetadataValue::String(r#"{"lm":true,"dit":false,"projections":true}"#.to_string());
         let targets = parse_enabled_targets_metadata(&value).unwrap();
 
         assert!(targets.lm);

@@ -90,6 +90,9 @@ htmlcov/
 .env.*
 !.env.example
 
+# Local VoxUI desktop settings
+/voxui/crates/voxui-desktop/src-tauri/voxui_config.json
+
 
 # =========================
 # IDE / Editor

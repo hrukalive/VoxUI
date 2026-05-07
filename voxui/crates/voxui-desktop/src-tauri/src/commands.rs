@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -49,15 +50,22 @@ pub struct ApplyLoraArgs {
 
 #[tauri::command]
 pub fn list_models() -> Vec<ModelEntry> {
-    scan_model_entries(&discover_models_root())
+    let root = discover_models_root();
+    tracing::debug!("list_models models_root={}", root.display());
+    let entries = scan_model_entries(&root);
+    tracing::debug!("list_models found {} model(s)", entries.len());
+    for entry in &entries {
+        tracing::debug!("list_models entry name={} path={}", entry.name, entry.path);
+    }
+    entries
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub fn list_lora_dirs(model_dir: String) -> Vec<LoraEntry> {
     scan_lora_entries(&PathBuf::from(model_dir))
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub fn list_audio_devices(state: State<AppState>, host: Option<String>) -> AudioDeviceList {
     let hosts: Vec<String> = state
         .audio_system
@@ -93,51 +101,76 @@ pub fn list_audio_devices(state: State<AppState>, host: Option<String>) -> Audio
     }
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn load_model(
     app: AppHandle,
     state: State<'_, AppState>,
     model_dir: String,
     backend: String,
 ) -> Result<ModelInfo, String> {
-    log::debug!("load_model requested model_dir={model_dir} backend={backend}");
+    tracing::debug!("load_model requested model_dir={model_dir} backend={backend}");
     let _busy = match state.try_begin_synthesis() {
         Ok(guard) => guard,
         Err(_) => {
             let message = engine_busy_message();
-            log::warn!(
+            tracing::warn!(
                 "load_model rejected busy model_dir={model_dir} backend={backend} error={message}"
             );
             return Err(message);
         }
     };
+    // Reset cancel flag for this load
+    state.cancel_load.store(false, Ordering::Release);
+    let cancel_token = Arc::clone(&state.cancel_load);
+
     let started_at = Instant::now();
     let model_path = PathBuf::from(&model_dir);
     let (device, actual_backend, warning) = select_device(&backend);
     if let Some(message) = warning.as_ref() {
-        log::warn!(
+        tracing::warn!(
             "load_model backend warning requested_backend={backend} actual_backend={actual_backend} warning={message}"
         );
     } else {
-        log::debug!(
+        tracing::debug!(
             "load_model backend selected requested_backend={backend} actual_backend={actual_backend}"
         );
     }
     let engine_slot = Arc::clone(&state.engine);
+    let app_for_progress = app.clone();
 
-    let engine = match tokio::task::spawn_blocking(move || VoxCPMEngine::load(&model_path, device))
-        .await
+    let engine = match tokio::task::spawn_blocking(move || {
+        VoxCPMEngine::load_with_progress(
+            &model_path,
+            device,
+            |step, total| {
+                let _ = app_for_progress.emit(
+                    "load-progress",
+                    serde_json::json!({
+                        "step": step,
+                        "total": total,
+                    }),
+                );
+            },
+            Some(&cancel_token),
+        )
+    })
+    .await
     {
         Ok(Ok(engine)) => engine,
         Ok(Err(err)) => {
-            log::error!(
-                "load_model failed model_dir={model_dir} backend={actual_backend} elapsed_seconds={:.3} error={err:#}",
-                started_at.elapsed().as_secs_f64()
-            );
+            let msg = format!("{err:#}");
+            if msg.contains("cancelled") {
+                tracing::info!("load_model cancelled model_dir={model_dir}");
+            } else {
+                tracing::error!(
+                    "load_model failed model_dir={model_dir} backend={actual_backend} elapsed_seconds={:.3} error={err:#}",
+                    started_at.elapsed().as_secs_f64()
+                );
+            }
             return Err(format!("model load failed: {err}"));
         }
         Err(err) => {
-            log::error!(
+            tracing::error!(
                 "load_model task failed model_dir={model_dir} backend={actual_backend} elapsed_seconds={:.3} error={err}",
                 started_at.elapsed().as_secs_f64()
             );
@@ -151,7 +184,7 @@ pub async fn load_model(
         backend: actual_backend,
         warning,
     };
-    log::debug!(
+    tracing::debug!(
         "load_model complete architecture={} sample_rate={} backend={} elapsed_seconds={:.3}",
         info.architecture,
         info.sample_rate,
@@ -163,32 +196,37 @@ pub async fn load_model(
         .lock()
         .map_err(|_| "engine lock poisoned".to_string())? = Some(engine);
     let _ = app.emit("engine-ready", info.clone());
+    drop(_busy);
     Ok(info)
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub fn apply_lora(state: State<AppState>, args: ApplyLoraArgs) -> Result<(), String> {
     let requested_lora = args.lora_dir.clone();
-    log::debug!("apply_lora requested lora_dir={requested_lora:?}");
+    tracing::debug!("apply_lora requested lora_dir={requested_lora:?}");
     let _busy = match state.try_begin_synthesis() {
         Ok(guard) => guard,
         Err(_) => {
             let message = engine_busy_message();
-            log::warn!("apply_lora rejected busy lora_dir={requested_lora:?} error={message}");
+            tracing::warn!("apply_lora rejected busy lora_dir={requested_lora:?} error={message}");
             return Err(message);
         }
     };
     let mut guard = match state.engine.lock() {
         Ok(guard) => guard,
         Err(_) => {
-            log::error!("apply_lora failed lora_dir={requested_lora:?} error=engine lock poisoned");
+            tracing::error!(
+                "apply_lora failed lora_dir={requested_lora:?} error=engine lock poisoned"
+            );
             return Err("engine lock poisoned".to_string());
         }
     };
     let engine = match guard.as_mut() {
         Some(engine) => engine,
         None => {
-            log::error!("apply_lora failed lora_dir={requested_lora:?} error=Engine not loaded");
+            tracing::error!(
+                "apply_lora failed lora_dir={requested_lora:?} error=Engine not loaded"
+            );
             return Err("Engine not loaded".to_string());
         }
     };
@@ -198,35 +236,35 @@ pub fn apply_lora(state: State<AppState>, args: ApplyLoraArgs) -> Result<(), Str
             let trimmed = path.trim();
             match engine.load_lora(&PathBuf::from(trimmed)) {
                 Ok(()) => {
-                    log::debug!("apply_lora complete lora_dir={trimmed}");
+                    tracing::debug!("apply_lora complete lora_dir={trimmed}");
                     Ok(())
                 }
                 Err(err) => {
-                    log::error!("apply_lora failed lora_dir={trimmed} error={err:#}");
+                    tracing::error!("apply_lora failed lora_dir={trimmed} error={err:#}");
                     Err(format!("LoRA load failed: {err}"))
                 }
             }
         }
         _ => {
             engine.unload_lora();
-            log::debug!("apply_lora complete lora_dir=None");
+            tracing::debug!("apply_lora complete lora_dir=None");
             Ok(())
         }
     }
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn synthesize(
     app: AppHandle,
     state: State<'_, AppState>,
     args: SynthesisArgs,
 ) -> Result<(), String> {
     let index = args.index;
-    log::debug!("synthesize requested index={index}");
+    tracing::debug!("synthesize requested index={index}");
     let _busy = match state.try_begin_synthesis() {
         Ok(guard) => guard,
         Err(message) => {
-            log::warn!("synthesize rejected busy index={index} error={message}");
+            tracing::warn!("synthesize rejected busy index={index} error={message}");
             return emit_synthesis_error(&app, index, message);
         }
     };
@@ -237,6 +275,9 @@ pub async fn synthesize(
             return emit_synthesis_error(&app, index, "config lock poisoned".to_string());
         }
     };
+    // Reset cancel flag for this synthesis
+    state.cancel_synthesis.store(false, Ordering::Release);
+    let cancel_token = Arc::clone(&state.cancel_synthesis);
     let engine_slot = Arc::clone(&state.engine);
     let app_for_task = app.clone();
 
@@ -249,17 +290,27 @@ pub async fn synthesize(
             let engine = guard.as_mut().ok_or("Engine not loaded")?;
             let sample_rate = engine.sample_rate();
             let generated = engine
-                .generate(request, |step, total| {
-                    let _ = app_for_task.emit(
-                        "tts-progress",
-                        ProgressPayload {
-                            step: step as u32,
-                            total: total as u32,
-                            index,
-                        },
-                    );
-                })
+                .generate_cancellable(
+                    request,
+                    |step, total| {
+                        if cancel_token.load(Ordering::Relaxed) {
+                            return;
+                        }
+                        let _ = app_for_task.emit(
+                            "tts-progress",
+                            ProgressPayload {
+                                step: step as u32,
+                                total: total as u32,
+                                index,
+                            },
+                        );
+                    },
+                    Some(&cancel_token),
+                )
                 .map_err(|e| format!("generation failed: {e}"))?;
+            if cancel_token.load(Ordering::Relaxed) {
+                return Err("synthesis cancelled".to_string());
+            }
             (generated, sample_rate)
         };
 
@@ -297,7 +348,7 @@ pub fn get_config(state: State<AppState>) -> AppConfig {
         .clone()
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub fn save_config(state: State<AppState>, config: AppConfig) -> Result<(), String> {
     config.save().map_err(|e| format!("{e}"))?;
     *state
@@ -305,6 +356,52 @@ pub fn save_config(state: State<AppState>, config: AppConfig) -> Result<(), Stri
         .lock()
         .map_err(|_| "config lock poisoned".to_string())? = config;
     Ok(())
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn test_audio_device(host: String, device: String) -> Result<(), String> {
+    tracing::debug!("test_audio_device requested host={host} device={device}");
+    tokio::task::spawn_blocking(move || {
+        let sample_rate = 48000u32;
+        let duration_secs = 0.5f32;
+        let freq = 440.0f32;
+        let num_samples = (sample_rate as f32 * duration_secs) as usize;
+        let samples: Vec<f32> = (0..num_samples)
+            .map(|i| {
+                let t = i as f32 / sample_rate as f32;
+                // Sine wave with fade-in/fade-out to avoid clicks
+                let envelope = if t < 0.005 {
+                    t / 0.005
+                } else if t > duration_secs - 0.005 {
+                    (duration_secs - t) / 0.005
+                } else {
+                    1.0
+                };
+                (2.0 * std::f32::consts::PI * freq * t).sin() * 0.3 * envelope
+            })
+            .collect();
+
+        let mut player = AudioPlayer::new(&host, &device, sample_rate)
+            .map_err(|e| format!("audio init failed: {e}"))?;
+        player
+            .play_blocking(samples)
+            .map_err(|e| format!("playback failed: {e}"))?;
+        Ok(())
+    })
+    .await
+    .map_err(|e| format!("test task failed: {e}"))?
+}
+
+#[tauri::command]
+pub fn cancel_load(state: State<AppState>) {
+    state.cancel_load.store(true, Ordering::Release);
+    tracing::info!("cancel_load requested");
+}
+
+#[tauri::command]
+pub fn cancel_synthesis(state: State<AppState>) {
+    state.cancel_synthesis.store(true, Ordering::Release);
+    tracing::info!("cancel_synthesis requested");
 }
 
 fn resolve_audio_output(config: &AppConfig) -> Result<(String, String), String> {
@@ -349,9 +446,9 @@ fn resolve_audio_output(config: &AppConfig) -> Result<(String, String), String> 
 
 fn emit_synthesis_error(app: &AppHandle, index: u32, message: String) -> Result<(), String> {
     if is_busy_message(&message) {
-        log::warn!("emit_synthesis_error index={index} message={message}");
+        tracing::warn!("emit_synthesis_error index={index} message={message}");
     } else {
-        log::error!("emit_synthesis_error index={index} message={message}");
+        tracing::error!("emit_synthesis_error index={index} message={message}");
     }
     let _ = app.emit(
         "tts-error",

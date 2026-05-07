@@ -1,8 +1,9 @@
 //! Audio capture and playback for VoxUI.
 
-use std::sync::{Arc, Mutex, mpsc};
+use anyhow::{anyhow, Result};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use anyhow::{Result, anyhow};
+use r8brain_rs::{PrecisionProfile, Resampler};
+use std::sync::{mpsc, Arc, Mutex};
 
 #[derive(Debug, Clone)]
 pub struct HostInfo {
@@ -102,22 +103,32 @@ impl AudioPlayer {
 
     pub fn play(&mut self, samples: Vec<f32>) -> Result<mpsc::Receiver<()>> {
         let (tx, rx) = mpsc::channel();
-        let buffer = Arc::new(Mutex::new(samples));
-        let pos = Arc::new(Mutex::new(0usize));
         let stop = self.stop_flag.clone();
 
         // Reset stop flag
         *stop.lock().unwrap() = false;
 
-        // Use default device config, override sample rate if supported
+        // Query device native sample rate
         let default_config = self.device.default_output_config()?;
         let channels = default_config.channels();
+        let device_rate = default_config.sample_rate().0;
+
+        // Resample if device rate differs from requested
+        let (playback_samples, playback_rate) = if device_rate != self.sample_rate {
+            let resampled = resample(&samples, self.sample_rate, device_rate)?;
+            (resampled, device_rate)
+        } else {
+            (samples, self.sample_rate)
+        };
+
         let config = cpal::StreamConfig {
             channels,
-            sample_rate: cpal::SampleRate(self.sample_rate),
+            sample_rate: cpal::SampleRate(playback_rate),
             buffer_size: cpal::BufferSize::Default,
         };
 
+        let buffer = Arc::new(Mutex::new(playback_samples));
+        let pos = Arc::new(Mutex::new(0usize));
         let buf = buffer.clone();
         let p = pos.clone();
         let s = stop.clone();
@@ -165,7 +176,8 @@ impl AudioPlayer {
 
     pub fn play_blocking(&mut self, samples: Vec<f32>) -> Result<()> {
         let rx = self.play(samples)?;
-        rx.recv().map_err(|_| anyhow!("playback channel closed unexpectedly"))?;
+        rx.recv()
+            .map_err(|_| anyhow!("playback channel closed unexpectedly"))?;
         Ok(())
     }
 
@@ -179,4 +191,32 @@ impl Drop for AudioPlayer {
     fn drop(&mut self) {
         self.stop();
     }
+}
+
+/// Resample audio from `src_rate` to `dst_rate` using r8brain.
+fn resample(samples: &[f32], src_rate: u32, dst_rate: u32) -> Result<Vec<f32>> {
+    if src_rate == dst_rate {
+        return Ok(samples.to_vec());
+    }
+    let max_input_len = samples.len().min(8192);
+    let mut resampler = Resampler::new(
+        src_rate as f64,
+        dst_rate as f64,
+        max_input_len,
+        2.0,
+        PrecisionProfile::Bits24,
+    );
+    // Estimate output length
+    let ratio = dst_rate as f64 / src_rate as f64;
+    let mut output = Vec::with_capacity((samples.len() as f64 * ratio * 1.1) as usize);
+    let mut buf = vec![0.0f64; max_input_len * 4];
+
+    for chunk in samples.chunks(max_input_len) {
+        let input_f64: Vec<f64> = chunk.iter().map(|&s| s as f64).collect();
+        let n = resampler.process(&input_f64, &mut buf);
+        for &s in &buf[..n] {
+            output.push(s as f32);
+        }
+    }
+    Ok(output)
 }

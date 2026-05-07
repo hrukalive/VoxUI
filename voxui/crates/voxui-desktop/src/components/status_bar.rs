@@ -1,10 +1,11 @@
-use leptos::prelude::*;
 use crate::i18n::Language;
+use leptos::prelude::*;
 
 #[component]
 pub fn StatusBar(
     lang: ReadSignal<Language>,
     status: ReadSignal<String>,
+    load_step: ReadSignal<String>,
     model_name: ReadSignal<String>,
     actual_backend: ReadSignal<String>,
     lora_dir: ReadSignal<String>,
@@ -15,7 +16,14 @@ pub fn StatusBar(
     let status_text = move || {
         let l = lang.get();
         let status = match status.get().as_str() {
-            "loading" => l.t("loading").to_string(),
+            "loading" => {
+                let step = load_step.get();
+                if step.is_empty() {
+                    l.t("loading").to_string()
+                } else {
+                    format!("{} {}", l.t("loading"), step)
+                }
+            }
             "ready" => l.t("ready").to_string(),
             "generating" => l.t("generating").to_string(),
             other => other.to_string(),

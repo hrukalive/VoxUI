@@ -101,6 +101,8 @@ pub struct AppState {
     pub audio_system: AudioSystem,
     pub config: Arc<Mutex<AppConfig>>,
     synthesis_busy: Arc<AtomicBool>,
+    pub cancel_load: Arc<AtomicBool>,
+    pub cancel_synthesis: Arc<AtomicBool>,
 }
 
 pub struct SynthesisBusyGuard {
@@ -120,6 +122,8 @@ impl AppState {
             audio_system: AudioSystem::new(),
             config: Arc::new(Mutex::new(AppConfig::load())),
             synthesis_busy: Arc::new(AtomicBool::new(false)),
+            cancel_load: Arc::new(AtomicBool::new(false)),
+            cancel_synthesis: Arc::new(AtomicBool::new(false)),
         }
     }
 

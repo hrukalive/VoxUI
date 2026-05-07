@@ -1,6 +1,7 @@
 //! Native VoxCPM generation pipeline.
 
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
 use anyhow::{bail, Context, Result};
@@ -88,8 +89,17 @@ pub struct VoxCPMEngine {
 
 impl VoxCPMEngine {
     pub fn load(model_dir: &Path, device: Device) -> Result<Self> {
+        Self::load_with_progress(model_dir, device, |_, _| {}, None)
+    }
+
+    pub fn load_with_progress<F: Fn(usize, usize)>(
+        model_dir: &Path,
+        device: Device,
+        on_progress: F,
+        cancel: Option<&AtomicBool>,
+    ) -> Result<Self> {
         let started_at = Instant::now();
-        log::debug!(
+        tracing::info!(
             "VoxCPMEngine::load start model_dir={} device={device:?}",
             model_dir.display()
         );
@@ -100,36 +110,66 @@ impl VoxCPMEngine {
         validate_base_metadata(&base_loader, &manifest)?;
         let tokenizer = VoxTokenizer::from_dir(model_dir)
             .with_context(|| format!("load tokenizer from {}", model_dir.display()))?;
-        log::debug!(
-            "VoxCPMEngine::load manifest/tokenizer ready architecture={} sample_rate={} patch_size={}",
+        tracing::info!(
+            "VoxCPMEngine::load manifest/tokenizer ready architecture={} sample_rate={} patch_size={} elapsed_seconds={:.3}",
             manifest.architecture,
             manifest.output_sample_rate(),
-            manifest.patch_size
+            manifest.patch_size,
+            started_at.elapsed().as_secs_f64()
         );
 
-        log::debug!("VoxCPMEngine::load component start name=base_lm");
+        let check_cancel = |step: usize| -> Result<()> {
+            on_progress(step, 6);
+            if cancel.map_or(false, |c| c.load(Ordering::Relaxed)) {
+                bail!("model loading cancelled");
+            }
+            Ok(())
+        };
+
+        check_cancel(0)?;
+        tracing::info!("VoxCPMEngine::load component start name=base_lm");
         let base_lm_config = BaseLMConfig::from_model_config(&manifest, "base_lm")?;
         let base_lm = BaseLM::load(&base_loader, base_lm_config, &device)?;
-        log::debug!("VoxCPMEngine::load component done name=base_lm");
+        tracing::info!(
+            "VoxCPMEngine::load component done name=base_lm elapsed_seconds={:.3}",
+            started_at.elapsed().as_secs_f64()
+        );
 
-        log::debug!("VoxCPMEngine::load component start name=residual_lm");
+        check_cancel(1)?;
+        tracing::info!("VoxCPMEngine::load component start name=residual_lm");
         let residual_lm_config = BaseLMConfig::from_model_config(&manifest, "residual_lm")?;
         let residual_lm = BaseLM::load(&base_loader, residual_lm_config, &device)?;
-        log::debug!("VoxCPMEngine::load component done name=residual_lm");
+        tracing::info!(
+            "VoxCPMEngine::load component done name=residual_lm elapsed_seconds={:.3}",
+            started_at.elapsed().as_secs_f64()
+        );
 
-        log::debug!("VoxCPMEngine::load component start name=feat_encoder");
+        check_cancel(2)?;
+        tracing::info!("VoxCPMEngine::load component start name=feat_encoder");
         let encoder = LocalEncoder::load_from_config(&base_loader, &manifest)?;
-        log::debug!("VoxCPMEngine::load component done name=feat_encoder");
+        tracing::info!(
+            "VoxCPMEngine::load component done name=feat_encoder elapsed_seconds={:.3}",
+            started_at.elapsed().as_secs_f64()
+        );
 
-        log::debug!("VoxCPMEngine::load component start name=feat_decoder");
+        check_cancel(3)?;
+        tracing::info!("VoxCPMEngine::load component start name=feat_decoder");
         let dit = DiT::load_from_config(&base_loader, &manifest)?;
-        log::debug!("VoxCPMEngine::load component done name=feat_decoder");
+        tracing::info!(
+            "VoxCPMEngine::load component done name=feat_decoder elapsed_seconds={:.3}",
+            started_at.elapsed().as_secs_f64()
+        );
 
-        log::debug!("VoxCPMEngine::load component start name=audio_vae");
+        check_cancel(4)?;
+        tracing::info!("VoxCPMEngine::load component start name=audio_vae");
         let vae = AudioVAE::load_from_config(&base_loader, &manifest.audio_vae)?;
-        log::debug!("VoxCPMEngine::load component done name=audio_vae");
+        tracing::info!(
+            "VoxCPMEngine::load component done name=audio_vae elapsed_seconds={:.3}",
+            started_at.elapsed().as_secs_f64()
+        );
 
-        log::debug!("VoxCPMEngine::load component start name=projections");
+        check_cancel(5)?;
+        tracing::info!("VoxCPMEngine::load component start name=projections");
         let fsq = FSQLayer::load(
             &base_loader,
             manifest.scalar_quantization_latent_dim,
@@ -145,7 +185,10 @@ impl VoxCPMEngine {
         };
         let stop_proj = load_projection(&base_loader, "stop_proj")?;
         let stop_head = load_projection(&base_loader, "stop_head")?;
-        log::debug!("VoxCPMEngine::load component done name=projections");
+        tracing::info!(
+            "VoxCPMEngine::load component done name=projections elapsed_seconds={:.3}",
+            started_at.elapsed().as_secs_f64()
+        );
 
         let audio_chunk_size = product_or_manifest(
             &manifest.audio_vae.encoder_rates,
@@ -165,7 +208,7 @@ impl VoxCPMEngine {
             architecture: manifest.architecture.clone(),
             variant: manifest.variant,
         };
-        log::debug!(
+        tracing::info!(
             "VoxCPMEngine::load complete architecture={} sample_rate={} patch_size={} elapsed_seconds={:.3}",
             config.architecture,
             config.sample_rate,
@@ -239,9 +282,25 @@ impl VoxCPMEngine {
         request: SynthesisRequest,
         progress: F,
     ) -> Result<Vec<f32>> {
+        self.generate_cancellable(request, progress, None)
+    }
+
+    pub fn generate_cancellable<F: Fn(usize, usize)>(
+        &mut self,
+        request: SynthesisRequest,
+        progress: F,
+        cancel: Option<&AtomicBool>,
+    ) -> Result<Vec<f32>> {
         let request = request.validated(self.config.variant)?;
         let prepared = self.build_inputs(&request)?;
         let max_len = bounded_max_len(&request, prepared.target_text_token_count);
+        tracing::info!(
+            "VoxCPMEngine::generate text_token_count={} bounded_max_len={} request_max_len={} ratio_threshold={}",
+            prepared.target_text_token_count,
+            max_len,
+            request.max_len,
+            request.retry_badcase_ratio_threshold
+        );
         let attempts = if request.retry_badcase {
             request.retry_badcase_max_times.max(1)
         } else {
@@ -250,7 +309,8 @@ impl VoxCPMEngine {
 
         let mut last_output = None;
         for _ in 0..attempts {
-            let output = self.run_generation_once(&prepared, &request, max_len, &progress)?;
+            let output =
+                self.run_generation_once(&prepared, &request, max_len, &progress, cancel)?;
             let is_badcase = request.retry_badcase
                 && output.generated_patch_count as f32
                     >= prepared.target_text_token_count as f32
@@ -548,11 +608,15 @@ impl VoxCPMEngine {
         request: &SynthesisRequest,
         max_len: usize,
         progress: &F,
+        cancel: Option<&AtomicBool>,
     ) -> Result<GenerationOutput> {
         let mut state = self.prefill(prepared)?;
         let mut generated_patch_count = 0usize;
 
         for step in 0..max_len {
+            if cancel.map_or(false, |c| c.load(Ordering::Relaxed)) {
+                bail!("synthesis cancelled");
+            }
             progress(step, max_len);
             let (_latent_patch, stop_logits, _pred_feat) =
                 self.generate_one_patch(&mut state, request, None)?;
@@ -570,6 +634,11 @@ impl VoxCPMEngine {
             }
         }
         progress(generated_patch_count, max_len);
+        tracing::info!(
+            "VoxCPMEngine::run_generation_once generated_patch_count={} max_len={}",
+            generated_patch_count,
+            max_len
+        );
 
         if generated_patch_count == 0 {
             bail!("VoxCPM generated no latent patches");
