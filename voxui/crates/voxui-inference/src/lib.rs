@@ -14,6 +14,7 @@ pub mod request;
 pub mod residual_lm;
 pub mod tokenizer;
 pub mod trace;
+mod weights;
 
 pub use audiovae::AudioVAE;
 pub use base_lm::{BaseLM, BaseLMConfig};
@@ -25,6 +26,8 @@ pub use manifest::{AudioVaeManifest, ModelConfig, ModelVariant, SpecialTokens};
 pub use model_loader::GgufModelLoader;
 pub use request::SynthesisRequest;
 pub use tokenizer::VoxTokenizer;
+
+pub(crate) use weights::{LinearWeight, RuntimeTensor};
 
 use anyhow::Result;
 use candle_core::{DType, Tensor};
