@@ -101,9 +101,15 @@ fn load_conv(
     prefix: &str,
     requested_groups: usize,
 ) -> Result<Conv1dParams> {
-    let g = loader.load_tensor(&format!("{prefix}.weight_g"))?;
-    let v = loader.load_tensor(&format!("{prefix}.weight_v"))?;
-    let bias = loader.load_tensor(&format!("{prefix}.bias"))?;
+    let g_name = format!("{prefix}.weight_g");
+    let v_name = format!("{prefix}.weight_v");
+    let bias_name = format!("{prefix}.bias");
+    loader.ensure_dense_supported(&g_name, "audio_vae weight_norm")?;
+    loader.ensure_dense_supported(&v_name, "conv1d")?;
+    loader.ensure_dense_supported(&bias_name, "conv1d bias")?;
+    let g = loader.load_tensor(&g_name)?;
+    let v = loader.load_tensor(&v_name)?;
+    let bias = loader.load_tensor(&bias_name)?;
     let groups = if requested_groups > 1 && v.dim(1)? == 1 {
         requested_groups
     } else {
@@ -440,6 +446,7 @@ impl AudioVAE {
             // Transposed conv weight_v shape: [in, out, kernel_size]
             // stride = kernel_size / 2
             let name = format!("audio_vae.decoder.model.{model_idx}.block.1.weight_v");
+            loader.ensure_dense_supported(&name, "audio_vae decoder rate inference")?;
             let w = loader.load_tensor(&name)?;
             let kernel_size = w.dim(2)?;
             rates.push(kernel_size / 2);
@@ -518,5 +525,78 @@ impl AudioVAE {
         let x = snake(&x, &self.final_alpha)?;
         let x = causal_conv1d(&x, &self.final_conv, 1)?;
         Ok(x.tanh()?)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use anyhow::Result;
+    use byteorder::{LittleEndian, WriteBytesExt};
+    use candle_core::Device;
+    use std::io::Write;
+
+    fn write_string(mut out: impl Write, value: &str) -> Result<()> {
+        out.write_u64::<LittleEndian>(value.len() as u64)?;
+        out.write_all(value.as_bytes())?;
+        Ok(())
+    }
+
+    fn align_32(len: usize) -> usize {
+        (len + 31) & !31
+    }
+
+    fn write_quantized_conv_gguf(path: &std::path::Path) -> Result<()> {
+        let mut bytes = Vec::new();
+        bytes.write_u32::<LittleEndian>(0x46554747)?;
+        bytes.write_u32::<LittleEndian>(3)?;
+        bytes.write_u64::<LittleEndian>(3)?;
+        bytes.write_u64::<LittleEndian>(0)?;
+
+        write_string(&mut bytes, "audio_vae.decoder.model.0.weight_g")?;
+        bytes.write_u32::<LittleEndian>(3)?;
+        bytes.write_u64::<LittleEndian>(1)?;
+        bytes.write_u64::<LittleEndian>(1)?;
+        bytes.write_u64::<LittleEndian>(1)?;
+        bytes.write_u32::<LittleEndian>(0)?;
+        bytes.write_u64::<LittleEndian>(0)?;
+
+        write_string(&mut bytes, "audio_vae.decoder.model.0.weight_v")?;
+        bytes.write_u32::<LittleEndian>(3)?;
+        bytes.write_u64::<LittleEndian>(1)?;
+        bytes.write_u64::<LittleEndian>(1)?;
+        bytes.write_u64::<LittleEndian>(32)?;
+        bytes.write_u32::<LittleEndian>(2)?;
+        bytes.write_u64::<LittleEndian>(4)?;
+
+        write_string(&mut bytes, "audio_vae.decoder.model.0.bias")?;
+        bytes.write_u32::<LittleEndian>(1)?;
+        bytes.write_u64::<LittleEndian>(1)?;
+        bytes.write_u32::<LittleEndian>(0)?;
+        bytes.write_u64::<LittleEndian>(22)?;
+
+        bytes.resize(align_32(bytes.len()), 0);
+        bytes.extend_from_slice(&1.0f32.to_le_bytes());
+        bytes.extend_from_slice(&0.25f32.to_le_bytes()[0..2]);
+        bytes.extend_from_slice(&[0x88; 16]);
+        bytes.extend_from_slice(&0.0f32.to_le_bytes());
+        std::fs::write(path, bytes)?;
+        Ok(())
+    }
+
+    #[test]
+    fn quantized_conv_weight_is_rejected() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("model.gguf");
+        write_quantized_conv_gguf(&path)?;
+        let loader = GgufModelLoader::new(&path, Device::Cpu)?;
+
+        let err = match load_conv(&loader, "audio_vae.decoder.model.0", 1) {
+            Ok(_) => anyhow::bail!("expected quantized conv load to fail"),
+            Err(err) => err.to_string(),
+        };
+
+        assert!(err.contains("unsupported quantized tensor audio_vae.decoder.model.0.weight_v"));
+        Ok(())
     }
 }
