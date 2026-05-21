@@ -6,6 +6,10 @@ use std::time::Duration;
 const MIB: u64 = 1024 * 1024;
 #[cfg(feature = "cuda")]
 const VRAM_WARNING_THRESHOLD_MIB: u64 = 7 * 1024;
+#[cfg(feature = "cuda")]
+const CHILD_MODEL_ENV: &str = "VOXUI_VRAM_CHILD_MODEL";
+#[cfg(feature = "cuda")]
+const CHILD_JSON_PREFIX: &str = "VOXUI_VRAM_JSON=";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct ProcessMemorySnapshot {
@@ -24,6 +28,16 @@ struct GlobalCudaMemorySnapshot {
 struct MemorySample {
     process: Option<ProcessMemorySnapshot>,
     global: Option<GlobalCudaMemorySnapshot>,
+}
+
+#[cfg(feature = "cuda")]
+#[derive(Debug, Clone)]
+struct ModelVramReport {
+    model_name: String,
+    baseline: MemorySample,
+    after_load: MemorySample,
+    after_synth: MemorySample,
+    peak_process_delta_mib: Option<i64>,
 }
 
 fn parse_process_memory_mib(output: &str, pid: u32) -> Option<ProcessMemorySnapshot> {
@@ -195,6 +209,11 @@ fn model_dir(name: &str) -> PathBuf {
 }
 
 #[cfg(feature = "cuda")]
+fn artifact_dir() -> PathBuf {
+    repo_root().join("voxui").join("target").join("cuda-vram-report")
+}
+
+#[cfg(feature = "cuda")]
 fn print_sample_line(label: &str, baseline: MemorySample, sample: MemorySample) {
     match sample.process {
         Some(process) => {
@@ -271,14 +290,14 @@ fn print_model_report(
 }
 
 #[cfg(feature = "cuda")]
-fn run_model_report(model_name: &str) -> Result<()> {
+fn run_model_report(model_name: &str) -> Result<Option<ModelVramReport>> {
     let dir = model_dir(model_name);
     if !dir.join("model.gguf").is_file() {
         eprintln!(
             "[SKIP] {model_name}: model.gguf not found at {}",
             dir.display()
         );
-        return Ok(());
+        return Ok(None);
     }
 
     let device = Device::new_cuda(0).context("create CUDA device 0")?;
@@ -318,6 +337,91 @@ fn run_model_report(model_name: &str) -> Result<()> {
     );
 
     print_model_report(model_name, baseline, after_load, after_synth);
+    Ok(Some(ModelVramReport {
+        model_name: model_name.to_string(),
+        baseline,
+        after_load,
+        after_synth,
+        peak_process_delta_mib: peak_process_delta_mib(
+            baseline.process,
+            after_load.process,
+            after_synth.process,
+        ),
+    }))
+}
+
+#[test]
+#[cfg(feature = "cuda")]
+fn vram_report_child() -> Result<()> {
+    let Some(model_name) = std::env::var(CHILD_MODEL_ENV).ok() else {
+        eprintln!("[SKIP] child env not set");
+        return Ok(());
+    };
+    let Some(report) = run_model_report(&model_name)? else {
+        println!("{CHILD_JSON_PREFIX}{{\"model_name\":\"{model_name}\",\"skipped\":true}}");
+        return Ok(());
+    };
+    println!(
+        "{CHILD_JSON_PREFIX}{}",
+        serde_json::json!({
+            "model_name": report.model_name,
+            "peak_process_delta_mib": report.peak_process_delta_mib,
+            "baseline_process_mib": report.baseline.process.map(|v| v.used_mib),
+            "after_load_process_mib": report.after_load.process.map(|v| v.used_mib),
+            "after_synth_process_mib": report.after_synth.process.map(|v| v.used_mib),
+        })
+    );
+    Ok(())
+}
+
+#[cfg(feature = "cuda")]
+fn run_child_model_report(model_name: &str) -> Result<serde_json::Value> {
+    let output = Command::new(std::env::current_exe()?)
+        .args(["--exact", "vram_report_child", "--nocapture", "--test-threads=1"])
+        .env(CHILD_MODEL_ENV, model_name)
+        .output()
+        .with_context(|| format!("run child VRAM report for {model_name}"))?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if !output.status.success() {
+        anyhow::bail!("child VRAM report failed for {model_name}\nstdout:\n{stdout}\nstderr:\n{stderr}");
+    }
+    let json_line = stdout
+        .lines()
+        .find_map(|line| line.strip_prefix(CHILD_JSON_PREFIX))
+        .ok_or_else(|| anyhow::anyhow!("child VRAM report did not emit JSON for {model_name}"))?;
+    serde_json::from_str(json_line).map_err(Into::into)
+}
+
+#[cfg(feature = "cuda")]
+fn write_report_artifacts(reports: &[serde_json::Value]) -> Result<()> {
+    let dir = artifact_dir();
+    std::fs::create_dir_all(&dir)?;
+    let json_path = dir.join("voxcpm-vram-report.json");
+    let md_path = dir.join("voxcpm-vram-report.md");
+    std::fs::write(&json_path, serde_json::to_string_pretty(reports)?)?;
+
+    let mut markdown = String::from("# VoxCPM CUDA VRAM Report\n\n");
+    markdown.push_str("| model | peak process delta MiB | skipped |\n");
+    markdown.push_str("| --- | ---: | --- |\n");
+    for report in reports {
+        markdown.push_str(&format!(
+            "| {} | {} | {} |\n",
+            report["model_name"].as_str().unwrap_or("<unknown>"),
+            report["peak_process_delta_mib"]
+                .as_i64()
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "n/a".to_string()),
+            report["skipped"].as_bool().unwrap_or(false),
+        ));
+    }
+    markdown.push_str("\n`cargo test` captures stdout by default. Use `-- --nocapture --test-threads=1` for console output.\n");
+    std::fs::write(&md_path, markdown)?;
+    println!(
+        "wrote VRAM artifacts: {} and {}",
+        json_path.display(),
+        md_path.display()
+    );
     Ok(())
 }
 
@@ -325,9 +429,24 @@ fn run_model_report(model_name: &str) -> Result<()> {
 #[cfg(feature = "cuda")]
 fn reports_voxcpm2_cuda_vram_for_fp16_and_q4_lm() -> Result<()> {
     assert_eq!(CHINESE_20.chars().count(), 20);
+    let fp16 = run_child_model_report("voxcpm2-fp16")?;
+    let q4 = run_child_model_report("voxcpm2-q4-lm")?;
+    let reports = vec![fp16.clone(), q4.clone()];
+    write_report_artifacts(&reports)?;
 
-    run_model_report("voxcpm2-fp16")?;
-    run_model_report("voxcpm2-q4-lm")?;
+    if fp16["skipped"].as_bool().unwrap_or(false) || q4["skipped"].as_bool().unwrap_or(false) {
+        eprintln!("[SKIP] one or more model bundles are missing");
+        return Ok(());
+    }
+    if let (Some(fp16_peak), Some(q4_peak)) = (
+        fp16["peak_process_delta_mib"].as_i64(),
+        q4["peak_process_delta_mib"].as_i64(),
+    ) {
+        assert!(
+            q4_peak < fp16_peak,
+            "expected q4 peak process VRAM ({q4_peak} MiB) to be below fp16 ({fp16_peak} MiB)"
+        );
+    }
 
     Ok(())
 }
