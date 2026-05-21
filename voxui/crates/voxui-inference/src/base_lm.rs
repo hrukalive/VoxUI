@@ -6,6 +6,7 @@ use candle_nn::ops::silu;
 
 use crate::manifest::ModelConfig;
 use crate::model_loader::GgufModelLoader;
+use crate::{LinearWeight, RuntimeTensor};
 
 /// Configuration for the base LM transformer.
 pub struct BaseLMConfig {
@@ -218,23 +219,23 @@ pub fn rotate_half_for_test(input: &[f32]) -> Vec<f32> {
 
 /// Weights for a single transformer layer.
 struct TransformerLayer {
-    q_proj: Tensor,
-    k_proj: Tensor,
-    v_proj: Tensor,
-    o_proj: Tensor,
-    gate_proj: Tensor,
-    up_proj: Tensor,
-    down_proj: Tensor,
-    input_layernorm: Tensor,
-    post_attention_layernorm: Tensor,
+    q_proj: LinearWeight,
+    k_proj: LinearWeight,
+    v_proj: LinearWeight,
+    o_proj: LinearWeight,
+    gate_proj: LinearWeight,
+    up_proj: LinearWeight,
+    down_proj: LinearWeight,
+    input_layernorm: RuntimeTensor,
+    post_attention_layernorm: RuntimeTensor,
 }
 
 /// The base language model (MiniCPM-4 / VoxCPM2 architecture).
 pub struct BaseLM {
     config: BaseLMConfig,
-    embed_tokens: Option<Tensor>,
+    embed_tokens: Option<RuntimeTensor>,
     layers: Vec<TransformerLayer>,
-    norm: Tensor,
+    norm: RuntimeTensor,
     // Precomputed RoPE
     cos_cache: Tensor, // [max_position, head_dim/2]
     sin_cache: Tensor,
@@ -246,7 +247,7 @@ pub struct BaseLM {
 }
 
 /// RMS normalization: x * rsqrt(mean(x^2) + eps) * weight
-fn rms_norm(x: &Tensor, weight: &Tensor, eps: f64) -> Result<Tensor> {
+fn rms_norm(x: &Tensor, weight: &RuntimeTensor, eps: f64) -> Result<Tensor> {
     let dtype = x.dtype();
     // Compute in f32 for stability
     let x = x.to_dtype(DType::F32)?;
@@ -257,7 +258,7 @@ fn rms_norm(x: &Tensor, weight: &Tensor, eps: f64) -> Result<Tensor> {
         .broadcast_add(&Tensor::new(&[eps as f32], mean_sq.device())?)?;
     let norm = (mean_sq + eps_t)?.sqrt()?.recip()?;
     let out = x.broadcast_mul(&norm)?;
-    let weight = weight.to_dtype(DType::F32)?;
+    let weight = weight.to_dense_dtype(DType::F32)?;
     let out = out.broadcast_mul(&weight)?;
     out.to_dtype(dtype).map_err(Into::into)
 }
@@ -312,26 +313,27 @@ impl BaseLM {
         // embed_tokens is optional — residual_lm and encoder don't have it
         let embed_name = format!("{}.embed_tokens.weight", config.prefix);
         let embed_tokens = if loader.has_tensor(&embed_name) {
-            Some(loader.load_tensor_optimal(&embed_name)?)
+            Some(loader.load_runtime_tensor(&embed_name)?)
         } else {
             None
         };
-        let norm = loader.load_tensor(&format!("{}.norm.weight", config.prefix))?;
+        let norm = loader.load_runtime_tensor(&format!("{}.norm.weight", config.prefix))?;
 
         let mut layers = Vec::with_capacity(config.num_layers);
         for i in 0..config.num_layers {
             let prefix = format!("{}.layers.{i}", config.prefix);
             layers.push(TransformerLayer {
-                q_proj: loader.load_tensor_optimal(&format!("{prefix}.self_attn.q_proj.weight"))?,
-                k_proj: loader.load_tensor_optimal(&format!("{prefix}.self_attn.k_proj.weight"))?,
-                v_proj: loader.load_tensor_optimal(&format!("{prefix}.self_attn.v_proj.weight"))?,
-                o_proj: loader.load_tensor_optimal(&format!("{prefix}.self_attn.o_proj.weight"))?,
-                gate_proj: loader.load_tensor_optimal(&format!("{prefix}.mlp.gate_proj.weight"))?,
-                up_proj: loader.load_tensor_optimal(&format!("{prefix}.mlp.up_proj.weight"))?,
-                down_proj: loader.load_tensor_optimal(&format!("{prefix}.mlp.down_proj.weight"))?,
-                input_layernorm: loader.load_tensor(&format!("{prefix}.input_layernorm.weight"))?,
+                q_proj: loader.load_linear_weight(&format!("{prefix}.self_attn.q_proj.weight"))?,
+                k_proj: loader.load_linear_weight(&format!("{prefix}.self_attn.k_proj.weight"))?,
+                v_proj: loader.load_linear_weight(&format!("{prefix}.self_attn.v_proj.weight"))?,
+                o_proj: loader.load_linear_weight(&format!("{prefix}.self_attn.o_proj.weight"))?,
+                gate_proj: loader.load_linear_weight(&format!("{prefix}.mlp.gate_proj.weight"))?,
+                up_proj: loader.load_linear_weight(&format!("{prefix}.mlp.up_proj.weight"))?,
+                down_proj: loader.load_linear_weight(&format!("{prefix}.mlp.down_proj.weight"))?,
+                input_layernorm: loader
+                    .load_runtime_tensor(&format!("{prefix}.input_layernorm.weight"))?,
                 post_attention_layernorm: loader
-                    .load_tensor(&format!("{prefix}.post_attention_layernorm.weight"))?,
+                    .load_runtime_tensor(&format!("{prefix}.post_attention_layernorm.weight"))?,
             });
         }
 
@@ -416,9 +418,9 @@ impl BaseLM {
         // We'll lazily initialize caches on first forward call.
     }
 
-    /// Linear: x @ weight^T. Delegates to shared crate::linear.
-    fn linear(x: &Tensor, weight: &Tensor) -> Result<Tensor> {
-        crate::linear(x, weight)
+    /// Linear: x @ weight^T. Delegates to quantized-aware runtime weights.
+    fn linear(x: &Tensor, weight: &LinearWeight) -> Result<Tensor> {
+        weight.forward(x)
     }
 
     /// Embed token IDs into hidden states [1, T, hidden_size].
@@ -430,8 +432,7 @@ impl BaseLM {
             )
         })?;
         let seq_len = token_ids.len();
-        let ids_tensor = Tensor::new(token_ids, &self.device)?;
-        let hidden = embed.index_select(&ids_tensor, 0)?;
+        let hidden = embed.embedding_rows(token_ids, DType::F32)?;
         let hidden = hidden.reshape((1, seq_len, self.config.hidden_size))?;
         if self.config.use_mup {
             (hidden * self.config.scale_emb).map_err(Into::into)
