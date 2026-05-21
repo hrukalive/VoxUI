@@ -9,3 +9,6 @@ half = { version = "2", features = ["std"] }
 byteorder = "1"
 anyhow.workspace = true
 thiserror.workspace = true
+
+[dev-dependencies]
+tempfile = "3"

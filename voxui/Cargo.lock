@@ -5461,6 +5461,7 @@ dependencies = [
  "byteorder",
  "half",
  "memmap2",
+ "tempfile",
  "thiserror 2.0.18",
 ]
 

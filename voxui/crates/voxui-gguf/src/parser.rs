@@ -159,4 +159,95 @@ impl GgufFile {
         let n_elements: usize = info.shape.iter().product::<u64>() as usize;
         dequant::dequantize(data, info.dtype, n_elements)
     }
+
+    pub fn tensor_raw(&self, name: &str) -> anyhow::Result<RawTensor<'_>> {
+        let info = self
+            .tensor_info(name)
+            .with_context(|| format!("tensor '{}' not found", name))?;
+        let data = self
+            .tensor_data(name)
+            .with_context(|| format!("tensor '{}' data out of bounds", name))?;
+        Ok(RawTensor { info, data })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use byteorder::{LittleEndian, WriteBytesExt};
+    use std::io::Write;
+
+    fn write_string(mut out: impl Write, value: &str) -> anyhow::Result<()> {
+        out.write_u64::<LittleEndian>(value.len() as u64)?;
+        out.write_all(value.as_bytes())?;
+        Ok(())
+    }
+
+    fn align_32(len: usize) -> usize {
+        (len + 31) & !31
+    }
+
+    fn write_test_gguf(path: &std::path::Path) -> anyhow::Result<()> {
+        let mut bytes = Vec::new();
+        bytes.write_u32::<LittleEndian>(GGUF_MAGIC)?;
+        bytes.write_u32::<LittleEndian>(3)?;
+        bytes.write_u64::<LittleEndian>(2)?;
+        bytes.write_u64::<LittleEndian>(0)?;
+
+        write_string(&mut bytes, "dense")?;
+        bytes.write_u32::<LittleEndian>(1)?;
+        bytes.write_u64::<LittleEndian>(4)?;
+        bytes.write_u32::<LittleEndian>(0)?;
+        bytes.write_u64::<LittleEndian>(0)?;
+
+        write_string(&mut bytes, "q4")?;
+        bytes.write_u32::<LittleEndian>(2)?;
+        bytes.write_u64::<LittleEndian>(1)?;
+        bytes.write_u64::<LittleEndian>(32)?;
+        bytes.write_u32::<LittleEndian>(2)?;
+        bytes.write_u64::<LittleEndian>(16)?;
+
+        bytes.resize(align_32(bytes.len()), 0);
+        bytes.extend_from_slice(&1.0f32.to_le_bytes());
+        bytes.extend_from_slice(&2.0f32.to_le_bytes());
+        bytes.extend_from_slice(&3.0f32.to_le_bytes());
+        bytes.extend_from_slice(&4.0f32.to_le_bytes());
+        bytes.extend_from_slice(&[0x00; 18]);
+        std::fs::write(path, bytes)?;
+        Ok(())
+    }
+
+    #[test]
+    fn tensor_raw_exposes_dtype_shape_and_bytes_without_dequantizing() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("model.gguf");
+        write_test_gguf(&path)?;
+
+        let gguf = GgufFile::open(&path)?;
+        let raw = gguf.tensor_raw("q4")?;
+
+        assert_eq!(raw.info.name, "q4");
+        assert_eq!(raw.info.shape, vec![1, 32]);
+        assert_eq!(raw.info.dtype, GgmlType::Q4_0);
+        assert_eq!(raw.info.element_count(), 32);
+        assert!(raw.info.is_quantized());
+        assert_eq!(raw.data.len(), 18);
+        Ok(())
+    }
+
+    #[test]
+    fn dense_tensor_info_reports_non_quantized_element_count() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("model.gguf");
+        write_test_gguf(&path)?;
+
+        let gguf = GgufFile::open(&path)?;
+        let raw = gguf.tensor_raw("dense")?;
+
+        assert_eq!(raw.info.dtype, GgmlType::F32);
+        assert_eq!(raw.info.element_count(), 4);
+        assert!(!raw.info.is_quantized());
+        assert_eq!(raw.data.len(), 16);
+        Ok(())
+    }
 }

@@ -84,6 +84,10 @@ impl GgmlType {
             other => anyhow::bail!("unsupported GGML type: {}", other),
         }
     }
+
+    pub fn is_quantized(self) -> bool {
+        matches!(self, GgmlType::Q4_0 | GgmlType::Q8_0)
+    }
 }
 
 impl std::fmt::Display for GgmlType {
@@ -104,6 +108,22 @@ pub struct TensorInfo {
     pub dtype: GgmlType,
     pub offset: u64,
     pub data_size: usize,
+}
+
+impl TensorInfo {
+    pub fn element_count(&self) -> usize {
+        self.shape.iter().product::<u64>() as usize
+    }
+
+    pub fn is_quantized(&self) -> bool {
+        self.dtype.is_quantized()
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct RawTensor<'a> {
+    pub info: &'a TensorInfo,
+    pub data: &'a [u8],
 }
 
 pub struct GgufFile {
