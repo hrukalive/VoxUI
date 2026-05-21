@@ -1,0 +1,567 @@
+# VoxCPM2 CUDA VRAM Report Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** Add a focused CUDA integration test that reports process-scoped VRAM usage for VoxCPM2 fp16 and q4-lm bundles during model load and one 20-Chinese-character synthesis.
+
+**Architecture:** Keep the feature report isolated in one integration test file. Use test-local helpers to parse process-specific `nvidia-smi` memory rows and to print CUDA driver global free/total memory as diagnostic context. Do not change exporter or inference runtime behavior in this pass.
+
+**Tech Stack:** Rust 2021, `voxui-inference`, Candle CUDA, `nvidia-smi`, Windows PowerShell CUDA environment from `README.txt`.
+
+---
+
+## File Structure
+
+- Create `voxui/crates/voxui-inference/tests/cuda_vram_report.rs`: focused CUDA report test plus test-local memory snapshot helpers and unit tests for parser/report math.
+- Do not modify `exporter/`.
+- Do not modify `voxui/crates/voxui-inference/src/*` for this pass.
+
+---
+
+### Task 1: Write Failing Memory Snapshot Helper Tests
+
+**Files:**
+- Create: `voxui/crates/voxui-inference/tests/cuda_vram_report.rs`
+
+- [ ] **Step 1: Create the test file with parser and formatting tests**
+
+Create `voxui/crates/voxui-inference/tests/cuda_vram_report.rs` with this content:
+
+```rust
+const VRAM_WARNING_THRESHOLD_MIB: u64 = 7 * 1024;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn process_memory_parser_filters_current_pid_and_sums_rows() {
+        let output = "1234, 2048\n9999, 333\n1234, 256\nbad, data\n";
+
+        let snapshot = parse_process_memory_mib(output, 1234);
+
+        assert_eq!(snapshot, Some(ProcessMemorySnapshot { used_mib: 2304 }));
+    }
+
+    #[test]
+    fn process_memory_parser_accepts_mib_suffix_when_present() {
+        let output = "42, 7168 MiB\n";
+
+        let snapshot = parse_process_memory_mib(output, 42);
+
+        assert_eq!(snapshot, Some(ProcessMemorySnapshot { used_mib: 7168 }));
+    }
+
+    #[test]
+    fn process_memory_parser_returns_none_without_matching_pid() {
+        let output = "11, 1024\n22, 2048\n";
+
+        let snapshot = parse_process_memory_mib(output, 33);
+
+        assert_eq!(snapshot, None);
+    }
+
+    #[test]
+    fn memory_formatting_is_stable_for_report_output() {
+        assert_eq!(format_mib(0), "0 MiB (0.00 GiB)");
+        assert_eq!(format_mib(7168), "7168 MiB (7.00 GiB)");
+        assert_eq!(format_signed_mib(256), "+256 MiB (0.25 GiB)");
+        assert_eq!(format_signed_mib(-128), "-128 MiB (0.12 GiB)");
+    }
+
+    #[test]
+    fn peak_delta_uses_largest_available_process_delta() {
+        let baseline = ProcessMemorySnapshot { used_mib: 1000 };
+        let after_load = ProcessMemorySnapshot { used_mib: 6500 };
+        let after_synth = ProcessMemorySnapshot { used_mib: 6200 };
+
+        let peak = peak_process_delta_mib(Some(baseline), Some(after_load), Some(after_synth));
+
+        assert_eq!(peak, Some(5500));
+    }
+}
+```
+
+- [ ] **Step 2: Run the new test and verify the expected failure**
+
+Run from `voxui/`:
+
+```powershell
+cargo test -p voxui-inference --test cuda_vram_report process_memory_parser
+```
+
+Expected result before implementation:
+
+```text
+error[E0425]: cannot find function `parse_process_memory_mib` in this scope
+```
+
+If the compiler instead reports that `ProcessMemorySnapshot`, `format_mib`, `format_signed_mib`, or `peak_process_delta_mib` is missing, that is still the expected RED state because the test describes helpers that do not exist yet.
+
+---
+
+### Task 2: Implement Memory Snapshot Helpers
+
+**Files:**
+- Modify: `voxui/crates/voxui-inference/tests/cuda_vram_report.rs`
+
+- [ ] **Step 1: Add helper imports, structs, and functions above the test module**
+
+Replace the first line of `voxui/crates/voxui-inference/tests/cuda_vram_report.rs` with this helper implementation, keeping the existing `#[cfg(test)] mod tests` below it:
+
+```rust
+use std::process::Command;
+use std::time::Duration;
+
+const MIB: u64 = 1024 * 1024;
+const VRAM_WARNING_THRESHOLD_MIB: u64 = 7 * 1024;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ProcessMemorySnapshot {
+    used_mib: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct GlobalCudaMemorySnapshot {
+    free_mib: u64,
+    total_mib: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct MemorySample {
+    process: Option<ProcessMemorySnapshot>,
+    global: Option<GlobalCudaMemorySnapshot>,
+}
+
+fn parse_process_memory_mib(output: &str, pid: u32) -> Option<ProcessMemorySnapshot> {
+    let mut used_mib = 0u64;
+    let mut found = false;
+
+    for line in output.lines() {
+        let mut parts = line.split(',').map(str::trim);
+        let Some(row_pid_text) = parts.next() else {
+            continue;
+        };
+        let Some(row_used_text) = parts.next() else {
+            continue;
+        };
+        let Ok(row_pid) = row_pid_text.parse::<u32>() else {
+            continue;
+        };
+        if row_pid != pid {
+            continue;
+        }
+        let row_used_text = row_used_text
+            .strip_suffix("MiB")
+            .unwrap_or(row_used_text)
+            .trim();
+        let Ok(row_used_mib) = row_used_text.parse::<u64>() else {
+            continue;
+        };
+        used_mib += row_used_mib;
+        found = true;
+    }
+
+    found.then_some(ProcessMemorySnapshot { used_mib })
+}
+
+fn current_process_memory_snapshot() -> Option<ProcessMemorySnapshot> {
+    std::thread::sleep(Duration::from_millis(100));
+    let output = Command::new("nvidia-smi")
+        .args([
+            "--query-compute-apps=pid,used_memory",
+            "--format=csv,noheader,nounits",
+        ])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let stdout = String::from_utf8(output.stdout).ok()?;
+    parse_process_memory_mib(&stdout, std::process::id())
+}
+
+#[cfg(feature = "cuda")]
+fn cuda_global_memory_snapshot() -> Option<GlobalCudaMemorySnapshot> {
+    let (free, total) = candle_core::cuda::cudarc::driver::result::mem_get_info().ok()?;
+    Some(GlobalCudaMemorySnapshot {
+        free_mib: (free as u64) / MIB,
+        total_mib: (total as u64) / MIB,
+    })
+}
+
+#[cfg(not(feature = "cuda"))]
+fn cuda_global_memory_snapshot() -> Option<GlobalCudaMemorySnapshot> {
+    None
+}
+
+fn take_memory_sample() -> MemorySample {
+    MemorySample {
+        process: current_process_memory_snapshot(),
+        global: cuda_global_memory_snapshot(),
+    }
+}
+
+fn process_delta_mib(
+    baseline: Option<ProcessMemorySnapshot>,
+    sample: Option<ProcessMemorySnapshot>,
+) -> Option<i64> {
+    Some(sample?.used_mib as i64 - baseline?.used_mib as i64)
+}
+
+fn peak_process_delta_mib(
+    baseline: Option<ProcessMemorySnapshot>,
+    after_load: Option<ProcessMemorySnapshot>,
+    after_synth: Option<ProcessMemorySnapshot>,
+) -> Option<i64> {
+    let load_delta = process_delta_mib(baseline, after_load);
+    let synth_delta = process_delta_mib(baseline, after_synth);
+    match (load_delta, synth_delta) {
+        (Some(load), Some(synth)) => Some(load.max(synth)),
+        (Some(load), None) => Some(load),
+        (None, Some(synth)) => Some(synth),
+        (None, None) => None,
+    }
+}
+
+fn format_mib(mib: u64) -> String {
+    format!("{mib} MiB ({:.2} GiB)", mib as f64 / 1024.0)
+}
+
+fn format_signed_mib(mib: i64) -> String {
+    let sign = if mib >= 0 { "+" } else { "-" };
+    let abs_mib = mib.unsigned_abs();
+    format!("{sign}{}", format_mib(abs_mib))
+}
+```
+
+- [ ] **Step 2: Run the helper tests and verify GREEN**
+
+Run from `voxui/`:
+
+```powershell
+cargo test -p voxui-inference --test cuda_vram_report process_memory_parser
+cargo test -p voxui-inference --test cuda_vram_report memory_formatting
+cargo test -p voxui-inference --test cuda_vram_report peak_delta
+```
+
+Expected result:
+
+```text
+test result: ok
+```
+
+---
+
+### Task 3: Add Focused CUDA VRAM Report Test
+
+**Files:**
+- Modify: `voxui/crates/voxui-inference/tests/cuda_vram_report.rs`
+
+- [ ] **Step 1: Add report imports, constants, and path helpers above `#[cfg(test)] mod tests`**
+
+Add this code below `format_signed_mib` and above the test module:
+
+```rust
+#[cfg(feature = "cuda")]
+use std::path::{Path, PathBuf};
+
+#[cfg(feature = "cuda")]
+use anyhow::{Context, Result};
+#[cfg(feature = "cuda")]
+use candle_core::Device;
+#[cfg(feature = "cuda")]
+use voxui_inference::{SynthesisRequest, VoxCPMEngine};
+
+#[cfg(feature = "cuda")]
+const TEST_DIT_STEPS: usize = 10;
+#[cfg(feature = "cuda")]
+const TEST_MAX_LEN: usize = 6;
+#[cfg(feature = "cuda")]
+const CHINESE_20: &str = "\u{8fd9}\u{662f}\u{7528}\u{4e8e}\u{6d4b}\u{8bd5}\u{663e}\u{5b58}\u{62a5}\u{544a}\u{7684}\u{4e8c}\u{5341}\u{4e2a}\u{4e2d}\u{6587}\u{6c49}\u{5b57}\u{8f93}\u{5165}";
+
+#[cfg(feature = "cuda")]
+fn repo_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .to_path_buf()
+}
+
+#[cfg(feature = "cuda")]
+fn model_dir(name: &str) -> PathBuf {
+    repo_root().join("models").join(name)
+}
+```
+
+- [ ] **Step 2: Add report printing helpers above the test module**
+
+Add this code below `model_dir`:
+
+```rust
+#[cfg(feature = "cuda")]
+fn print_sample_line(label: &str, baseline: MemorySample, sample: MemorySample) {
+    match sample.process {
+        Some(process) => {
+            let delta = process_delta_mib(baseline.process, sample.process)
+                .map(format_signed_mib)
+                .unwrap_or_else(|| "delta unavailable".to_string());
+            println!(
+                "{label:<22} {:>22}  {delta}",
+                format_mib(process.used_mib)
+            );
+        }
+        None => println!("{label:<22} process VRAM unavailable"),
+    }
+
+    if let Some(global) = sample.global {
+        println!(
+            "{label:<22} global free/total {:>22} / {}",
+            format_mib(global.free_mib),
+            format_mib(global.total_mib)
+        );
+    }
+}
+
+#[cfg(feature = "cuda")]
+fn print_model_report(
+    model_name: &str,
+    baseline: MemorySample,
+    after_load: MemorySample,
+    after_synth: MemorySample,
+) {
+    println!();
+    println!("=== CUDA VRAM report: {model_name} ===");
+    match baseline.process {
+        Some(process) => println!(
+            "{:<22} {:>22}",
+            "baseline process:",
+            format_mib(process.used_mib)
+        ),
+        None => println!("{:<22} process VRAM unavailable", "baseline process:"),
+    }
+    if let Some(global) = baseline.global {
+        println!(
+            "{:<22} global free/total {:>22} / {}",
+            "baseline:",
+            format_mib(global.free_mib),
+            format_mib(global.total_mib)
+        );
+    }
+
+    print_sample_line("after load:", baseline, after_load);
+    print_sample_line("after synth:", baseline, after_synth);
+
+    match peak_process_delta_mib(baseline.process, after_load.process, after_synth.process) {
+        Some(peak) => {
+            let status = if peak > VRAM_WARNING_THRESHOLD_MIB as i64 {
+                "WARNING"
+            } else {
+                "OK"
+            };
+            println!(
+                "{:<22} {:>22}  threshold {}  {status}",
+                "peak process delta:",
+                format_signed_mib(peak),
+                format_mib(VRAM_WARNING_THRESHOLD_MIB)
+            );
+            if peak > VRAM_WARNING_THRESHOLD_MIB as i64 {
+                println!(
+                    "WARNING: peak process VRAM delta exceeded 7 GiB; investigate runtime quantization or more aggressive export/inference strategy."
+                );
+            }
+        }
+        None => println!(
+            "{:<22} process VRAM unavailable; threshold warning skipped",
+            "peak process delta:"
+        ),
+    }
+}
+```
+
+- [ ] **Step 3: Add the CUDA report runner above the test module**
+
+Add this code below `print_model_report`:
+
+```rust
+#[cfg(feature = "cuda")]
+fn run_model_report(model_name: &str) -> Result<()> {
+    let dir = model_dir(model_name);
+    if !dir.join("model.gguf").is_file() {
+        eprintln!(
+            "[SKIP] {model_name}: model.gguf not found at {}",
+            dir.display()
+        );
+        return Ok(());
+    }
+
+    let device = Device::new_cuda(0).context("create CUDA device 0")?;
+    device.synchronize().context("synchronize CUDA device before baseline")?;
+    let baseline = take_memory_sample();
+
+    let mut engine = VoxCPMEngine::load(&dir, device.clone())
+        .with_context(|| format!("load {model_name} on CUDA"))?;
+    device.synchronize().context("synchronize CUDA device after load")?;
+    let after_load = take_memory_sample();
+
+    let request = SynthesisRequest {
+        text: CHINESE_20.to_string(),
+        inference_timesteps: TEST_DIT_STEPS,
+        max_len: TEST_MAX_LEN,
+        retry_badcase: false,
+        ..SynthesisRequest::default()
+    };
+    let samples = engine
+        .generate(request, |_, _| {})
+        .with_context(|| format!("synthesize 20-character Chinese sentence with {model_name}"))?;
+    device
+        .synchronize()
+        .context("synchronize CUDA device after synthesis")?;
+    let after_synth = take_memory_sample();
+
+    assert!(!samples.is_empty(), "generate returned empty audio for {model_name}");
+    assert!(
+        samples.iter().all(|sample| sample.is_finite()),
+        "generate produced NaN/Inf for {model_name}"
+    );
+
+    print_model_report(model_name, baseline, after_load, after_synth);
+    Ok(())
+}
+```
+
+- [ ] **Step 4: Add the focused integration test above the existing unit test module**
+
+Add this code below `run_model_report` and above `#[cfg(test)] mod tests`:
+
+```rust
+#[test]
+#[cfg(feature = "cuda")]
+fn reports_voxcpm2_cuda_vram_for_fp16_and_q4_lm() -> Result<()> {
+    assert_eq!(CHINESE_20.chars().count(), 20);
+
+    run_model_report("voxcpm2-fp16")?;
+    run_model_report("voxcpm2-q4-lm")?;
+
+    Ok(())
+}
+
+#[test]
+#[cfg(not(feature = "cuda"))]
+fn reports_voxcpm2_cuda_vram_for_fp16_and_q4_lm() {
+    eprintln!("[SKIP] CUDA feature not enabled");
+}
+```
+
+- [ ] **Step 5: Run non-CUDA compile/test check**
+
+Run from `voxui/`:
+
+```powershell
+cargo test -p voxui-inference --test cuda_vram_report process_memory_parser
+```
+
+Expected result:
+
+```text
+test result: ok
+```
+
+This check proves the parser tests work without requiring CUDA feature compilation.
+
+---
+
+### Task 4: Run CUDA VRAM Report
+
+**Files:**
+- No file edits.
+
+- [ ] **Step 1: Set the CUDA/MSVC environment from `README.txt`**
+
+Run from `D:\Sandbox_Share\VoxUI\voxui`:
+
+```powershell
+$env:CUDA_PATH = "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.6"
+$env:PATH = "$env:CUDA_PATH\bin;C:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\MSVC\14.50.35717\bin\Hostx64\x64;$env:PATH"
+$env:CUDA_COMPUTE_CAP = "89"
+$env:NVCC_APPEND_FLAGS = "--allow-unsupported-compiler"
+```
+
+- [ ] **Step 2: Run the focused CUDA report test**
+
+Run from `D:\Sandbox_Share\VoxUI\voxui`:
+
+```powershell
+cargo test -p voxui-inference --features cuda --test cuda_vram_report -- --nocapture --test-threads=1
+```
+
+Expected result:
+
+```text
+test reports_voxcpm2_cuda_vram_for_fp16_and_q4_lm ... ok
+```
+
+Expected output includes the exact section headers `=== CUDA VRAM report: voxcpm2-fp16 ===` and `=== CUDA VRAM report: voxcpm2-q4-lm ===`. Each section must include a line beginning with `peak process delta:`.
+
+If the command prints `process VRAM unavailable`, record that in the final status and keep the test behavior report-first. The test should still pass if model load and synthesis succeed.
+
+- [ ] **Step 3: Run the exporter test suite to confirm no exporter behavior changed**
+
+Activate the Python environment and run from `D:\Sandbox_Share\VoxUI`:
+
+```powershell
+& C:\Users\Reon\py_env\voxcpm\Scripts\activate.ps1
+python -m unittest exporter.tests.test_export_manifest -v
+```
+
+Expected result:
+
+```text
+OK
+```
+
+---
+
+### Task 5: Commit the Implementation
+
+**Files:**
+- Stage: `voxui/crates/voxui-inference/tests/cuda_vram_report.rs`
+
+- [ ] **Step 1: Review the implementation diff**
+
+Run from `D:\Sandbox_Share\VoxUI`:
+
+```powershell
+git diff -- voxui/crates/voxui-inference/tests/cuda_vram_report.rs
+```
+
+Expected: the diff creates only the focused CUDA VRAM report test file.
+
+- [ ] **Step 2: Check working tree state**
+
+Run from `D:\Sandbox_Share\VoxUI`:
+
+```powershell
+git status --short
+```
+
+Expected: pre-existing unrelated edits remain, and the new test file is untracked or modified:
+
+```text
+?? voxui/crates/voxui-inference/tests/cuda_vram_report.rs
+```
+
+- [ ] **Step 3: Commit only the new test file**
+
+Run from `D:\Sandbox_Share\VoxUI`:
+
+```powershell
+git add -- voxui/crates/voxui-inference/tests/cuda_vram_report.rs
+git commit -m "test(inference): report VoxCPM2 CUDA VRAM usage"
+```
+
+Expected result: the commit succeeds and the output includes `test(inference): report VoxCPM2 CUDA VRAM usage`.
