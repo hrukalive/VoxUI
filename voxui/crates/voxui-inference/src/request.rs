@@ -32,7 +32,7 @@ impl Default for SynthesisRequest {
             cfg_value: 2.0,
             inference_timesteps: 10,
             min_len: 2,
-            max_len: 4096,
+            max_len: 2000,
             normalize: false,
             retry_badcase: true,
             retry_badcase_max_times: 3,

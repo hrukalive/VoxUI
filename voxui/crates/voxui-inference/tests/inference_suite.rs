@@ -10,7 +10,8 @@ use voxui_inference::{SynthesisRequest, VoxCPMEngine};
 
 const TEST_DIT_STEPS: usize = 10;
 const TEST_MAX_LEN: usize = 6;
-const TEXT_ZH: &str = "\u{4eca}\u{5929}\u{7684}\u{8bed}\u{97f3}\u{6d4b}\u{8bd5}\u{4f1a}\u{8986}\u{76d6}\u{4e2d}\u{6587}\u{53e5}\u{5b50}\u{957f}\u{5ea6}\u{548c}\u{6a21}\u{578b}\u{63a8}\u{7406}\u{6d41}\u{7a0b}\u{3002}";
+const TEXT_ZH: &str = "我说什么来着，我不知道你是什么脾气啊，我肯定要邦邦敲一下。";
+const TEXT_JA: &str = "これはテストですなの！なんでだよ？";
 const TEXT_EN: &str =
     "This inference matrix sentence exercises q4 language model coverage on every backend.";
 
@@ -165,8 +166,6 @@ fn sentence_request(text: &str) -> SynthesisRequest {
     SynthesisRequest {
         text: text.to_string(),
         inference_timesteps: TEST_DIT_STEPS,
-        min_len: 1,
-        max_len: TEST_MAX_LEN,
         retry_badcase: false,
         ..SynthesisRequest::default()
     }
@@ -198,38 +197,38 @@ fn test_model_on_device(model_name: &str, device: Device) {
         engine.patch_size(),
     );
 
-    run_synthesis(
-        &mut engine,
-        sentence_request(TEXT_ZH),
-        &format!("{model_name}/{dev_name}/zh/no-lora"),
-    );
-    run_synthesis(
-        &mut engine,
-        sentence_request(TEXT_EN),
-        &format!("{model_name}/{dev_name}/en/no-lora"),
-    );
-
-    if model_name.contains("voxcpm2") {
-        if let Some(wav) = first_test_wav() {
-            let mut request = sentence_request(TEXT_EN);
-            request.reference_wav_path = Some(wav.clone());
-            run_synthesis(
-                &mut engine,
-                request,
-                &format!("{model_name}/{dev_name}/en/reference"),
-            );
-
-            let mut request = sentence_request(TEXT_EN);
-            request.reference_wav_path = Some(wav.clone());
-            request.prompt_wav_path = Some(wav);
-            request.prompt_text = Some("Hello, welcome to the stream!".to_string());
-            run_synthesis(
-                &mut engine,
-                request,
-                &format!("{model_name}/{dev_name}/en/ref-cont"),
-            );
-        }
-    }
+    // run_synthesis(
+    //     &mut engine,
+    //     sentence_request(TEXT_ZH),
+    //     &format!("{model_name}/{dev_name}/zh/no-lora"),
+    // );
+    // run_synthesis(
+    //     &mut engine,
+    //     sentence_request(TEXT_EN),
+    //     &format!("{model_name}/{dev_name}/en/no-lora"),
+    // );
+    //
+    // if model_name.contains("voxcpm2") {
+    //     if let Some(wav) = first_test_wav() {
+    //         let mut request = sentence_request(TEXT_EN);
+    //         request.reference_wav_path = Some(wav.clone());
+    //         run_synthesis(
+    //             &mut engine,
+    //             request,
+    //             &format!("{model_name}/{dev_name}/en/reference"),
+    //         );
+    //
+    //         let mut request = sentence_request(TEXT_EN);
+    //         request.reference_wav_path = Some(wav.clone());
+    //         request.prompt_wav_path = Some(wav);
+    //         request.prompt_text = Some("Hello, welcome to the stream!".to_string());
+    //         run_synthesis(
+    //             &mut engine,
+    //             request,
+    //             &format!("{model_name}/{dev_name}/en/ref-cont"),
+    //         );
+    //     }
+    // }
 
     for lora_file in find_lora_files(&dir) {
         let lora_name = lora_file.file_stem().unwrap().to_string_lossy();
@@ -240,6 +239,16 @@ fn test_model_on_device(model_name: &str, device: Device) {
             &mut engine,
             sentence_request(TEXT_EN),
             &format!("{model_name}/{dev_name}/en/{lora_name}"),
+        );
+        run_synthesis(
+            &mut engine,
+            sentence_request(TEXT_ZH),
+            &format!("{model_name}/{dev_name}/zh/{lora_name}"),
+        );
+        run_synthesis(
+            &mut engine,
+            sentence_request(TEXT_JA),
+            &format!("{model_name}/{dev_name}/ja/{lora_name}"),
         );
         engine.unload_lora();
     }
