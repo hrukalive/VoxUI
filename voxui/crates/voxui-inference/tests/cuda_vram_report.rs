@@ -175,8 +175,6 @@ use voxui_inference::{SynthesisRequest, VoxCPMEngine};
 #[cfg(feature = "cuda")]
 const TEST_DIT_STEPS: usize = 10;
 #[cfg(feature = "cuda")]
-const TEST_MAX_LEN: usize = 6;
-#[cfg(feature = "cuda")]
 const CHINESE_20: &str = "\u{8fd9}\u{662f}\u{7528}\u{4e8e}\u{6d4b}\u{8bd5}\u{663e}\u{5b58}\u{62a5}\u{544a}\u{7684}\u{4e8c}\u{5341}\u{4e2a}\u{4e2d}\u{6587}\u{6c49}\u{5b57}\u{8f93}\u{5165}";
 
 #[cfg(feature = "cuda")]
@@ -299,7 +297,6 @@ fn run_model_report(model_name: &str) -> Result<()> {
     let request = SynthesisRequest {
         text: CHINESE_20.to_string(),
         inference_timesteps: TEST_DIT_STEPS,
-        max_len: TEST_MAX_LEN,
         retry_badcase: false,
         ..SynthesisRequest::default()
     };
