@@ -88,7 +88,7 @@ The public generation methods should continue to accept the same inputs. The mod
 Add focused tests before implementation:
 
 - Tokenizer parity test using a Chinese phrase known to differ between direct tokenizer encode and Python wrapper behavior. The expected Rust ids should match the Python wrapper output.
-- Tokenizer non-regression test for the existing Chinese sentence where direct and wrapped tokenization already match, plus Japanese and English examples.
+- Tokenizer parity test for the existing Chinese sentence that Python expands into single-character ids, plus Japanese and English non-regression examples.
 - DiT unit test that exercises sequence construction/prefix sizing for V1 and V2 modes without requiring full CUDA generation.
 - Existing VoxCPM2 parity tests must continue to pass.
 

@@ -30,6 +30,8 @@
 
 Create `voxui/crates/voxui-inference/tests/tokenizer_parity.rs`:
 
+Execution note: Python evidence showed the common Chinese sentence is also expanded by the wrapper, so the committed test file should keep that Chinese case as an expected-id parity assertion and reserve direct-tokenizer assertions for Japanese and English.
+
 ```rust
 use std::path::{Path, PathBuf};
 
@@ -74,7 +76,7 @@ fn splits_multichar_chinese_tokens_like_python_reference() {
 }
 
 #[test]
-fn keeps_existing_direct_tokenization_when_python_wrapper_would_match() {
+fn keeps_non_chinese_tokenization_direct() {
     let tokenizer = VoxTokenizer::from_dir(&model_dir()).unwrap();
     let cases = [
         "我说什么来着，我不知道你是什么脾气啊，我肯定要邦邦敲一下。",
