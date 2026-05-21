@@ -179,8 +179,9 @@ fn special_tokens_for_variant(variant: ModelVariant) -> SpecialTokens {
 
 fn default_sample_rate(variant: ModelVariant) -> u32 {
     match variant {
+        ModelVariant::VoxCpm05 => 16_000,
+        ModelVariant::VoxCpm15 => 44_100,
         ModelVariant::VoxCpm2 => 16_000,
-        _ => 44_100,
     }
 }
 

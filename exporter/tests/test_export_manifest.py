@@ -10,6 +10,7 @@ import numpy as np
 
 from exporter.export_voxcpm import (
     BASE_MODEL_FILE,
+    _audio_vae_manifest,
     export_lora,
     partition_weights,
     resolve_quant_args,
@@ -139,6 +140,18 @@ class ExportManifestTests(unittest.TestCase):
         self.assertEqual(quant_args["quant_encoder"], "fp16")
         self.assertEqual(quant_args["quant_dit"], "q8")
         self.assertEqual(quant_args["quant_vae"], "fp16")
+
+    def test_audio_vae_manifest_defaults_voxcpm05_patch_size_to_16khz(self):
+        manifest = _audio_vae_manifest({"architecture": "voxcpm", "patch_size": 2})
+
+        self.assertEqual(manifest["sample_rate"], 16000)
+        self.assertNotIn("out_sample_rate", manifest)
+
+    def test_audio_vae_manifest_defaults_voxcpm15_patch_size_to_44_1khz(self):
+        manifest = _audio_vae_manifest({"architecture": "voxcpm", "patch_size": 4})
+
+        self.assertEqual(manifest["sample_rate"], 44100)
+        self.assertNotIn("out_sample_rate", manifest)
 
     def test_base_export_writes_single_model_gguf_without_manifest(self):
         main_weights = {

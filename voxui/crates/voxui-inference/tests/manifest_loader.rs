@@ -76,6 +76,48 @@ fn model_config_parses_variant_and_audio_vae_from_config_json() {
 }
 
 #[test]
+fn model_config_defaults_voxcpm05_output_sample_rate_to_16khz() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(
+        dir.path().join("config.json"),
+        r#"{
+            "architectures": ["voxcpm"],
+            "patch_size": 2,
+            "feat_dim": 64,
+            "scalar_quantization_latent_dim": 512,
+            "scalar_quantization_scale": 9.0
+        }"#,
+    )
+    .unwrap();
+
+    let config = ModelConfig::load(dir.path(), ModelVariant::VoxCpm05).unwrap();
+    assert_eq!(config.audio_vae.sample_rate, 16000);
+    assert_eq!(config.audio_vae.out_sample_rate, None);
+    assert_eq!(config.output_sample_rate(), 16000);
+}
+
+#[test]
+fn model_config_defaults_voxcpm15_output_sample_rate_to_44_1khz() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(
+        dir.path().join("config.json"),
+        r#"{
+            "architectures": ["voxcpm"],
+            "patch_size": 4,
+            "feat_dim": 64,
+            "scalar_quantization_latent_dim": 512,
+            "scalar_quantization_scale": 9.0
+        }"#,
+    )
+    .unwrap();
+
+    let config = ModelConfig::load(dir.path(), ModelVariant::VoxCpm15).unwrap();
+    assert_eq!(config.audio_vae.sample_rate, 44100);
+    assert_eq!(config.audio_vae.out_sample_rate, None);
+    assert_eq!(config.output_sample_rate(), 44100);
+}
+
+#[test]
 fn model_config_rejects_v2_variant_with_non_v2_architecture() {
     let dir = tempfile::tempdir().unwrap();
     fs::write(

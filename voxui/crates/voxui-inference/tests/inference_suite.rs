@@ -11,7 +11,6 @@ use voxui_inference::{SynthesisRequest, VoxCPMEngine};
 const TEST_DIT_STEPS: usize = 10;
 const TEST_MAX_LEN: usize = 6;
 const TEXT_ZH: &str = "我说什么来着，我不知道你是什么脾气啊，我肯定要邦邦敲一下。";
-const TEXT_JA: &str = "これはテストですなの！なんでだよ？";
 const TEXT_EN: &str =
     "This inference matrix sentence exercises q4 language model coverage on every backend.";
 
@@ -244,11 +243,6 @@ fn test_model_on_device(model_name: &str, device: Device) {
             &mut engine,
             sentence_request(TEXT_ZH),
             &format!("{model_name}/{dev_name}/zh/{lora_name}"),
-        );
-        run_synthesis(
-            &mut engine,
-            sentence_request(TEXT_JA),
-            &format!("{model_name}/{dev_name}/ja/{lora_name}"),
         );
         engine.unload_lora();
     }

@@ -259,10 +259,19 @@ def validate_required_tensors(buckets: dict[str, list[tuple[str, Any]]], variant
                 raise ValueError(f"missing required tensor {required!r} in {component}")
 
 
-def _audio_vae_manifest(config: dict[str, Any]) -> dict[str, Any]:
+def _default_audio_vae_sample_rate(config: dict[str, Any], variant: str | None) -> int:
+    architecture = config.get("architecture")
+    if variant in {"0.5", "2.0"} or architecture == "voxcpm2":
+        return 16000
+    if variant == "1.5":
+        return 44100
+    return 16000 if int(config.get("patch_size", 4)) == 2 else 44100
+
+
+def _audio_vae_manifest(config: dict[str, Any], variant: str | None = None) -> dict[str, Any]:
     vae = dict(config.get("audio_vae_config") or {})
-    vae.setdefault("sample_rate", 16000 if config.get("architecture") == "voxcpm2" else 44100)
-    if config.get("architecture") == "voxcpm2":
+    vae.setdefault("sample_rate", _default_audio_vae_sample_rate(config, variant))
+    if variant == "2.0" or config.get("architecture") == "voxcpm2":
         vae.setdefault("out_sample_rate", 48000)
     vae.setdefault("latent_dim", config.get("feat_dim", 64))
     vae.setdefault("chunk_size", 20)
@@ -389,7 +398,7 @@ def add_base_metadata(
         "voxcpm.scalar_quantization_scale",
         float(config.get("scalar_quantization_scale", 9.0)),
     )
-    _add_metadata_if_supported(writer, "voxcpm.audio_vae", _audio_vae_manifest(config))
+    _add_metadata_if_supported(writer, "voxcpm.audio_vae", _audio_vae_manifest(config, variant))
     _add_metadata_if_supported(writer, "voxcpm.lm_config", config.get("lm_config", {}))
     _add_metadata_if_supported(writer, "voxcpm.encoder_config", config.get("encoder_config", {}))
     _add_metadata_if_supported(writer, "voxcpm.dit_config", config.get("dit_config", {}))
