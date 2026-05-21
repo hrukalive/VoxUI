@@ -32,7 +32,7 @@ QUANT_MAP = {
     "q4": (quantize_q4_0, GGML_TYPE_Q4_0),
 }
 
-QUANT_PROFILES = ("manual", "fp16", "q4-lm")
+QUANT_PROFILES = ("manual", "fp16", "q4-lm", "q4-linear")
 
 BASE_MODEL_FILE = "model.gguf"
 
@@ -81,6 +81,49 @@ QUANT_ARG_MAP = {
     PROJECTIONS: "quant_lm",
 }
 
+LINEAR_WEIGHT_SUFFIXES = (
+    ".self_attn.q_proj.weight",
+    ".self_attn.k_proj.weight",
+    ".self_attn.v_proj.weight",
+    ".self_attn.o_proj.weight",
+    ".mlp.gate_proj.weight",
+    ".mlp.up_proj.weight",
+    ".mlp.down_proj.weight",
+    ".in_proj.weight",
+    ".cond_proj.weight",
+    ".out_proj.weight",
+    ".linear_1.weight",
+    ".linear_2.weight",
+)
+
+EXACT_LINEAR_WEIGHTS = {
+    "feat_encoder.in_proj.weight",
+    "fsq_layer.in_proj.weight",
+    "fsq_layer.out_proj.weight",
+    "lm_to_dit_proj.weight",
+    "res_to_dit_proj.weight",
+    "enc_to_lm_proj.weight",
+    "fusion_concat_proj.weight",
+    "stop_proj.weight",
+    "stop_head.weight",
+}
+
+
+def is_runtime_supported_quantized_tensor(component: str, tensor_name: str) -> bool:
+    if component in {BASE_LM, RESIDUAL_LM}:
+        return tensor_name.endswith(".embed_tokens.weight") or tensor_name.endswith(LINEAR_WEIGHT_SUFFIXES)
+    if component in {FEAT_ENCODER, FEAT_DECODER, PROJECTIONS}:
+        return tensor_name in EXACT_LINEAR_WEIGHTS or tensor_name.endswith(LINEAR_WEIGHT_SUFFIXES)
+    return False
+
+
+def resolve_tensor_quantization(component: str, tensor_name: str, quant_profile: str, component_quant: str) -> str:
+    if component_quant not in {"q4", "q8"}:
+        return component_quant
+    if quant_profile in {"q4-lm", "q4-linear"}:
+        return component_quant if is_runtime_supported_quantized_tensor(component, tensor_name) else "fp16"
+    return component_quant
+
 
 def profile_default_quant_args(profile: str, variant: str) -> dict[str, str]:
     if profile not in QUANT_PROFILES:
@@ -97,6 +140,13 @@ def profile_default_quant_args(profile: str, variant: str) -> dict[str, str]:
             "quant_lm": "fp16",
             "quant_encoder": "fp16",
             "quant_dit": "fp16",
+            "quant_vae": "f32" if variant == "2.0" else "fp16",
+        }
+    if profile == "q4-linear":
+        return {
+            "quant_lm": "q4",
+            "quant_encoder": "q4",
+            "quant_dit": "q4",
             "quant_vae": "f32" if variant == "2.0" else "fp16",
         }
     return {
@@ -427,6 +477,9 @@ def write_base_gguf(
     quant_profile: str,
     source_weight_format: str,
 ) -> dict[str, str]:
+    if quant_args.get("quant_vae") in {"q4", "q8"}:
+        raise ValueError("audio_vae q4/q8 export is unsupported until quantized conv inference exists")
+
     component_quantization: dict[str, str] = {}
     for component in BASE_COMPONENTS:
         if component in buckets:
@@ -451,9 +504,10 @@ def write_base_gguf(
         quant_name = component_quantization[component]
         if quant_name not in QUANT_MAP:
             raise ValueError(f"Unknown quantization {quant_name!r}; expected one of {sorted(QUANT_MAP)}")
-        quant_fn, ggml_dtype = QUANT_MAP[quant_name]
         for tensor_name, tensor in tensors:
             arr = tensor_to_f32_numpy(tensor)
+            tensor_quant_name = resolve_tensor_quantization(component, tensor_name, quant_profile, quant_name)
+            quant_fn, ggml_dtype = QUANT_MAP[tensor_quant_name]
             writer.add_tensor(tensor_name, quant_fn(arr), list(arr.shape), ggml_dtype)
 
     writer.write(str(output_dir / BASE_MODEL_FILE))
@@ -484,6 +538,9 @@ def export(
     variant: str,
     quant_profile: str = "manual",
 ) -> dict[str, Any]:
+    if quant_args.get("quant_vae") in {"q4", "q8"}:
+        raise ValueError("audio_vae q4/q8 export is unsupported until quantized conv inference exists")
+
     model_dir = Path(model_dir)
     output_dir = Path(output_dir)
     config_path = model_dir / "config.json"

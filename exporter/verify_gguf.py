@@ -125,8 +125,10 @@ def verify_file(path):
 
         print(f"\nTensors ({len(tensors)} total):")
         total_data = 0
+        dtype_counts = {}
         for name, shape, dtype, offset in tensors:
             dtype_name = GGML_TYPE_NAMES.get(dtype, f"type_{dtype}")
+            dtype_counts[dtype_name] = dtype_counts.get(dtype_name, 0) + 1
             elements = 1
             for d in shape:
                 elements *= d
@@ -136,6 +138,10 @@ def verify_file(path):
                 total_data += est_size
             shape_str = str(shape).replace(" ", "")
             print(f"  {name:<55} {shape_str:<20} {dtype_name:<6} {size_str}")
+
+        print("\nTensor dtype counts:")
+        for dtype_name, count in sorted(dtype_counts.items()):
+            print(f"  {dtype_name}: {count}")
 
         print(f"\nTotal: {len(tensors)} tensors, {_fmt_size(total_data)} data")
         return True

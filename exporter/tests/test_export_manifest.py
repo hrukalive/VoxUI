@@ -14,6 +14,7 @@ from exporter.export_voxcpm import (
     export_lora,
     partition_weights,
     resolve_quant_args,
+    resolve_tensor_quantization,
     validate_required_tensors,
     export,
 )
@@ -106,6 +107,60 @@ class ExportManifestTests(unittest.TestCase):
                 "quant_dit": "fp16",
                 "quant_vae": "fp16",
             },
+        )
+
+    def test_q4_linear_profile_quantizes_supported_linear_roles_only(self):
+        quant_args = resolve_quant_args(
+            variant="2.0",
+            profile="q4-linear",
+            quant_lm=None,
+            quant_encoder=None,
+            quant_dit=None,
+            quant_vae=None,
+        )
+        self.assertEqual(
+            quant_args,
+            {
+                "quant_lm": "q4",
+                "quant_encoder": "q4",
+                "quant_dit": "q4",
+                "quant_vae": "f32",
+            },
+        )
+
+    def test_export_rejects_q4_audio_vae_until_quantized_conv_exists(self):
+        main_weights = {"base_lm.norm.weight": np.zeros(2, dtype=np.float32)}
+        vae_weights = {"decoder.model.0.weight_v": np.zeros((1, 1, 32), dtype=np.float32)}
+        config = {"architecture": "voxcpm2"}
+
+        with TemporaryDirectory() as model_tmp, TemporaryDirectory() as output_tmp:
+            model_dir = Path(model_tmp)
+            output_dir = Path(output_tmp)
+            (model_dir / "config.json").write_text(json.dumps(config), encoding="utf-8")
+            RecordingWriter.instances = []
+            with (
+                patch("exporter.export_voxcpm.GGUFWriter", RecordingWriter),
+                patch("exporter.export_voxcpm.load_weights", return_value=(main_weights, vae_weights, "safetensors")),
+            ):
+                with self.assertRaisesRegex(ValueError, "audio_vae q4/q8 export is unsupported"):
+                    export(
+                        model_dir,
+                        output_dir,
+                        {
+                            "quant_lm": "fp16",
+                            "quant_encoder": "fp16",
+                            "quant_dit": "fp16",
+                            "quant_vae": "q4",
+                        },
+                        "2.0",
+                    )
+
+    def test_runtime_supported_policy_keeps_norms_dense_in_q4_lm(self):
+        self.assertEqual(resolve_tensor_quantization("base_lm", "base_lm.norm.weight", "q4-lm", "q4"), "fp16")
+        self.assertEqual(resolve_tensor_quantization("base_lm", "base_lm.embed_tokens.weight", "q4-lm", "q4"), "q4")
+        self.assertEqual(
+            resolve_tensor_quantization("base_lm", "base_lm.layers.0.self_attn.q_proj.weight", "q4-lm", "q4"),
+            "q4",
         )
 
     def test_fp16_profile_for_variant_2_keeps_vae_f32(self):
