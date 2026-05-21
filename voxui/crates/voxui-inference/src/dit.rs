@@ -5,11 +5,28 @@ use candle_core::{DType, Device, Tensor, D};
 use candle_nn::ops::silu;
 
 use crate::lora::LoraAdapter;
+use crate::manifest::ModelVariant;
 use crate::model_loader::GgufModelLoader;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiTConditioningMode {
+    VoxCpm,
+    VoxCpm2,
+}
+
+impl DiTConditioningMode {
+    fn from_variant(variant: ModelVariant) -> Self {
+        match variant {
+            ModelVariant::VoxCpm05 | ModelVariant::VoxCpm15 => Self::VoxCpm,
+            ModelVariant::VoxCpm2 => Self::VoxCpm2,
+        }
+    }
+}
 
 /// Configuration for the DiT transformer and CFM solver.
 pub struct DiTConfig {
     pub prefix: String,
+    pub conditioning_mode: DiTConditioningMode,
     pub hidden_dim: usize,   // 1024
     pub num_layers: usize,   // 12
     pub num_heads: usize,    // 16
@@ -33,6 +50,7 @@ impl Default for DiTConfig {
     fn default() -> Self {
         Self {
             prefix: "dit.estimator".to_string(),
+            conditioning_mode: DiTConditioningMode::VoxCpm2,
             hidden_dim: 1024,
             num_layers: 12,
             num_heads: 16,
@@ -201,6 +219,29 @@ fn read_f32_array(value: &serde_json::Value, key: &str, len: usize) -> Vec<f32> 
         .unwrap_or_else(|| vec![1.0; len])
 }
 
+fn conditioning_prefix_len(
+    mode: DiTConditioningMode,
+    mu_dim: usize,
+    hidden_dim: usize,
+    cond_len: usize,
+) -> Result<usize> {
+    if hidden_dim == 0 || mu_dim == 0 || mu_dim % hidden_dim != 0 {
+        anyhow::bail!(
+            "DiT mu dimension {mu_dim} must be a positive multiple of hidden dimension {hidden_dim}"
+        );
+    }
+    let n_mu_tokens = mu_dim / hidden_dim;
+    match mode {
+        DiTConditioningMode::VoxCpm => {
+            if n_mu_tokens != 1 {
+                anyhow::bail!("VoxCPM DiT expects one mu token, got {n_mu_tokens}");
+            }
+            Ok(1 + cond_len)
+        }
+        DiTConditioningMode::VoxCpm2 => Ok(n_mu_tokens + 1 + cond_len),
+    }
+}
+
 impl DiT {
     pub fn load_from_config(loader: &GgufModelLoader, model: &crate::ModelConfig) -> Result<Self> {
         let dit = &model.dit_config;
@@ -222,6 +263,7 @@ impl DiT {
         let cfm = dit.get("cfm_config").unwrap_or(&serde_json::Value::Null);
         let config = DiTConfig {
             prefix: "feat_decoder.estimator".to_string(),
+            conditioning_mode: DiTConditioningMode::from_variant(model.variant),
             hidden_dim,
             num_layers: get_usize(dit, &["num_layers", "num_hidden_layers"], 12),
             num_heads,
@@ -393,17 +435,24 @@ impl DiT {
 
         let t_emb = (t_emb + dt_emb)?; // [B, 1024]
 
-        // Reshape mu from [B, N*hidden_dim] to [B, N, hidden_dim] where N = mu.dim(1) / hidden_dim
         let mu_dim = mu.dim(1)?;
-        let n_mu_tokens = mu_dim / self.config.hidden_dim;
-        let mu_tokens = mu.reshape((b, n_mu_tokens, self.config.hidden_dim))?; // [B, N, 1024]
+        let prefix_len = conditioning_prefix_len(
+            self.config.conditioning_mode,
+            mu_dim,
+            self.config.hidden_dim,
+            cond_len,
+        )?;
+        let conditioning_tokens = match self.config.conditioning_mode {
+            DiTConditioningMode::VoxCpm => (mu + &t_emb)?.unsqueeze(1)?,
+            DiTConditioningMode::VoxCpm2 => {
+                let n_mu_tokens = mu_dim / self.config.hidden_dim;
+                let mu_tokens = mu.reshape((b, n_mu_tokens, self.config.hidden_dim))?;
+                let t_token = t_emb.unsqueeze(1)?;
+                Tensor::cat(&[&mu_tokens, &t_token], 1)?
+            }
+        };
 
-        // t_emb as a separate token: [B, 1, 1024]
-        let t_token = t_emb.unsqueeze(1)?;
-
-        // Concatenate: [mu_tokens, t_token, cond_proj, x_proj] along seq dim
-        let mut hidden = Tensor::cat(&[&mu_tokens, &t_token, &cond_proj, &x_proj], 1)?;
-        let prefix_len = n_mu_tokens + 1 + cond_len;
+        let mut hidden = Tensor::cat(&[&conditioning_tokens, &cond_proj, &x_proj], 1)?;
         let total_len = prefix_len + t_len;
 
         // RoPE cos/sin for full sequence
@@ -681,5 +730,34 @@ impl DiT {
         }
 
         Ok(x)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dit_conditioning_prefix_len_uses_v1_single_mu_plus_time_token() {
+        let prefix = conditioning_prefix_len(DiTConditioningMode::VoxCpm, 1024, 1024, 3).unwrap();
+        assert_eq!(prefix, 4);
+    }
+
+    #[test]
+    fn dit_conditioning_prefix_len_uses_v2_mu_tokens_plus_time_token() {
+        let prefix = conditioning_prefix_len(DiTConditioningMode::VoxCpm2, 2048, 1024, 3).unwrap();
+        assert_eq!(prefix, 6);
+    }
+
+    #[test]
+    fn dit_conditioning_rejects_v1_multi_token_mu() {
+        let err = conditioning_prefix_len(DiTConditioningMode::VoxCpm, 2048, 1024, 3).unwrap_err();
+        assert!(err.to_string().contains("VoxCPM DiT expects one mu token"));
+    }
+
+    #[test]
+    fn dit_conditioning_rejects_non_divisible_v2_mu() {
+        let err = conditioning_prefix_len(DiTConditioningMode::VoxCpm2, 1536, 1024, 3).unwrap_err();
+        assert!(err.to_string().contains("mu dimension"));
     }
 }
