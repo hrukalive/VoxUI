@@ -5470,6 +5470,7 @@ name = "voxui-inference"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "byteorder",
  "candle-core",
  "candle-nn",
  "hound",
