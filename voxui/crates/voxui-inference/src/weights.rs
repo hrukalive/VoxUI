@@ -97,6 +97,13 @@ impl QuantizedTensor {
 }
 
 impl LinearWeight {
+    pub(crate) fn input_dtype(&self) -> DType {
+        match self {
+            LinearWeight::Dense(weight) => weight.dtype(),
+            LinearWeight::Quantized(_) => DType::F32,
+        }
+    }
+
     pub(crate) fn from_raw_quantized(raw: RawTensor<'_>, device: &Device) -> Result<Self> {
         let dtype = map_ggml_dtype(raw.info.dtype)?;
         let shape = raw
@@ -112,7 +119,15 @@ impl LinearWeight {
 
     pub(crate) fn forward(&self, input: &Tensor) -> Result<Tensor> {
         match self {
-            LinearWeight::Dense(weight) => crate::linear(input, weight),
+            LinearWeight::Dense(weight) => {
+                if input.dtype() == weight.dtype() {
+                    crate::linear(input, weight)
+                } else {
+                    crate::linear(&input.to_dtype(weight.dtype())?, weight)?
+                        .to_dtype(input.dtype())
+                        .map_err(Into::into)
+                }
+            }
             LinearWeight::Quantized(weight) => {
                 let input_dtype = input.dtype();
                 let out = weight.forward(&input.to_dtype(DType::F32)?)?;
@@ -176,6 +191,18 @@ mod tests {
 
         assert_eq!(materialized.dims(), &[2, 2]);
         assert_eq!(materialized.dtype(), DType::F32);
+        Ok(())
+    }
+
+    #[test]
+    fn linear_weight_reports_dense_or_quantized_input_dtype() -> Result<()> {
+        let device = Device::Cpu;
+        let weight = test_weight(&device)?;
+        let dense = LinearWeight::Dense(weight.clone());
+        let q4 = LinearWeight::quantize_for_test(&weight, candle_core::quantized::GgmlDType::Q4_0)?;
+
+        assert_eq!(dense.input_dtype(), DType::F32);
+        assert_eq!(q4.input_dtype(), DType::F32);
         Ok(())
     }
 }

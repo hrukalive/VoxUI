@@ -7,6 +7,7 @@ use candle_nn::ops::silu;
 use crate::lora::LoraAdapter;
 use crate::manifest::ModelVariant;
 use crate::model_loader::GgufModelLoader;
+use crate::{LinearWeight as RuntimeLinearWeight, RuntimeTensor};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DiTConditioningMode {
@@ -74,21 +75,21 @@ impl Default for DiTConfig {
 
 /// Weights for projections with optional bias.
 struct LinearWeight {
-    weight: Tensor,
-    bias: Option<Tensor>,
+    weight: RuntimeLinearWeight,
+    bias: Option<RuntimeTensor>,
 }
 
 /// Weights for a single DiT transformer layer.
 struct DiTLayer {
-    q_proj: Tensor,
-    k_proj: Tensor,
-    v_proj: Tensor,
-    o_proj: Tensor,
-    gate_proj: Tensor,
-    up_proj: Tensor,
-    down_proj: Tensor,
-    input_layernorm: Tensor,
-    post_attention_layernorm: Tensor,
+    q_proj: RuntimeLinearWeight,
+    k_proj: RuntimeLinearWeight,
+    v_proj: RuntimeLinearWeight,
+    o_proj: RuntimeLinearWeight,
+    gate_proj: RuntimeLinearWeight,
+    up_proj: RuntimeLinearWeight,
+    down_proj: RuntimeLinearWeight,
+    input_layernorm: RuntimeTensor,
+    post_attention_layernorm: RuntimeTensor,
 }
 
 /// DiT model with CFM solver.
@@ -105,7 +106,7 @@ pub struct DiT {
     delta_time_mlp_2: LinearWeight,
     // Transformer
     layers: Vec<DiTLayer>,
-    final_norm: Tensor,
+    final_norm: RuntimeTensor,
     // Precomputed RoPE
     cos_cache: Tensor,
     sin_cache: Tensor,
@@ -113,7 +114,7 @@ pub struct DiT {
 }
 
 /// RMS normalization.
-fn rms_norm(x: &Tensor, weight: &Tensor, eps: f64) -> Result<Tensor> {
+fn rms_norm(x: &Tensor, weight: &RuntimeTensor, eps: f64) -> Result<Tensor> {
     let dtype = x.dtype();
     let x = x.to_dtype(DType::F32)?;
     let sq = x.sqr()?;
@@ -123,24 +124,24 @@ fn rms_norm(x: &Tensor, weight: &Tensor, eps: f64) -> Result<Tensor> {
         .broadcast_add(&Tensor::new(&[eps as f32], mean_sq.device())?)?;
     let norm = (mean_sq + eps_t)?.sqrt()?.recip()?;
     let out = x.broadcast_mul(&norm)?;
-    let weight = weight.to_dtype(DType::F32)?;
+    let weight = weight.to_dense_dtype(DType::F32)?;
     let out = out.broadcast_mul(&weight)?;
     out.to_dtype(dtype).map_err(Into::into)
 }
 
 /// Linear: x @ weight^T (+ bias). Handles 2D and 3D inputs.
 fn linear(x: &Tensor, w: &LinearWeight) -> Result<Tensor> {
-    let out = crate::linear(x, &w.weight)?;
+    let out = w.weight.forward(x)?;
     if let Some(ref bias) = w.bias {
-        Ok(out.broadcast_add(bias)?)
+        Ok(out.broadcast_add(&bias.to_dense_dtype(out.dtype())?)?)
     } else {
         Ok(out)
     }
 }
 
 /// Linear without bias: x @ weight^T. Handles 2D and 3D inputs.
-fn linear_no_bias(x: &Tensor, weight: &Tensor) -> Result<Tensor> {
-    crate::linear(x, weight)
+fn linear_no_bias(x: &Tensor, weight: &RuntimeLinearWeight) -> Result<Tensor> {
+    weight.forward(x)
 }
 
 /// Apply rotary position embeddings.
@@ -293,10 +294,10 @@ impl DiT {
         let p = &config.prefix;
 
         let load_lw = |name: &str| -> Result<LinearWeight> {
-            let weight = loader.load_tensor_optimal(&format!("{p}.{name}.weight"))?;
+            let weight = loader.load_linear_weight(&format!("{p}.{name}.weight"))?;
             let bias_name = format!("{p}.{name}.bias");
             let bias = if loader.has_tensor(&bias_name) {
-                Some(loader.load_tensor_optimal(&bias_name)?)
+                Some(loader.load_runtime_tensor(&bias_name)?)
             } else {
                 None
             };
@@ -311,22 +312,23 @@ impl DiT {
         let delta_time_mlp_1 = load_lw("delta_time_mlp.linear_1")?;
         let delta_time_mlp_2 = load_lw("delta_time_mlp.linear_2")?;
 
-        let final_norm = loader.load_tensor(&format!("{p}.decoder.norm.weight"))?;
+        let final_norm = loader.load_runtime_tensor(&format!("{p}.decoder.norm.weight"))?;
 
         let mut layers = Vec::with_capacity(config.num_layers);
         for i in 0..config.num_layers {
             let lp = format!("{p}.decoder.layers.{i}");
             layers.push(DiTLayer {
-                q_proj: loader.load_tensor_optimal(&format!("{lp}.self_attn.q_proj.weight"))?,
-                k_proj: loader.load_tensor_optimal(&format!("{lp}.self_attn.k_proj.weight"))?,
-                v_proj: loader.load_tensor_optimal(&format!("{lp}.self_attn.v_proj.weight"))?,
-                o_proj: loader.load_tensor_optimal(&format!("{lp}.self_attn.o_proj.weight"))?,
-                gate_proj: loader.load_tensor_optimal(&format!("{lp}.mlp.gate_proj.weight"))?,
-                up_proj: loader.load_tensor_optimal(&format!("{lp}.mlp.up_proj.weight"))?,
-                down_proj: loader.load_tensor_optimal(&format!("{lp}.mlp.down_proj.weight"))?,
-                input_layernorm: loader.load_tensor(&format!("{lp}.input_layernorm.weight"))?,
+                q_proj: loader.load_linear_weight(&format!("{lp}.self_attn.q_proj.weight"))?,
+                k_proj: loader.load_linear_weight(&format!("{lp}.self_attn.k_proj.weight"))?,
+                v_proj: loader.load_linear_weight(&format!("{lp}.self_attn.v_proj.weight"))?,
+                o_proj: loader.load_linear_weight(&format!("{lp}.self_attn.o_proj.weight"))?,
+                gate_proj: loader.load_linear_weight(&format!("{lp}.mlp.gate_proj.weight"))?,
+                up_proj: loader.load_linear_weight(&format!("{lp}.mlp.up_proj.weight"))?,
+                down_proj: loader.load_linear_weight(&format!("{lp}.mlp.down_proj.weight"))?,
+                input_layernorm: loader
+                    .load_runtime_tensor(&format!("{lp}.input_layernorm.weight"))?,
                 post_attention_layernorm: loader
-                    .load_tensor(&format!("{lp}.post_attention_layernorm.weight"))?,
+                    .load_runtime_tensor(&format!("{lp}.post_attention_layernorm.weight"))?,
             });
         }
 
@@ -404,7 +406,7 @@ impl DiT {
         lora: Option<&LoraAdapter>,
     ) -> Result<Tensor> {
         // Determine model dtype from weights and cast inputs to match
-        let model_dtype = self.in_proj.weight.dtype();
+        let model_dtype = self.in_proj.weight.input_dtype();
         let x = x.to_dtype(model_dtype)?;
         let mu = mu.to_dtype(model_dtype)?;
         let t = t.to_dtype(model_dtype)?;

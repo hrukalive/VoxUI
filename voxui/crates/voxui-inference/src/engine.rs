@@ -19,6 +19,7 @@ use crate::manifest::{ModelConfig, ModelVariant};
 use crate::model_loader::GgufModelLoader;
 use crate::request::SynthesisRequest;
 use crate::tokenizer::VoxTokenizer;
+use crate::{LinearWeight, RuntimeTensor};
 
 #[derive(Debug, Clone)]
 pub struct EngineConfig {
@@ -39,8 +40,8 @@ pub struct FirstPatchDebug {
 }
 
 struct LinearProjection {
-    weight: Tensor,
-    bias: Option<Tensor>,
+    weight: LinearWeight,
+    bias: Option<RuntimeTensor>,
 }
 
 struct PreparedInputs {
@@ -883,10 +884,10 @@ fn load_projection(loader: &GgufModelLoader, name: &str) -> Result<LinearProject
     let bias_name = format!("{name}.bias");
     Ok(LinearProjection {
         weight: loader
-            .load_tensor_optimal(&weight_name)
+            .load_linear_weight(&weight_name)
             .with_context(|| format!("load projection tensor {weight_name}"))?,
         bias: if loader.has_tensor(&bias_name) {
-            Some(loader.load_tensor_optimal(&bias_name)?)
+            Some(loader.load_runtime_tensor(&bias_name)?)
         } else {
             None
         },
@@ -894,9 +895,10 @@ fn load_projection(loader: &GgufModelLoader, name: &str) -> Result<LinearProject
 }
 
 fn linear_projection(x: &Tensor, projection: &LinearProjection) -> Result<Tensor> {
-    let out = crate::linear(x, &projection.weight)?;
+    let out = projection.weight.forward(x)?;
     if let Some(bias) = projection.bias.as_ref() {
-        out.broadcast_add(bias).map_err(Into::into)
+        out.broadcast_add(&bias.to_dense_dtype(out.dtype())?)
+            .map_err(Into::into)
     } else {
         Ok(out)
     }
