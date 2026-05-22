@@ -62,11 +62,14 @@ pub struct LoadModelChoiceArgs {
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub struct LoadProgressPayload {
+    pub choice_id: String,
     pub phase: String,
     pub file_label: Option<String>,
     pub bytes_read: u64,
     pub total_bytes: u64,
     pub backend: Option<String>,
+    pub step: Option<usize>,
+    pub total: Option<usize>,
 }
 
 #[tauri::command]
@@ -261,24 +264,55 @@ pub async fn load_model_choice(
     let actual_backend_for_task = actual_backend.clone();
     let engine_slot = Arc::clone(&state.engine);
     let app_for_task = app.clone();
+    let choice_id_for_task = choice_id.clone();
 
     let engine = match tokio::task::spawn_blocking(move || {
-        read_file_for_progress(&app_for_task, &model_path, "model.gguf", &cancel_token)?;
+        read_file_for_progress(
+            &app_for_task,
+            &model_path,
+            "model.gguf",
+            &choice_id_for_task,
+            &cancel_token,
+        )?;
         if let Some(path) = lora_path.as_ref() {
             let label = path
                 .file_name()
                 .and_then(|value| value.to_str())
                 .unwrap_or("LoRA GGUF");
-            read_file_for_progress(&app_for_task, path, label, &cancel_token)?;
+            read_file_for_progress(
+                &app_for_task,
+                path,
+                label,
+                &choice_id_for_task,
+                &cancel_token,
+            )?;
         }
-        emit_device_loading(&app_for_task, &actual_backend_for_task);
+        emit_device_loading(
+            &app_for_task,
+            &actual_backend_for_task,
+            &choice_id_for_task,
+            None,
+            None,
+        );
         if cancel_token.load(Ordering::Relaxed) {
             return Err("model loading cancelled".to_string());
         }
 
-        let mut engine =
-            VoxCPMEngine::load_with_progress(&model_dir, device, |_, _| {}, Some(&cancel_token))
-                .map_err(|err| format!("{err:#}"))?;
+        let mut engine = VoxCPMEngine::load_with_progress(
+            &model_dir,
+            device,
+            |step, total| {
+                emit_device_loading(
+                    &app_for_task,
+                    &actual_backend_for_task,
+                    &choice_id_for_task,
+                    Some(step),
+                    Some(total),
+                );
+            },
+            Some(&cancel_token),
+        )
+        .map_err(|err| format!("{err:#}"))?;
         if let Some(path) = lora_path.as_ref() {
             if cancel_token.load(Ordering::Relaxed) {
                 return Err("model loading cancelled".to_string());
@@ -598,15 +632,24 @@ fn emit_synthesis_error(app: &AppHandle, index: u32, message: String) -> Result<
     Err(message)
 }
 
-fn emit_read_progress(app: &AppHandle, file_label: &str, bytes_read: u64, total_bytes: u64) {
+fn emit_read_progress(
+    app: &AppHandle,
+    file_label: &str,
+    choice_id: &str,
+    bytes_read: u64,
+    total_bytes: u64,
+) {
     let _ = app.emit(
         "load-progress",
         LoadProgressPayload {
+            choice_id: choice_id.to_string(),
             phase: "reading".to_string(),
             file_label: Some(file_label.to_string()),
             bytes_read,
             total_bytes,
             backend: None,
+            step: None,
+            total: None,
         },
     );
 }
@@ -689,6 +732,7 @@ fn read_file_for_progress(
     app: &AppHandle,
     path: &PathBuf,
     file_label: &str,
+    choice_id: &str,
     cancel: &std::sync::atomic::AtomicBool,
 ) -> Result<(), String> {
     use std::io::Read;
@@ -701,7 +745,7 @@ fn read_file_for_progress(
         .len();
     let mut read = 0u64;
     let mut buffer = vec![0u8; 1024 * 1024];
-    emit_read_progress(app, file_label, 0, total);
+    emit_read_progress(app, file_label, choice_id, 0, total);
     loop {
         if cancel.load(Ordering::Relaxed) {
             return Err("model loading cancelled".to_string());
@@ -713,20 +757,29 @@ fn read_file_for_progress(
             break;
         }
         read += count as u64;
-        emit_read_progress(app, file_label, read.min(total), total);
+        emit_read_progress(app, file_label, choice_id, read.min(total), total);
     }
     Ok(())
 }
 
-fn emit_device_loading(app: &AppHandle, backend: &str) {
+fn emit_device_loading(
+    app: &AppHandle,
+    backend: &str,
+    choice_id: &str,
+    step: Option<usize>,
+    total: Option<usize>,
+) {
     let _ = app.emit(
         "load-progress",
         LoadProgressPayload {
+            choice_id: choice_id.to_string(),
             phase: "device_loading".to_string(),
             file_label: None,
             bytes_read: 0,
             total_bytes: 0,
             backend: Some(backend.to_string()),
+            step,
+            total,
         },
     );
 }
@@ -771,7 +824,7 @@ fn select_cuda_device() -> (candle_core::Device, String, Option<String>) {
 mod tests {
     use super::{
         canonical_model_path, engine_busy_message, is_busy_message, load_paths_from_args,
-        validate_lora_path_for_model, LoadModelChoiceArgs,
+        validate_lora_path_for_model, LoadModelChoiceArgs, LoadProgressPayload,
     };
     use std::fs;
     use tempfile::tempdir;
@@ -846,5 +899,43 @@ mod tests {
         assert_eq!(model_path, canonical_model_path(&model_dir));
         assert_ne!(model_path, payload_model_path);
         assert_eq!(lora_path, None);
+    }
+
+    #[test]
+    fn load_progress_payload_carries_choice_id() {
+        let payload = LoadProgressPayload {
+            choice_id: "model-b".to_string(),
+            phase: "reading".to_string(),
+            file_label: Some("model.gguf".to_string()),
+            bytes_read: 4,
+            total_bytes: 8,
+            backend: None,
+            step: None,
+            total: None,
+        };
+
+        let value = serde_json::to_value(payload).unwrap();
+
+        assert_eq!(value["choice_id"], "model-b");
+    }
+
+    #[test]
+    fn device_load_progress_payload_carries_step_and_total() {
+        let payload = LoadProgressPayload {
+            choice_id: "model-b".to_string(),
+            phase: "device_loading".to_string(),
+            file_label: None,
+            bytes_read: 0,
+            total_bytes: 0,
+            backend: Some("CUDA".to_string()),
+            step: Some(2),
+            total: Some(6),
+        };
+
+        let value = serde_json::to_value(payload).unwrap();
+
+        assert_eq!(value["phase"], "device_loading");
+        assert_eq!(value["step"], 2);
+        assert_eq!(value["total"], 6);
     }
 }

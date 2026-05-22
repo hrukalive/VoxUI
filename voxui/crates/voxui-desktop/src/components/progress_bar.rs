@@ -35,7 +35,7 @@ pub fn ModelLoadProgressBar(
     let label = move || match progress.get() {
         LoadProgress::Hidden => String::new(),
         LoadProgress::Reading { label, .. } => format!("{} {}", lang.get().t("reading"), label),
-        LoadProgress::DeviceLoading { backend } => {
+        LoadProgress::DeviceLoading { backend, .. } => {
             format!("{} {}", lang.get().t("loading_to_device"), backend)
         }
     };
@@ -45,6 +45,11 @@ pub fn ModelLoadProgressBar(
             total_bytes,
             ..
         } if total_bytes > 0 => (bytes_read as f64 / total_bytes as f64).clamp(0.0, 1.0),
+        LoadProgress::DeviceLoading {
+            step: Some(step),
+            total: Some(total),
+            ..
+        } if total > 0 => (step as f64 / total as f64).clamp(0.0, 1.0),
         _ => 0.0,
     };
 
@@ -55,12 +60,13 @@ pub fn ModelLoadProgressBar(
                 <div class="flex-1 h-2 bg-gray-700 rounded-full overflow-hidden">
                     <div
                         class=move || match progress.get() {
-                            LoadProgress::DeviceLoading { .. } => "h-full w-1/3 bg-blue-500 rounded-full animate-pulse",
+                            LoadProgress::DeviceLoading { step: None, .. } => "h-full w-1/3 bg-blue-500 rounded-full animate-pulse",
                             _ => "h-full bg-blue-500 rounded-full transition-all duration-200",
                         }
                         style=move || match progress.get() {
                             LoadProgress::Reading { .. } => format!("width: {}%", percent() * 100.0),
-                            LoadProgress::DeviceLoading { .. } => "width: 33%".to_string(),
+                            LoadProgress::DeviceLoading { step: Some(_), .. } => format!("width: {}%", percent() * 100.0),
+                            LoadProgress::DeviceLoading { step: None, .. } => "width: 33%".to_string(),
                             LoadProgress::Hidden => "width: 0%".to_string(),
                         }
                     />
@@ -68,6 +74,9 @@ pub fn ModelLoadProgressBar(
                 <span class="text-xs text-gray-400 w-12 text-right">
                     {move || match progress.get() {
                         LoadProgress::Reading { total_bytes, .. } if total_bytes > 0 => {
+                            format!("{:.0}%", percent() * 100.0)
+                        }
+                        LoadProgress::DeviceLoading { total: Some(total), .. } if total > 0 => {
                             format!("{:.0}%", percent() * 100.0)
                         }
                         LoadProgress::DeviceLoading { .. } => "...".to_string(),

@@ -34,6 +34,7 @@ pub fn Header(
             <select
                 class="min-w-0 flex-1 max-w-md bg-gray-900 border border-gray-600 rounded px-2 py-1 text-sm disabled:opacity-50"
                 title=move || lang.get().t("select_model")
+                prop:value=move || selected_choice_id.get()
                 disabled=move || {
                     load_in_progress.get()
                         || generating.get()

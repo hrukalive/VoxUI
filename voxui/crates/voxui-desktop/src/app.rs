@@ -36,6 +36,8 @@ pub enum LoadProgress {
     },
     DeviceLoading {
         backend: String,
+        step: Option<usize>,
+        total: Option<usize>,
     },
 }
 
@@ -120,11 +122,14 @@ struct ProgressPayload {
 
 #[derive(Deserialize, Debug)]
 struct LoadProgressPayload {
+    choice_id: String,
     phase: String,
     file_label: Option<String>,
     bytes_read: u64,
     total_bytes: u64,
     backend: Option<String>,
+    step: Option<usize>,
+    total: Option<usize>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -235,6 +240,7 @@ pub fn App() -> impl IntoView {
     let (model_choices, set_model_choices) = signal(Vec::<ModelChoice>::new());
     let (load_progress, set_load_progress) = signal(LoadProgress::Hidden);
     let (load_in_progress, set_load_in_progress) = signal(false);
+    let (active_load_choice_id, set_active_load_choice_id) = signal(String::new());
     let (selection_save_in_progress, set_selection_save_in_progress) = signal(false);
     let (settings_apply_in_progress, set_settings_apply_in_progress) = signal(false);
 
@@ -392,15 +398,22 @@ pub fn App() -> impl IntoView {
                 if let Ok(payload) =
                     serde_wasm_bindgen::from_value::<LoadProgressPayload>(payload_value)
                 {
+                    if payload.choice_id != active_load_choice_id.get_untracked() {
+                        return;
+                    }
                     match payload.phase.as_str() {
                         "reading" => set_load_progress.set(LoadProgress::Reading {
                             label: payload.file_label.unwrap_or_else(|| "GGUF".to_string()),
                             bytes_read: payload.bytes_read,
                             total_bytes: payload.total_bytes,
                         }),
-                        "device_loading" => set_load_progress.set(LoadProgress::DeviceLoading {
-                            backend: payload.backend.unwrap_or_else(|| "device".to_string()),
-                        }),
+                        "device_loading" => {
+                            set_load_progress.set(LoadProgress::DeviceLoading {
+                                backend: payload.backend.unwrap_or_else(|| "device".to_string()),
+                                step: payload.step,
+                                total: payload.total,
+                            })
+                        }
                         _ => {}
                     }
                 }
@@ -587,8 +600,7 @@ pub fn App() -> impl IntoView {
     };
 
     let on_load_or_cancel = move |_| {
-        if selection_save_in_progress.get_untracked() || settings_apply_in_progress.get_untracked()
-        {
+        if settings_apply_in_progress.get_untracked() {
             set_status_message
                 .set("Finish the current operation before changing settings".to_string());
             return;
@@ -609,8 +621,10 @@ pub fn App() -> impl IntoView {
             set_status_message.set("No model selected".to_string());
             return;
         };
+        let load_choice_id = choice.id.clone();
 
         set_load_in_progress.set(true);
+        set_active_load_choice_id.set(load_choice_id.clone());
         set_engine_ready.set(false);
         set_status.set("loading".into());
         set_status_message.set(String::new());
@@ -637,6 +651,9 @@ pub fn App() -> impl IntoView {
 
             set_load_in_progress.set(false);
             set_load_progress.set(LoadProgress::Hidden);
+            if active_load_choice_id.get_untracked() == load_choice_id {
+                set_active_load_choice_id.set(String::new());
+            }
             match result {
                 Ok(info) => {
                     debug_log(&format!(
