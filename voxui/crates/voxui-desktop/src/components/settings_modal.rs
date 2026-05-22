@@ -47,7 +47,7 @@ pub fn SettingsModal(
                     <button class="text-gray-400 hover:text-white" on:click={
                         let on_close = on_close.clone();
                         move |_| on_close(())
-                    }>"x"</button>
+                    } disabled=move || loading_or_generating.get()>"x"</button>
                 </div>
                 <div class="p-4 space-y-4">
                     <SettingsField label=move || lang.get().t("models_folder")>
@@ -152,6 +152,7 @@ pub fn SettingsModal(
                             type="number"
                             class="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1 text-sm"
                             prop:value=move || sel_max_chars.get().to_string()
+                            disabled=move || loading_or_generating.get()
                             on:input=move |ev| {
                                 if let Ok(v) = event_target_value(&ev).parse::<usize>() {
                                     set_sel_max_chars.set(v);
@@ -165,6 +166,7 @@ pub fn SettingsModal(
                             type="number"
                             class="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1 text-sm"
                             prop:value=move || sel_dit_steps.get().to_string()
+                            disabled=move || loading_or_generating.get()
                             on:input=move |ev| {
                                 if let Ok(v) = event_target_value(&ev).parse::<usize>() {
                                     set_sel_dit_steps.set(v);
@@ -178,6 +180,7 @@ pub fn SettingsModal(
                             type="text"
                             class="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1 text-sm"
                             prop:value=move || sel_prompt_wav.get()
+                            disabled=move || loading_or_generating.get()
                             on:input=move |ev| set_sel_prompt_wav.set(event_target_value(&ev))
                         />
                     </SettingsField>
@@ -186,6 +189,7 @@ pub fn SettingsModal(
                         <textarea
                             class="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1 text-sm min-h-16 resize-y"
                             prop:value=move || sel_prompt_text.get()
+                            disabled=move || loading_or_generating.get()
                             on:input=move |ev| set_sel_prompt_text.set(event_target_value(&ev))
                         />
                     </SettingsField>
@@ -195,6 +199,7 @@ pub fn SettingsModal(
                             type="text"
                             class="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1 text-sm"
                             prop:value=move || sel_reference_wav.get()
+                            disabled=move || loading_or_generating.get()
                             on:input=move |ev| set_sel_reference_wav.set(event_target_value(&ev))
                         />
                     </SettingsField>
@@ -202,6 +207,7 @@ pub fn SettingsModal(
                     <SettingsField label=move || lang.get().t("language")>
                         <select
                             class="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1 text-sm"
+                            disabled=move || loading_or_generating.get()
                             on:change=move |ev| set_sel_language.set(event_target_value(&ev))
                         >
                             <option value="Chinese" selected=move || sel_language.get() == "Chinese">"中文"</option>
@@ -212,6 +218,7 @@ pub fn SettingsModal(
                 <div class="flex justify-end gap-2 px-4 py-3 border-t border-gray-700">
                     <button
                         class="px-4 py-1.5 rounded bg-gray-600 hover:bg-gray-500 text-sm"
+                        disabled=move || loading_or_generating.get()
                         on:click={
                             let on_close = on_close_apply.clone();
                             move |_| on_close(())

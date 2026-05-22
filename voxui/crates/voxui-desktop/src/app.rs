@@ -209,11 +209,10 @@ fn choice_config_fields(
     )
 }
 
-fn choice_identity_key(model_root: &str, choice: &ModelChoice) -> String {
+fn choice_identity_key(choice: &ModelChoice) -> String {
     format!(
-        "{}::{}::{}",
-        model_root.trim(),
-        choice.model_dir,
+        "{}::{}",
+        choice.model_path,
         choice.lora_path.as_deref().unwrap_or_default()
     )
 }
@@ -553,10 +552,8 @@ pub fn App() -> impl IntoView {
         set_status_message.set(String::new());
 
         let next_choices = model_choices.get_untracked();
-        let (selected_model_dir, selected_lora_path) = choice_config_fields(
-            next_choices.clone(),
-            next_selected_choice_id.clone(),
-        );
+        let (selected_model_dir, selected_lora_path) =
+            choice_config_fields(next_choices.clone(), next_selected_choice_id.clone());
         let config = serde_json::json!({
             "model_root": model_root.get_untracked(),
             "selected_model_choice_id": next_selected_choice_id,
@@ -647,7 +644,7 @@ pub fn App() -> impl IntoView {
                         info.architecture, info.sample_rate, info.backend
                     ));
                     set_engine_ready.set(true);
-                    set_loaded_choice_key.set(choice_identity_key(&model_root.get_untracked(), &choice));
+                    set_loaded_choice_key.set(choice_identity_key(&choice));
                     set_loaded_choice_name.set(choice.name.clone());
                     set_actual_backend.set(info.backend.clone());
                     set_status.set("ready".into());
@@ -807,12 +804,11 @@ pub fn App() -> impl IntoView {
     });
     let selected_choice_key = Signal::derive(move || {
         selected_choice(&model_choices.get(), &selected_choice_id.get())
-            .map(|choice| choice_identity_key(&model_root.get(), &choice))
+            .map(|choice| choice_identity_key(&choice))
             .unwrap_or_default()
     });
-    let selected_matches_loaded = Signal::derive(move || {
-        selected_choice_key.get() == loaded_choice_key.get()
-    });
+    let selected_matches_loaded =
+        Signal::derive(move || selected_choice_key.get() == loaded_choice_key.get());
     let generating =
         Signal::derive(move || active_index.get().is_some() || status.get() == "generating");
 
