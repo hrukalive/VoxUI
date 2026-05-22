@@ -209,6 +209,15 @@ fn choice_config_fields(
     )
 }
 
+fn choice_identity_key(model_root: &str, choice: &ModelChoice) -> String {
+    format!(
+        "{}::{}::{}",
+        model_root.trim(),
+        choice.model_dir,
+        choice.lora_path.as_deref().unwrap_or_default()
+    )
+}
+
 #[component]
 pub fn App() -> impl IntoView {
     let (lang, set_lang) = signal(Language::Chinese);
@@ -222,11 +231,12 @@ pub fn App() -> impl IntoView {
 
     let (model_root, set_model_root) = signal(String::new());
     let (selected_choice_id, set_selected_choice_id) = signal(String::new());
-    let (loaded_choice_id, set_loaded_choice_id) = signal(None::<String>);
+    let (loaded_choice_key, set_loaded_choice_key) = signal(String::new());
     let (loaded_choice_name, set_loaded_choice_name) = signal(String::new());
     let (model_choices, set_model_choices) = signal(Vec::<ModelChoice>::new());
     let (load_progress, set_load_progress) = signal(LoadProgress::Hidden);
     let (load_in_progress, set_load_in_progress) = signal(false);
+    let (settings_apply_in_progress, set_settings_apply_in_progress) = signal(false);
 
     let (backend, set_backend) = signal("CUDA".to_string());
     let (audio_host, set_audio_host) = signal(String::new());
@@ -525,6 +535,12 @@ pub fn App() -> impl IntoView {
     };
 
     let on_choice_selected = move |choice_id: String| {
+        if settings_apply_in_progress.get_untracked() {
+            set_status_message
+                .set("Finish the current operation before changing settings".to_string());
+            return;
+        }
+
         let next_selected_choice_id = choice_id;
         set_selected_choice_id.set(next_selected_choice_id.clone());
         set_no_model.set(model_choices.get_untracked().is_empty());
@@ -566,6 +582,12 @@ pub fn App() -> impl IntoView {
     };
 
     let on_load_or_cancel = move |_| {
+        if settings_apply_in_progress.get_untracked() {
+            set_status_message
+                .set("Finish the current operation before changing settings".to_string());
+            return;
+        }
+
         if load_in_progress.get_untracked() {
             spawn_local(async move {
                 let _ = tauri_api::invoke_no_args::<()>("cancel_load").await;
@@ -616,7 +638,7 @@ pub fn App() -> impl IntoView {
                         info.architecture, info.sample_rate, info.backend
                     ));
                     set_engine_ready.set(true);
-                    set_loaded_choice_id.set(Some(choice.id.clone()));
+                    set_loaded_choice_key.set(choice_identity_key(&model_root.get_untracked(), &choice));
                     set_loaded_choice_name.set(choice.name.clone());
                     set_actual_backend.set(info.backend.clone());
                     set_status.set("ready".into());
@@ -624,7 +646,7 @@ pub fn App() -> impl IntoView {
                 }
                 Err(e) => {
                     debug_log(&format!("model load error {e}"));
-                    let had_loaded = loaded_choice_id.get_untracked().is_some();
+                    let had_loaded = !loaded_choice_key.get_untracked().is_empty();
                     set_engine_ready.set(had_loaded);
                     set_status.set(if had_loaded {
                         "ready".into()
@@ -641,13 +663,13 @@ pub fn App() -> impl IntoView {
         if active_index.get_untracked().is_some()
             || status.get_untracked() == "generating"
             || load_in_progress.get_untracked()
+            || settings_apply_in_progress.get_untracked()
         {
             set_status_message
                 .set("Finish the current operation before changing settings".to_string());
             return;
         }
 
-        set_show_settings.set(false);
         let requested_model_root = vals.model_root.clone();
         let requested_backend = vals.backend.clone();
         let requested_audio_host = vals.audio_host.clone();
@@ -660,11 +682,13 @@ pub fn App() -> impl IntoView {
         let requested_language = vals.language.clone();
         let model_root_changed = requested_model_root != model_root.get_untracked();
         let next_language = language_from_config(&requested_language);
+        set_settings_apply_in_progress.set(true);
 
         spawn_local(async move {
             let restore_after_error = |message: String| {
                 debug_log(&format!("settings apply error {message}"));
                 set_status_message.set(message);
+                set_settings_apply_in_progress.set(false);
             };
 
             let mut next_choices = model_choices.get_untracked();
@@ -732,14 +756,20 @@ pub fn App() -> impl IntoView {
                 "dit_steps": requested_dit_steps,
                 "language": requested_language,
             });
-            let _ = tauri_api::invoke_unit("save_config", &serde_json::json!({ "config": config }))
-                .await;
+            if let Err(e) =
+                tauri_api::invoke_unit("save_config", &serde_json::json!({ "config": config }))
+                    .await
+            {
+                restore_after_error(e);
+                return;
+            }
 
             if model_root_changed {
                 set_model_choices.set(next_choices.clone());
                 set_selected_choice_id.set(next_selected_choice_id);
                 set_no_model.set(next_choices.is_empty());
             }
+            set_show_settings.set(false);
             set_model_root.set(requested_model_root);
             set_backend.set(requested_backend);
             set_audio_host.set(validated_audio_host);
@@ -753,6 +783,7 @@ pub fn App() -> impl IntoView {
             set_reference_wav_path.set(requested_reference_wav_path);
             set_lang.set(next_language);
             set_status_message.set(String::new());
+            set_settings_apply_in_progress.set(false);
             if !engine_ready.get_untracked() && status.get_untracked() == "loading" {
                 set_status.set("idle".into());
             }
@@ -764,9 +795,13 @@ pub fn App() -> impl IntoView {
             .map(|choice| choice.name)
             .unwrap_or_default()
     });
+    let selected_choice_key = Signal::derive(move || {
+        selected_choice(&model_choices.get(), &selected_choice_id.get())
+            .map(|choice| choice_identity_key(&model_root.get(), &choice))
+            .unwrap_or_default()
+    });
     let generating =
         Signal::derive(move || active_index.get().is_some() || status.get() == "generating");
-    let loading_or_generating = Signal::derive(move || load_in_progress.get() || generating.get());
 
     view! {
         <div class="flex flex-col h-screen">
@@ -774,13 +809,18 @@ pub fn App() -> impl IntoView {
                 lang=lang
                 choices=model_choices
                 selected_choice_id=selected_choice_id
-                loaded_choice_id=loaded_choice_id
+                selected_choice_key=selected_choice_key
+                loaded_choice_key=loaded_choice_key.into()
                 load_in_progress=load_in_progress
                 generating=generating
+                settings_apply_in_progress=settings_apply_in_progress
                 on_choice_selected=on_choice_selected
                 on_load_or_cancel=on_load_or_cancel
                 on_settings=move |_| {
-                    if active_index.get_untracked().is_some()
+                    if settings_apply_in_progress.get_untracked() {
+                        set_status_message
+                            .set("Finish the current operation before changing settings".to_string());
+                    } else if active_index.get_untracked().is_some()
                         || status.get_untracked() == "generating"
                         || load_in_progress.get_untracked()
                     {
@@ -822,7 +862,10 @@ pub fn App() -> impl IntoView {
                     reference_wav_path=reference_wav_path
                     hosts=hosts
                     devices=devices
-                    loading_or_generating=loading_or_generating
+                    settings_apply_in_progress=settings_apply_in_progress
+                    loading_or_generating=Signal::derive(move || {
+                        load_in_progress.get() || generating.get() || settings_apply_in_progress.get()
+                    })
                     on_close=move |_| set_show_settings.set(false)
                     on_apply=on_apply_settings
                 />

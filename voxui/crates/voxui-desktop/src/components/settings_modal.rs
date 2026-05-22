@@ -18,6 +18,7 @@ pub fn SettingsModal(
     hosts: ReadSignal<Vec<String>>,
     devices: ReadSignal<Vec<String>>,
     loading_or_generating: Signal<bool>,
+    settings_apply_in_progress: ReadSignal<bool>,
     on_close: impl Fn(()) + 'static + Clone,
     on_apply: impl Fn(SettingsValues) + 'static,
 ) -> impl IntoView {
@@ -66,7 +67,9 @@ pub fn SettingsModal(
                                         match tauri_api::invoke_no_args::<Option<String>>("browse_model_root").await {
                                             Ok(Some(path)) => set_sel_model_root.set(path),
                                             Ok(None) => {}
-                                            Err(e) => web_sys::console::error_1(&format!("Browse error: {e}").into()),
+                                            Err(e) => {
+                                                web_sys::console::error_1(&format!("Browse error: {e}").into());
+                                            }
                                         }
                                     });
                                 }
@@ -218,6 +221,7 @@ pub fn SettingsModal(
                     </button>
                     <button
                         class="px-4 py-1.5 rounded bg-blue-600 hover:bg-blue-700 text-sm font-medium"
+                        disabled=move || settings_apply_in_progress.get() || loading_or_generating.get()
                         on:click=move |_| {
                             on_apply(SettingsValues {
                                 model_root: sel_model_root.get(),

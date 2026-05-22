@@ -7,19 +7,21 @@ pub fn Header(
     lang: ReadSignal<Language>,
     choices: ReadSignal<Vec<ModelChoice>>,
     selected_choice_id: ReadSignal<String>,
-    loaded_choice_id: ReadSignal<Option<String>>,
+    selected_choice_key: Signal<String>,
+    loaded_choice_key: Signal<String>,
     load_in_progress: ReadSignal<bool>,
     generating: Signal<bool>,
+    settings_apply_in_progress: ReadSignal<bool>,
     on_choice_selected: impl Fn(String) + 'static + Clone,
     on_load_or_cancel: impl Fn(()) + 'static + Clone,
     on_settings: impl Fn(()) + 'static,
 ) -> impl IntoView {
     let can_load = move || {
-        if load_in_progress.get() || generating.get() {
+        if load_in_progress.get() || generating.get() || settings_apply_in_progress.get() {
             return false;
         }
         let selected = selected_choice_id.get();
-        !selected.is_empty() && Some(selected) != loaded_choice_id.get()
+        !selected.is_empty() && selected_choice_key.get() != loaded_choice_key.get()
     };
 
     view! {
@@ -28,7 +30,12 @@ pub fn Header(
             <select
                 class="min-w-0 flex-1 max-w-md bg-gray-900 border border-gray-600 rounded px-2 py-1 text-sm disabled:opacity-50"
                 title=move || lang.get().t("select_model")
-                disabled=move || load_in_progress.get() || generating.get() || choices.get().is_empty()
+                disabled=move || {
+                    load_in_progress.get()
+                        || generating.get()
+                        || settings_apply_in_progress.get()
+                        || choices.get().is_empty()
+                }
                 on:change=move |ev| on_choice_selected(event_target_value(&ev))
             >
                 <For
@@ -61,7 +68,7 @@ pub fn Header(
             <button
                 class="p-2 rounded hover:bg-gray-700 transition-colors text-gray-300 hover:text-white disabled:opacity-50"
                 title=move || lang.get().t("settings")
-                disabled=move || load_in_progress.get() || generating.get()
+                disabled=move || load_in_progress.get() || generating.get() || settings_apply_in_progress.get()
                 on:click=move |_| on_settings(())
             >
                 <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
