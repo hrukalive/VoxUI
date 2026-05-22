@@ -1,5 +1,5 @@
 {
-  "productName": "VoxUI",
+  "productName": "AhanSays",
   "version": "0.1.0",
   "identifier": "com.voxui.app",
   "build": {
@@ -18,7 +18,7 @@
     "withGlobalTauri": true,
     "windows": [
       {
-        "title": "VoxUI",
+        "title": "AhanSays",
         "width": 800,
         "height": 600,
         "resizable": true,
