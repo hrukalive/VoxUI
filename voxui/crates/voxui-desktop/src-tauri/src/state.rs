@@ -11,6 +11,10 @@ use voxui_inference::VoxCPMEngine;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AppConfig {
+    #[serde(default = "default_model_root")]
+    pub model_root: String,
+    #[serde(default)]
+    pub selected_model_choice_id: String,
     #[serde(default = "default_model_dir")]
     pub model_dir: String,
     #[serde(default)]
@@ -38,6 +42,17 @@ pub struct AppConfig {
 fn default_model_dir() -> String {
     "models".into()
 }
+fn default_model_root() -> String {
+    default_program_models_dir()
+        .unwrap_or_else(|| PathBuf::from("models"))
+        .to_string_lossy()
+        .replace('\\', "/")
+}
+pub fn default_program_models_dir() -> Option<PathBuf> {
+    std::env::current_exe()
+        .ok()
+        .and_then(|path| path.parent().map(|parent| parent.join("models")))
+}
 fn default_backend() -> String {
     "CUDA".into()
 }
@@ -54,6 +69,8 @@ fn default_language() -> String {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
+            model_root: default_model_root(),
+            selected_model_choice_id: String::new(),
             model_dir: default_model_dir(),
             lora_dir: None,
             prompt_wav_path: None,
@@ -140,6 +157,7 @@ impl AppState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
     use tempfile::tempdir;
 
     #[test]
@@ -147,6 +165,8 @@ mod tests {
         let tmp = tempdir().unwrap();
         let path = tmp.path().join("voxui_config.json");
         let config = AppConfig {
+            model_root: "models".to_string(),
+            selected_model_choice_id: "voxcpm2-fp16".to_string(),
             model_dir: "models/voxcpm2-fp16".to_string(),
             lora_dir: Some("models/voxcpm2-fp16/lora_ft2".to_string()),
             prompt_wav_path: Some("for_test_wav/prompt.wav".to_string()),
@@ -170,6 +190,48 @@ mod tests {
         assert_eq!(loaded.reference_wav_path, config.reference_wav_path);
         assert_eq!(loaded.backend, "CUDA");
         assert_eq!(loaded.dit_steps, 12);
+    }
+
+    #[test]
+    fn config_round_trips_model_root_and_selected_choice() {
+        let tmp = tempdir().unwrap();
+        let path = tmp.path().join("voxui_config.json");
+        let config = AppConfig {
+            model_root: "D:/Models".to_string(),
+            selected_model_choice_id: "voxcpm2-q4-lm::lora_ft2.gguf".to_string(),
+            model_dir: "models/voxcpm2-q4-lm".to_string(),
+            lora_dir: Some("models/voxcpm2-q4-lm/lora_ft2.gguf".to_string()),
+            prompt_wav_path: Some("for_test_wav/prompt.wav".to_string()),
+            prompt_text: Some("prompt text".to_string()),
+            reference_wav_path: Some("for_test_wav/reference.wav".to_string()),
+            backend: "CUDA".to_string(),
+            audio_host: "Wasapi".to_string(),
+            audio_device: "Speakers".to_string(),
+            max_chars: 120,
+            dit_steps: 12,
+            language: "English".to_string(),
+        };
+
+        config.save_to_path(&path).unwrap();
+        let loaded = AppConfig::load_from_path(&path);
+
+        assert_eq!(loaded.model_root, "D:/Models");
+        assert_eq!(
+            loaded.selected_model_choice_id,
+            "voxcpm2-q4-lm::lora_ft2.gguf"
+        );
+    }
+
+    #[test]
+    fn missing_model_root_uses_non_empty_default() {
+        let tmp = tempdir().unwrap();
+        let path = tmp.path().join("voxui_config.json");
+        fs::write(&path, r#"{"backend":"CPU"}"#).unwrap();
+
+        let loaded = AppConfig::load_from_path(&path);
+
+        assert!(!loaded.model_root.trim().is_empty());
+        assert_eq!(loaded.selected_model_choice_id, "");
     }
 
     #[test]
