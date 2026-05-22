@@ -182,6 +182,49 @@ mod tests {
     }
 
     #[test]
+    fn scan_model_choices_flattens_base_and_lora_files_sorted() {
+        let tmp = tempdir().unwrap();
+        let model_b = create_model_dir(tmp.path(), "voxcpm2-q4-lm");
+        fs::write(model_b.join("lora_ft2.gguf"), b"placeholder").unwrap();
+        fs::write(model_b.join("lora_alpha.gguf"), b"placeholder").unwrap();
+        create_model_dir(tmp.path(), "voxcpm05-fp16");
+        fs::write(model_b.join("not_lora.gguf"), b"placeholder").unwrap();
+        fs::create_dir_all(model_b.join("lora_old_dir.gguf")).unwrap();
+
+        let choices = super::scan_model_choices(tmp.path());
+        let names = choices
+            .iter()
+            .map(|choice| choice.name.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            names,
+            vec![
+                "voxcpm05-fp16",
+                "voxcpm2-q4-lm",
+                "voxcpm2-q4-lm | lora_alpha",
+                "voxcpm2-q4-lm | lora_ft2",
+            ]
+        );
+        assert!(choices[0].lora_path.is_none());
+        assert!(choices[2].lora_path.as_ref().unwrap().ends_with("lora_alpha.gguf"));
+    }
+
+    #[test]
+    fn model_choice_id_is_relative_to_model_root_and_lora_file() {
+        let tmp = tempdir().unwrap();
+        let model = create_model_dir(tmp.path(), "voxcpm2-q4-lm");
+        fs::write(model.join("lora_ft2.gguf"), b"placeholder").unwrap();
+
+        let choices = super::scan_model_choices(tmp.path());
+
+        assert!(choices.iter().any(|choice| choice.id == "voxcpm2-q4-lm"));
+        assert!(choices
+            .iter()
+            .any(|choice| choice.id == "voxcpm2-q4-lm::lora_ft2.gguf"));
+    }
+
+    #[test]
     fn synthesis_args_builds_native_request_with_prompt_and_reference_paths() {
         let args = super::SynthesisArgs {
             index: 4,
