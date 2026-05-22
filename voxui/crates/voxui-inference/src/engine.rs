@@ -329,10 +329,18 @@ impl VoxCPMEngine {
             }
         }
 
+        let generated_patches = state
+            .generated_patches
+            .get(state.context_len..)
+            .context("stop trace context length exceeds generated patch count")?;
         Ok(StopTraceDebug {
             steps,
-            generated_audio_feat: generated_patches_to_audio_feat(&state.generated_patches)?,
-            generated_step_count: state.generated_patches.len(),
+            generated_audio_feat: generated_patches_to_audio_feat(
+                generated_patches,
+                self.config.latent_dim,
+                self.config.patch_size,
+            )?,
+            generated_step_count: generated_patches.len(),
         })
     }
 
@@ -1067,9 +1075,22 @@ fn patches_to_latent(patches: &[Tensor], latent_dim: usize, patch_size: usize) -
         .map_err(Into::into)
 }
 
-fn generated_patches_to_audio_feat(patches: &[Tensor]) -> Result<Tensor> {
+fn generated_patches_to_audio_feat(
+    patches: &[Tensor],
+    latent_dim: usize,
+    patch_size: usize,
+) -> Result<Tensor> {
     if patches.is_empty() {
         bail!("no generated patches to trace");
+    }
+    for patch in patches {
+        let dims = patch.dims3()?;
+        if dims != (1, patch_size, latent_dim) {
+            bail!(
+                "generated patch shape must be [1, patch_size, latent_dim], got {:?}",
+                dims
+            );
+        }
     }
     let refs = patches.iter().collect::<Vec<_>>();
     Tensor::cat(&refs, 0).map_err(Into::into)
