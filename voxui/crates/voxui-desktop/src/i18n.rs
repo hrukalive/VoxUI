@@ -1,5 +1,3 @@
-use leptos::prelude::*;
-
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Language {
     Chinese,
@@ -9,7 +7,7 @@ pub enum Language {
 impl Language {
     pub fn t(&self, key: &str) -> &'static str {
         match (self, key) {
-            (Language::Chinese, "title") => "VoxUI",
+            (Language::Chinese, "title") => "焓言焓语",
             (Language::Chinese, "history") => "语音合成历史",
             (Language::Chinese, "input_placeholder") => "输入文字按 Enter 发送...",
             (Language::Chinese, "settings") => "设置",
@@ -26,7 +24,17 @@ impl Language {
             (Language::Chinese, "language") => "语言",
             (Language::Chinese, "apply") => "应用",
             (Language::Chinese, "cancel") => "取消",
+            (Language::Chinese, "load") => "加载",
+            (Language::Chinese, "select_model") => "选择模型",
+            (Language::Chinese, "no_models_found") => "未找到模型",
+            (Language::Chinese, "models_folder") => "模型文件夹",
+            (Language::Chinese, "browse") => "浏览",
+            (Language::Chinese, "reading") => "读取中",
+            (Language::Chinese, "loading_to_device") => "加载到设备",
+            (Language::Chinese, "loaded") => "已加载",
+            (Language::Chinese, "selected") => "已选择",
             (Language::Chinese, "loading") => "正在加载模型...",
+            (Language::Chinese, "idle") => "空闲",
             (Language::Chinese, "ready") => "就绪",
             (Language::Chinese, "generating") => "生成中...",
             (Language::Chinese, "send") => "发送",
@@ -36,7 +44,7 @@ impl Language {
             (Language::Chinese, "model_dir") => "模型目录",
             (Language::Chinese, "lora_dir") => "LoRA 目录",
             (Language::Chinese, "none") => "无",
-            (Language::English, "title") => "VoxUI",
+            (Language::English, "title") => "AhanSays",
             (Language::English, "history") => "TTS History",
             (Language::English, "input_placeholder") => "Type text and press Enter...",
             (Language::English, "settings") => "Settings",
@@ -53,7 +61,17 @@ impl Language {
             (Language::English, "language") => "Language",
             (Language::English, "apply") => "Apply",
             (Language::English, "cancel") => "Cancel",
+            (Language::English, "load") => "Load",
+            (Language::English, "select_model") => "Select model",
+            (Language::English, "no_models_found") => "No models found",
+            (Language::English, "models_folder") => "Models folder",
+            (Language::English, "browse") => "Browse",
+            (Language::English, "reading") => "Reading",
+            (Language::English, "loading_to_device") => "Loading to device",
+            (Language::English, "loaded") => "Loaded",
+            (Language::English, "selected") => "Selected",
             (Language::English, "loading") => "Loading model...",
+            (Language::English, "idle") => "Idle",
             (Language::English, "ready") => "Ready",
             (Language::English, "generating") => "Generating...",
             (Language::English, "send") => "Send",
@@ -66,10 +84,4 @@ impl Language {
             _ => "?",
         }
     }
-}
-
-/// Provide language context to the component tree.
-pub fn provide_language() -> (ReadSignal<Language>, WriteSignal<Language>) {
-    let (lang, set_lang) = signal(Language::Chinese);
-    (lang, set_lang)
 }

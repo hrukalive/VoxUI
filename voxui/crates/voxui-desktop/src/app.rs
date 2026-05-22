@@ -15,16 +15,28 @@ pub struct TtsEntry {
     pub progress: f64,
 }
 
-#[derive(Clone, Debug, Deserialize)]
-pub struct ModelEntry {
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct ModelChoice {
+    pub id: String,
     pub name: String,
-    pub path: String,
+    pub model_dir: String,
+    pub model_path: String,
+    pub model_size_bytes: u64,
+    pub lora_path: Option<String>,
+    pub lora_size_bytes: Option<u64>,
 }
 
-#[derive(Clone, Debug, Deserialize)]
-pub struct LoraEntry {
-    pub name: String,
-    pub path: Option<String>,
+#[derive(Clone, Debug, PartialEq)]
+pub enum LoadProgress {
+    Hidden,
+    Reading {
+        label: String,
+        bytes_read: u64,
+        total_bytes: u64,
+    },
+    DeviceLoading {
+        backend: String,
+    },
 }
 
 #[derive(Serialize)]
@@ -43,14 +55,22 @@ struct SynthesisPayload {
 }
 
 #[derive(Serialize)]
-struct LoadModelArgs {
-    model_dir: String,
-    backend: String,
+struct ListModelChoicesArgs {
+    model_root: String,
 }
 
 #[derive(Serialize)]
-struct ListLoraArgs {
+struct LoadModelChoiceArgs {
+    args: LoadModelChoicePayload,
+}
+
+#[derive(Serialize)]
+struct LoadModelChoicePayload {
+    choice_id: String,
     model_dir: String,
+    model_path: String,
+    lora_path: Option<String>,
+    backend: String,
 }
 
 #[derive(Serialize)]
@@ -58,18 +78,10 @@ struct ListAudioDevicesArgs {
     host: Option<String>,
 }
 
-#[derive(Serialize)]
-struct ApplyLoraArgs {
-    args: ApplyLoraPayload,
-}
-
-#[derive(Serialize)]
-struct ApplyLoraPayload {
-    lora_dir: Option<String>,
-}
-
 #[derive(Deserialize, Clone, Debug)]
 pub struct AppConfig {
+    pub model_root: String,
+    pub selected_model_choice_id: String,
     pub model_dir: String,
     pub lora_dir: Option<String>,
     pub prompt_wav_path: Option<String>,
@@ -108,8 +120,11 @@ struct ProgressPayload {
 
 #[derive(Deserialize, Debug)]
 struct LoadProgressPayload {
-    step: u32,
-    total: u32,
+    phase: String,
+    file_label: Option<String>,
+    bytes_read: u64,
+    total_bytes: u64,
+    backend: Option<String>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -132,14 +147,6 @@ fn non_empty_option(value: String) -> Option<String> {
     }
 }
 
-fn lora_selection_option(value: String) -> Option<String> {
-    if value.trim() == "None" {
-        None
-    } else {
-        non_empty_option(value)
-    }
-}
-
 #[cfg(debug_assertions)]
 fn debug_log(message: &str) {
     web_sys::console::debug_1(&JsValue::from_str(message));
@@ -155,12 +162,12 @@ fn truncate_to_chars(value: &str, max_chars: usize) -> String {
     }
 }
 
-fn valid_lora_selection(selection: Option<String>, entries: &[LoraEntry]) -> Option<String> {
-    selection.filter(|selected| {
-        entries
-            .iter()
-            .any(|entry| entry.path.as_ref() == Some(selected))
-    })
+fn selected_choice(choices: &[ModelChoice], selected_id: &str) -> Option<ModelChoice> {
+    choices
+        .iter()
+        .find(|choice| choice.id == selected_id)
+        .cloned()
+        .or_else(|| choices.first().cloned())
 }
 
 fn selected_audio_device(
@@ -178,18 +185,28 @@ fn selected_audio_device(
     }
 }
 
-async fn list_loras_for_model(model_dir: String) -> Result<Vec<LoraEntry>, String> {
-    tauri_api::invoke::<_, Vec<LoraEntry>>("list_lora_dirs", &ListLoraArgs { model_dir }).await
+fn language_from_config(value: &str) -> Language {
+    if value == "English" {
+        Language::English
+    } else {
+        Language::Chinese
+    }
 }
 
-async fn apply_lora_selection(lora_dir: Option<String>) -> Result<(), String> {
-    tauri_api::invoke_unit(
-        "apply_lora",
-        &ApplyLoraArgs {
-            args: ApplyLoraPayload { lora_dir },
-        },
+fn choice_config_fields(
+    choices: Vec<ModelChoice>,
+    selected_id: String,
+) -> (String, Option<String>) {
+    let selected = selected_choice(&choices, &selected_id);
+    (
+        selected
+            .as_ref()
+            .map(|choice| choice.model_dir.clone())
+            .unwrap_or_default(),
+        selected
+            .as_ref()
+            .and_then(|choice| choice.lora_path.clone()),
     )
-    .await
 }
 
 #[component]
@@ -202,45 +219,44 @@ pub fn App() -> impl IntoView {
     let (engine_ready, set_engine_ready) = signal(false);
     let (next_index, set_next_index) = signal(0u32);
     let (active_index, set_active_index) = signal(None::<u32>);
-    let (load_step, set_load_step) = signal(String::new());
 
-    // Config state
-    let (model_dir, set_model_dir) = signal(String::new());
-    let (lora_dir, set_lora_dir) = signal("None".to_string());
+    let (model_root, set_model_root) = signal(String::new());
+    let (selected_choice_id, set_selected_choice_id) = signal(String::new());
+    let (loaded_choice_id, set_loaded_choice_id) = signal(None::<String>);
+    let (model_choices, set_model_choices) = signal(Vec::<ModelChoice>::new());
+    let (load_progress, set_load_progress) = signal(LoadProgress::Hidden);
+    let (load_in_progress, set_load_in_progress) = signal(false);
+
     let (backend, set_backend) = signal("CUDA".to_string());
     let (audio_host, set_audio_host) = signal(String::new());
     let (audio_device, set_audio_device) = signal(String::new());
     let (max_chars, set_max_chars) = signal(80usize);
     let (dit_steps, set_dit_steps) = signal(10usize);
-    let (model_name, set_model_name) = signal(String::new());
     let (prompt_wav_path, set_prompt_wav_path) = signal(String::new());
     let (prompt_text, set_prompt_text) = signal(String::new());
     let (reference_wav_path, set_reference_wav_path) = signal(String::new());
     let (actual_backend, set_actual_backend) = signal(String::new());
     let (status_message, set_status_message) = signal(String::new());
 
-    // Available options
-    let (models, set_models) = signal(Vec::<ModelEntry>::new());
-    let (loras, set_loras) = signal(Vec::<LoraEntry>::new());
     let (hosts, set_hosts) = signal(Vec::<String>::new());
     let (devices, set_devices) = signal(Vec::<String>::new());
-
     let (no_model, set_no_model) = signal(false);
 
-    // Initialize on mount
     {
-        let set_status = set_status.clone();
         spawn_local(async move {
-            // Load config
+            let mut legacy_model_dir = String::new();
+            let mut legacy_lora_path = None::<String>;
             debug_log("startup: config load start");
             match tauri_api::invoke_no_args::<AppConfig>("get_config").await {
                 Ok(config) => {
                     debug_log(&format!(
-                        "startup: config load success model_dir={} backend={}",
-                        config.model_dir, config.backend
+                        "startup: config load success model_root={} selected_choice={} backend={}",
+                        config.model_root, config.selected_model_choice_id, config.backend
                     ));
-                    set_model_dir.set(config.model_dir.clone());
-                    set_lora_dir.set(config.lora_dir.clone().unwrap_or("None".into()));
+                    set_model_root.set(config.model_root.clone());
+                    set_selected_choice_id.set(config.selected_model_choice_id.clone());
+                    legacy_model_dir = config.model_dir.clone();
+                    legacy_lora_path = config.lora_dir.clone();
                     set_prompt_wav_path.set(config.prompt_wav_path.unwrap_or_default());
                     set_prompt_text.set(config.prompt_text.unwrap_or_default());
                     set_reference_wav_path.set(config.reference_wav_path.unwrap_or_default());
@@ -250,44 +266,56 @@ pub fn App() -> impl IntoView {
                     set_audio_device.set(config.audio_device.clone());
                     set_max_chars.set(config.max_chars);
                     set_dit_steps.set(config.dit_steps);
-                    if config.language == "English" {
-                        set_lang.set(Language::English);
+                    set_lang.set(language_from_config(&config.language));
+                    if config.selected_model_choice_id.trim().is_empty() {
+                        set_selected_choice_id.set(legacy_model_dir.clone());
                     }
                 }
                 Err(e) => {
                     debug_log(&format!("startup: config load error {e}"));
+                    set_status_message.set(e);
                 }
             }
 
-            // List models
-            debug_log("startup: model list start");
-            match tauri_api::invoke_no_args::<Vec<ModelEntry>>("list_models").await {
-                Ok(model_list) => {
-                    debug_log(&format!(
-                        "startup: model list success count={}",
-                        model_list.len()
-                    ));
-                    if model_list.is_empty() {
-                        set_no_model.set(true);
-                        set_status.set("idle".into());
-                        return;
-                    }
-                    let configured = model_dir.get_untracked();
-                    let selected = model_list
+            debug_log("startup: model choices list start");
+            match tauri_api::invoke::<_, Vec<ModelChoice>>(
+                "list_model_choices",
+                &ListModelChoicesArgs {
+                    model_root: model_root.get_untracked(),
+                },
+            )
+            .await
+            {
+                Ok(choices) => {
+                    debug_log(&format!("startup: model choices count={}", choices.len()));
+                    set_no_model.set(choices.is_empty());
+                    let configured_id = selected_choice_id.get_untracked();
+                    let selected = choices
                         .iter()
-                        .find(|entry| entry.path == configured)
+                        .find(|choice| choice.id == configured_id)
                         .cloned()
-                        .unwrap_or_else(|| model_list[0].clone());
-                    set_model_dir.set(selected.path.clone());
-                    set_model_name.set(selected.name.clone());
-                    set_models.set(model_list);
+                        .or_else(|| {
+                            choices
+                                .iter()
+                                .find(|choice| {
+                                    choice.model_dir == legacy_model_dir
+                                        && choice.lora_path == legacy_lora_path
+                                })
+                                .cloned()
+                        })
+                        .or_else(|| choices.first().cloned());
+                    set_selected_choice_id
+                        .set(selected.map(|choice| choice.id).unwrap_or_default());
+                    set_model_choices.set(choices);
+                    set_status.set("idle".into());
                 }
                 Err(e) => {
-                    debug_log(&format!("startup: model list error {e}"));
+                    debug_log(&format!("startup: model choices error {e}"));
+                    set_status_message.set(e);
+                    set_status.set("idle".into());
                 }
             }
 
-            // List audio devices
             debug_log("startup: audio device list start");
             match tauri_api::invoke::<_, AudioDeviceList>(
                 "list_audio_devices",
@@ -315,85 +343,13 @@ pub fn App() -> impl IntoView {
                 }
                 Err(e) => {
                     debug_log(&format!("startup: audio device list error {e}"));
-                }
-            }
-
-            // List loras
-            let md = model_dir.get_untracked();
-            debug_log(&format!("startup: lora list start model_dir={md}"));
-            let selected_lora = match list_loras_for_model(md).await {
-                Ok(lora_list) => {
-                    debug_log(&format!(
-                        "startup: lora list success count={}",
-                        lora_list.len()
-                    ));
-                    let selected_lora = valid_lora_selection(
-                        lora_selection_option(lora_dir.get_untracked()),
-                        &lora_list,
-                    );
-                    set_lora_dir.set(selected_lora.clone().unwrap_or_else(|| "None".to_string()));
-                    set_loras.set(lora_list);
-                    selected_lora
-                }
-                Err(e) => {
-                    debug_log(&format!("startup: lora list error {e}"));
-                    set_lora_dir.set("None".into());
-                    set_loras.set(Vec::new());
-                    set_status_message.set(e);
-                    None
-                }
-            };
-
-            // Load model
-            set_status.set("loading".into());
-            let md = model_dir.get_untracked();
-            let be = backend.get_untracked();
-            debug_log(&format!(
-                "startup: model load start model_dir={md} backend={be}"
-            ));
-            match tauri_api::invoke::<_, ModelInfo>(
-                "load_model",
-                &LoadModelArgs {
-                    model_dir: md.clone(),
-                    backend: be,
-                },
-            )
-            .await
-            {
-                Ok(info) => {
-                    debug_log(&format!(
-                        "startup: model load success architecture={} sample_rate={} backend={}",
-                        info.architecture, info.sample_rate, info.backend
-                    ));
-                    set_engine_ready.set(true);
-                    set_actual_backend.set(info.backend.clone());
-                    set_status.set("ready".into());
-                    set_status_message.set(info.warning.unwrap_or_default());
-                    match apply_lora_selection(selected_lora).await {
-                        Ok(()) => debug_log("startup: lora apply success"),
-                        Err(e) => {
-                            debug_log(&format!("startup: lora apply error {e}"));
-                            set_status.set(format!("Error: {}", e));
-                            set_status_message.set(e);
-                        }
-                    }
-                }
-                Err(e) => {
-                    debug_log(&format!("startup: model load error {e}"));
-                    set_engine_ready.set(false);
-                    web_sys::console::error_1(&format!("Model load error: {}", e).into());
-                    set_status.set(format!("Error: {}", e));
                     set_status_message.set(e);
                 }
             }
         });
     }
 
-    // Listen for progress events
     {
-        let active_index = active_index.clone();
-        let set_progress = set_progress.clone();
-        let set_history = set_history.clone();
         spawn_local(async move {
             let progress_cb = Closure::new(move |val: JsValue| {
                 let payload_value = tauri_api::event_payload(val);
@@ -418,17 +374,23 @@ pub fn App() -> impl IntoView {
         });
     }
 
-    // Listen for model load progress events
     {
-        let set_load_step = set_load_step.clone();
         spawn_local(async move {
             let load_cb = Closure::new(move |val: JsValue| {
                 let payload_value = tauri_api::event_payload(val);
                 if let Ok(payload) =
                     serde_wasm_bindgen::from_value::<LoadProgressPayload>(payload_value)
                 {
-                    if payload.total > 0 {
-                        set_load_step.set(format!("({}/{})", payload.step + 1, payload.total));
+                    match payload.phase.as_str() {
+                        "reading" => set_load_progress.set(LoadProgress::Reading {
+                            label: payload.file_label.unwrap_or_else(|| "GGUF".to_string()),
+                            bytes_read: payload.bytes_read,
+                            total_bytes: payload.total_bytes,
+                        }),
+                        "device_loading" => set_load_progress.set(LoadProgress::DeviceLoading {
+                            backend: payload.backend.unwrap_or_else(|| "device".to_string()),
+                        }),
+                        _ => {}
                     }
                 }
             });
@@ -437,13 +399,7 @@ pub fn App() -> impl IntoView {
         });
     }
 
-    // Listen for completion events
     {
-        let active_index = active_index.clone();
-        let set_active_index = set_active_index.clone();
-        let set_status = set_status.clone();
-        let set_progress = set_progress.clone();
-        let set_history = set_history.clone();
         spawn_local(async move {
             let complete_cb = Closure::new(move |val: JsValue| {
                 let payload_value = tauri_api::event_payload(val);
@@ -462,7 +418,6 @@ pub fn App() -> impl IntoView {
                         set_progress.set(0.0);
                     }
                 } else {
-                    // Compatibility with older events that did not include an index.
                     set_history.update(|history| {
                         if let Some(entry) = history
                             .iter_mut()
@@ -480,13 +435,7 @@ pub fn App() -> impl IntoView {
         });
     }
 
-    // Listen for synthesis errors
     {
-        let active_index = active_index.clone();
-        let set_active_index = set_active_index.clone();
-        let set_status = set_status.clone();
-        let set_progress = set_progress.clone();
-        let set_history = set_history.clone();
         spawn_local(async move {
             let error_cb = Closure::new(move |val: JsValue| {
                 let payload_value = tauri_api::event_payload(val);
@@ -501,6 +450,7 @@ pub fn App() -> impl IntoView {
                         set_active_index.set(None);
                         set_status.set("ready".into());
                         set_progress.set(0.0);
+                        set_status_message.set(payload.message);
                     }
                 }
             });
@@ -521,11 +471,7 @@ pub fn App() -> impl IntoView {
         set_next_index.set(idx + 1);
         set_active_index.set(Some(idx));
 
-        let trimmed = {
-            let mc = max_chars.get_untracked();
-            truncate_to_chars(&text, mc)
-        };
-
+        let trimmed = truncate_to_chars(&text, max_chars.get_untracked());
         let now = js_sys::Date::new_0();
         let timestamp = format!(
             "{:02}:{:02}:{:02}",
@@ -546,10 +492,9 @@ pub fn App() -> impl IntoView {
         set_status.set("generating".into());
         set_progress.set(0.0);
 
-        let steps = dit_steps.get_untracked();
         spawn_local(async move {
             let payload = SynthesisPayload {
-                dit_steps: steps,
+                dit_steps: dit_steps.get_untracked(),
                 index: idx,
                 text: trimmed,
                 prompt_wav_path: non_empty_option(prompt_wav_path.get_untracked()),
@@ -578,82 +523,77 @@ pub fn App() -> impl IntoView {
         true
     };
 
-    let on_model_selected = move |path: String| {
-        set_model_dir.set(path.clone());
-        set_no_model.set(false);
-        set_load_step.set(String::new());
+    let on_choice_selected = move |choice_id: String| {
+        set_selected_choice_id.set(choice_id);
+        set_no_model.set(model_choices.get_untracked().is_empty());
+        set_status_message.set(String::new());
+    };
+
+    let on_load_or_cancel = move |_| {
+        if load_in_progress.get_untracked() {
+            spawn_local(async move {
+                let _ = tauri_api::invoke_no_args::<()>("cancel_load").await;
+            });
+            return;
+        }
+
+        let selected = selected_choice(
+            &model_choices.get_untracked(),
+            &selected_choice_id.get_untracked(),
+        );
+        let Some(choice) = selected else {
+            set_status_message.set("No model selected".to_string());
+            return;
+        };
+
+        set_load_in_progress.set(true);
+        set_engine_ready.set(false);
         set_status.set("loading".into());
+        set_status_message.set(String::new());
+        set_load_progress.set(LoadProgress::Reading {
+            label: "model.gguf".to_string(),
+            bytes_read: 0,
+            total_bytes: choice.model_size_bytes,
+        });
+
         spawn_local(async move {
-            // Cancel any in-progress model load
-            let _ = tauri_api::invoke_no_args::<()>("cancel_load").await;
-            let be = backend.get_untracked();
-            debug_log(&format!(
-                "model selection: load start model_dir={} backend={}",
-                path, be
-            ));
-            let selected_name = models
-                .get_untracked()
-                .into_iter()
-                .find(|entry| entry.path == path)
-                .map(|entry| entry.name)
-                .unwrap_or_else(|| path.clone());
-            set_model_name.set(selected_name);
-            debug_log(&format!(
-                "model selection: lora list start model_dir={path}"
-            ));
-            let selected_lora = match list_loras_for_model(path.clone()).await {
-                Ok(lora_list) => {
-                    debug_log(&format!(
-                        "model selection: lora list success count={}",
-                        lora_list.len()
-                    ));
-                    let selected_lora = valid_lora_selection(
-                        lora_selection_option(lora_dir.get_untracked()),
-                        &lora_list,
-                    );
-                    set_lora_dir.set(selected_lora.clone().unwrap_or_else(|| "None".to_string()));
-                    set_loras.set(lora_list);
-                    selected_lora
-                }
-                Err(e) => {
-                    debug_log(&format!("model selection: lora list error {e}"));
-                    set_lora_dir.set("None".into());
-                    set_loras.set(Vec::new());
-                    set_status_message.set(e);
-                    None
-                }
-            };
-            match tauri_api::invoke::<_, ModelInfo>(
-                "load_model",
-                &LoadModelArgs {
-                    model_dir: path.clone(),
-                    backend: be,
+            let result = tauri_api::invoke::<_, ModelInfo>(
+                "load_model_choice",
+                &LoadModelChoiceArgs {
+                    args: LoadModelChoicePayload {
+                        choice_id: choice.id.clone(),
+                        model_dir: choice.model_dir.clone(),
+                        model_path: choice.model_path.clone(),
+                        lora_path: choice.lora_path.clone(),
+                        backend: backend.get_untracked(),
+                    },
                 },
             )
-            .await
-            {
+            .await;
+
+            set_load_in_progress.set(false);
+            set_load_progress.set(LoadProgress::Hidden);
+            match result {
                 Ok(info) => {
                     debug_log(&format!(
-                        "model selection: load success architecture={} sample_rate={} backend={}",
+                        "model load success architecture={} sample_rate={} backend={}",
                         info.architecture, info.sample_rate, info.backend
                     ));
                     set_engine_ready.set(true);
+                    set_loaded_choice_id.set(Some(choice.id.clone()));
                     set_actual_backend.set(info.backend.clone());
                     set_status.set("ready".into());
                     set_status_message.set(info.warning.unwrap_or_default());
-                    match apply_lora_selection(selected_lora).await {
-                        Ok(()) => debug_log("model selection: lora apply success"),
-                        Err(e) => {
-                            debug_log(&format!("model selection: lora apply error {e}"));
-                            set_status.set(format!("Error: {}", e));
-                            set_status_message.set(e);
-                        }
-                    }
                 }
                 Err(e) => {
-                    debug_log(&format!("model selection: load error {e}"));
-                    set_engine_ready.set(false);
-                    set_status.set(format!("Error: {}", e));
+                    debug_log(&format!("model load error {e}"));
+                    let had_loaded = loaded_choice_id.get_untracked().is_some();
+                    set_engine_ready.set(had_loaded);
+                    set_status.set(if had_loaded {
+                        "ready".into()
+                    } else {
+                        "idle".into()
+                    });
                     set_status_message.set(e);
                 }
             }
@@ -662,7 +602,8 @@ pub fn App() -> impl IntoView {
 
     let on_apply_settings = move |vals: SettingsValues| {
         if active_index.get_untracked().is_some()
-            || matches!(status.get_untracked().as_str(), "generating" | "loading")
+            || status.get_untracked() == "generating"
+            || load_in_progress.get_untracked()
         {
             set_status_message
                 .set("Finish the current operation before changing settings".to_string());
@@ -670,8 +611,7 @@ pub fn App() -> impl IntoView {
         }
 
         set_show_settings.set(false);
-        let requested_model_dir = vals.model_dir.clone();
-        let requested_lora = lora_selection_option(vals.lora_dir.clone());
+        let requested_model_root = vals.model_root.clone();
         let requested_backend = vals.backend.clone();
         let requested_audio_host = vals.audio_host.clone();
         let requested_audio_device = vals.audio_device.clone();
@@ -681,51 +621,39 @@ pub fn App() -> impl IntoView {
         let requested_prompt_text = vals.prompt_text.clone();
         let requested_reference_wav_path = vals.reference_wav_path.clone();
         let requested_language = vals.language.clone();
-        let previous_engine_ready = engine_ready.get_untracked();
-        let need_reload = requested_model_dir != model_dir.get_untracked()
-            || requested_backend != backend.get_untracked();
-        let next_language = if requested_language == "English" {
-            Language::English
-        } else {
-            Language::Chinese
-        };
-
-        if need_reload {
-            debug_log(&format!(
-                "settings reload start model_dir={} backend={}",
-                requested_model_dir, requested_backend
-            ));
-            set_engine_ready.set(false);
-            set_status.set("loading".into());
-            set_status_message.set(String::new());
-        }
+        let model_root_changed = requested_model_root != model_root.get_untracked();
+        let next_language = language_from_config(&requested_language);
 
         spawn_local(async move {
             let restore_after_error = |message: String| {
-                if need_reload {
-                    debug_log(&format!("settings reload error {message}"));
-                } else {
-                    debug_log(&format!("settings apply error {message}"));
-                }
-                if need_reload {
-                    set_engine_ready.set(previous_engine_ready);
-                    if previous_engine_ready {
-                        set_status.set("ready".into());
-                    } else {
-                        set_status.set(format!("Error: {}", message));
-                    }
-                }
+                debug_log(&format!("settings apply error {message}"));
                 set_status_message.set(message);
             };
 
-            let lora_list = match list_loras_for_model(requested_model_dir.clone()).await {
-                Ok(lora_list) => lora_list,
-                Err(e) => {
-                    restore_after_error(e);
-                    return;
-                }
-            };
-            let selected_lora = valid_lora_selection(requested_lora, &lora_list);
+            let mut next_choices = model_choices.get_untracked();
+            let mut next_selected_choice_id = selected_choice_id.get_untracked();
+            if model_root_changed {
+                debug_log(&format!(
+                    "settings model choices list start model_root={requested_model_root}"
+                ));
+                next_choices = match tauri_api::invoke::<_, Vec<ModelChoice>>(
+                    "list_model_choices",
+                    &ListModelChoicesArgs {
+                        model_root: requested_model_root.clone(),
+                    },
+                )
+                .await
+                {
+                    Ok(choices) => choices,
+                    Err(e) => {
+                        restore_after_error(e);
+                        return;
+                    }
+                };
+                next_selected_choice_id = selected_choice(&next_choices, &next_selected_choice_id)
+                    .map(|choice| choice.id)
+                    .unwrap_or_default();
+            }
 
             let audio = match tauri_api::invoke::<_, AudioDeviceList>(
                 "list_audio_devices",
@@ -750,48 +678,13 @@ pub fn App() -> impl IntoView {
             let audio_hosts = audio.hosts;
             let audio_devices = audio.devices;
 
-            let mut final_lora = selected_lora.clone();
-            let mut final_backend = actual_backend.get_untracked();
-            let mut final_status_message = String::new();
-
-            if need_reload {
-                match tauri_api::invoke::<_, ModelInfo>(
-                    "load_model",
-                    &LoadModelArgs {
-                        model_dir: requested_model_dir.clone(),
-                        backend: requested_backend.clone(),
-                    },
-                )
-                .await
-                {
-                    Ok(info) => {
-                        debug_log(&format!(
-                            "settings reload success architecture={} sample_rate={} backend={}",
-                            info.architecture, info.sample_rate, info.backend
-                        ));
-                        final_backend = info.backend;
-                        final_status_message = info.warning.unwrap_or_default();
-                    }
-                    Err(e) => {
-                        restore_after_error(e);
-                        return;
-                    }
-                }
-            } else if let Err(e) = apply_lora_selection(selected_lora).await {
-                restore_after_error(e);
-                return;
-            }
-
-            if need_reload {
-                if let Err(e) = apply_lora_selection(final_lora.clone()).await {
-                    final_lora = None;
-                    final_status_message = e;
-                }
-            }
-
+            let (selected_model_dir, selected_lora_path) =
+                choice_config_fields(next_choices.clone(), next_selected_choice_id.clone());
             let config = serde_json::json!({
-                "model_dir": requested_model_dir.clone(),
-                "lora_dir": final_lora.clone(),
+                "model_root": requested_model_root.clone(),
+                "selected_model_choice_id": next_selected_choice_id.clone(),
+                "model_dir": selected_model_dir,
+                "lora_dir": selected_lora_path,
                 "prompt_wav_path": non_empty_option(requested_prompt_wav_path.clone()),
                 "prompt_text": non_empty_option(requested_prompt_text.clone()),
                 "reference_wav_path": non_empty_option(requested_reference_wav_path.clone()),
@@ -805,19 +698,13 @@ pub fn App() -> impl IntoView {
             let _ = tauri_api::invoke_unit("save_config", &serde_json::json!({ "config": config }))
                 .await;
 
-            let selected_name = models
-                .get_untracked()
-                .into_iter()
-                .find(|entry| entry.path == requested_model_dir)
-                .map(|entry| entry.name)
-                .unwrap_or_else(|| requested_model_dir.clone());
-
-            set_model_dir.set(requested_model_dir);
-            set_model_name.set(selected_name);
-            set_lora_dir.set(final_lora.unwrap_or_else(|| "None".to_string()));
-            set_loras.set(lora_list);
+            if model_root_changed {
+                set_model_choices.set(next_choices.clone());
+                set_selected_choice_id.set(next_selected_choice_id);
+                set_no_model.set(next_choices.is_empty());
+            }
+            set_model_root.set(requested_model_root);
             set_backend.set(requested_backend);
-            set_actual_backend.set(final_backend);
             set_audio_host.set(validated_audio_host);
             set_audio_device.set(validated_audio_device);
             set_hosts.set(audio_hosts);
@@ -828,25 +715,59 @@ pub fn App() -> impl IntoView {
             set_prompt_text.set(requested_prompt_text);
             set_reference_wav_path.set(requested_reference_wav_path);
             set_lang.set(next_language);
-            set_engine_ready.set(true);
-            set_status.set("ready".into());
-            set_status_message.set(final_status_message);
+            set_status_message.set(String::new());
+            if !engine_ready.get_untracked() && status.get_untracked() == "loading" {
+                set_status.set("idle".into());
+            }
         });
     };
 
+    let selected_choice_name = Signal::derive(move || {
+        selected_choice(&model_choices.get(), &selected_choice_id.get())
+            .map(|choice| choice.name)
+            .unwrap_or_default()
+    });
+    let loaded_choice_name = Signal::derive(move || {
+        loaded_choice_id
+            .get()
+            .and_then(|id| {
+                model_choices
+                    .get()
+                    .into_iter()
+                    .find(|choice| choice.id == id)
+            })
+            .map(|choice| choice.name)
+            .unwrap_or_default()
+    });
+    let generating =
+        Signal::derive(move || active_index.get().is_some() || status.get() == "generating");
+    let loading_or_generating = Signal::derive(move || load_in_progress.get() || generating.get());
+
     view! {
         <div class="flex flex-col h-screen">
-            <Header lang=lang on_settings=move |_| {
-                if active_index.get_untracked().is_some()
-                    || matches!(status.get_untracked().as_str(), "generating" | "loading")
-                {
-                    set_status_message.set("Finish the current operation before changing settings".to_string());
-                } else {
-                    set_show_settings.set(true);
+            <Header
+                lang=lang
+                choices=model_choices
+                selected_choice_id=selected_choice_id
+                loaded_choice_id=loaded_choice_id
+                load_in_progress=load_in_progress
+                generating=generating
+                on_choice_selected=on_choice_selected
+                on_load_or_cancel=on_load_or_cancel
+                on_settings=move |_| {
+                    if active_index.get_untracked().is_some()
+                        || status.get_untracked() == "generating"
+                        || load_in_progress.get_untracked()
+                    {
+                        set_status_message.set("Finish the current operation before changing settings".to_string());
+                    } else {
+                        set_show_settings.set(true);
+                    }
                 }
-            } />
+            />
             <History lang=lang entries=history />
             <ProgressBar progress=progress status=status lang=lang />
+            <ModelLoadProgressBar progress=load_progress lang=lang />
             <InputBox lang=lang engine_ready=engine_ready status=status on_submit=on_submit on_cancel=move |_| {
                 spawn_local(async move {
                     let _ = tauri_api::invoke_no_args::<()>("cancel_synthesis").await;
@@ -855,10 +776,9 @@ pub fn App() -> impl IntoView {
             <StatusBar
                 lang=lang
                 status=status
-                load_step=load_step
-                model_name=model_name
+                selected_choice_name=selected_choice_name
+                loaded_choice_name=loaded_choice_name
                 actual_backend=actual_backend
-                lora_dir=lora_dir
                 audio_host=audio_host
                 audio_device=audio_device
                 status_message=status_message
@@ -866,8 +786,7 @@ pub fn App() -> impl IntoView {
             <Show when=move || show_settings.get()>
                 <SettingsModal
                     lang=lang
-                    model_dir=model_dir
-                    lora_dir=lora_dir
+                    model_root=model_root
                     backend=backend
                     audio_host=audio_host
                     audio_device=audio_device
@@ -876,16 +795,17 @@ pub fn App() -> impl IntoView {
                     prompt_wav_path=prompt_wav_path
                     prompt_text=prompt_text
                     reference_wav_path=reference_wav_path
-                    models=models
-                    loras=loras
                     hosts=hosts
                     devices=devices
+                    loading_or_generating=loading_or_generating
                     on_close=move |_| set_show_settings.set(false)
                     on_apply=on_apply_settings
                 />
             </Show>
             <Show when=move || no_model.get()>
-                <ModelSelect lang=lang on_select=on_model_selected />
+                <div class="shrink-0 px-4 py-2 bg-gray-900 border-t border-gray-700 text-xs text-gray-400">
+                    {move || lang.get().t("no_models_found")}
+                </div>
             </Show>
         </div>
     }
