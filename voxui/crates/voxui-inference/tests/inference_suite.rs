@@ -9,7 +9,7 @@ use candle_core::Device;
 use voxui_inference::{SynthesisRequest, VoxCPMEngine};
 
 const TEST_DIT_STEPS: usize = 10;
-const TEST_MAX_LEN: usize = 6;
+const TEST_MIN_GENERATED_PATCHES: usize = 8;
 const TEXT_ZH: &str = "我说什么来着，我不知道你是什么脾气啊，我肯定要邦邦敲一下。";
 const TEXT_EN: &str =
     "This inference matrix sentence exercises q4 language model coverage on every backend.";
@@ -92,6 +92,7 @@ fn output_dir() -> PathBuf {
     repo_root().join("test_output")
 }
 
+#[allow(dead_code)]
 fn first_test_wav() -> Option<PathBuf> {
     std::fs::read_dir(repo_root().join("for_test_wav"))
         .ok()?
@@ -152,6 +153,12 @@ fn run_synthesis(
     );
     let max_abs = samples.iter().map(|s| s.abs()).fold(0.0f32, f32::max);
     assert!(max_abs > 1e-6, "generate produced near-silence for {label}");
+    assert!(
+        last_step.get() >= TEST_MIN_GENERATED_PATCHES,
+        "generate stopped too early for {label}: steps={}/{}",
+        last_step.get(),
+        last_total.get()
+    );
 
     let wav_name = label.replace('/', "_").replace(' ', "_");
     let wav_path = output_dir().join(format!("{wav_name}.wav"));

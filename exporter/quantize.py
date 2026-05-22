@@ -63,26 +63,25 @@ def quantize_q4_0(tensor: np.ndarray) -> bytes:
     n_blocks = len(flat) // BLOCK_SIZE
     blocks = flat.reshape(n_blocks, BLOCK_SIZE)
 
-    # Compute scales
-    amax = np.max(np.abs(blocks), axis=1)  # (n_blocks,)
-    scales = np.where(amax != 0, amax / 8.0, 0.0).astype(np.float16)
-    scales_f32 = scales.astype(np.float32)
+    # GGML Q4_0 uses a signed per-block scale based on the value with the
+    # largest magnitude, then packs positions 0..15 in low nibbles and 16..31
+    # in high nibbles. This matches Candle/llama.cpp BlockQ4_0.
+    max_abs_indices = np.argmax(np.abs(blocks), axis=1)
+    signed_max = blocks[np.arange(n_blocks), max_abs_indices]
+    scales_f32 = signed_max / -8.0
+    scales = scales_f32.astype(np.float16)
 
-    # Quantize
-    safe_scales = np.where(scales_f32 != 0, scales_f32, 1.0)[:, np.newaxis]
-    qi = np.round(blocks / safe_scales).astype(np.int32)
-    qi = np.clip(qi, -8, 7)
+    inv_scales = np.divide(
+        1.0,
+        scales_f32,
+        out=np.zeros_like(scales_f32),
+        where=scales_f32 != 0,
+    )[:, np.newaxis]
+    qu = (blocks * inv_scales + 8.5).astype(np.int32)
+    qu = np.clip(qu, 0, 15).astype(np.uint8)
 
-    # Unsigned offset: qi + 8 maps [-8,7] -> [0,15]
-    qu = (qi + 8).astype(np.uint8)
-
-    # For zero-scale blocks, qu should be 8 (the zero point)
-    zero_mask = (scales_f32 == 0)[:, np.newaxis]
-    qu = np.where(zero_mask, np.uint8(8), qu)
-
-    # Pack pairs of nibbles: low from even indices, high from odd indices
-    lo = qu[:, 0::2] & 0xF   # (n_blocks, 16)
-    hi = qu[:, 1::2] & 0xF   # (n_blocks, 16)
+    lo = qu[:, :16] & 0xF
+    hi = qu[:, 16:] & 0xF
     packed = (lo | (hi << 4)).astype(np.uint8)  # (n_blocks, 16)
 
     # Interleave scale + packed
@@ -118,14 +117,14 @@ def dequantize_q4_0(data: bytes, shape: list[int]) -> np.ndarray:
     scales = raw[:, :2].copy().view(np.float16).astype(np.float32)  # (n_blocks, 1)
     packed = raw[:, 2:]  # (n_blocks, 16)
 
-    # Unpack nibbles
+    # GGML Q4_0 stores positions 0..15 in low nibbles and 16..31 in high
+    # nibbles.
     lo = (packed & 0xF).astype(np.int32) - 8        # (n_blocks, 16)
     hi = ((packed >> 4) & 0xF).astype(np.int32) - 8  # (n_blocks, 16)
 
-    # Interleave: [lo0, hi0, lo1, hi1, ...]
     vals = np.empty((n_blocks, BLOCK_SIZE), dtype=np.float32)
-    vals[:, 0::2] = lo * scales
-    vals[:, 1::2] = hi * scales
+    vals[:, :16] = lo * scales
+    vals[:, 16:] = hi * scales
 
     out = vals.reshape(-1)
     return out[:n_elements].reshape(shape)

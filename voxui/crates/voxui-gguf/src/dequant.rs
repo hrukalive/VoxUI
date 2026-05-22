@@ -15,7 +15,12 @@ fn dequantize_f32(data: &[u8], n_elements: usize) -> anyhow::Result<Vec<f32>> {
     anyhow::ensure!(data.len() >= n_elements * 4, "insufficient data for F32");
     let mut out = Vec::with_capacity(n_elements);
     for i in 0..n_elements {
-        let bytes = [data[i * 4], data[i * 4 + 1], data[i * 4 + 2], data[i * 4 + 3]];
+        let bytes = [
+            data[i * 4],
+            data[i * 4 + 1],
+            data[i * 4 + 2],
+            data[i * 4 + 3],
+        ];
         out.push(f32::from_le_bytes(bytes));
     }
     Ok(out)
@@ -43,8 +48,11 @@ fn dequantize_q4_0(data: &[u8], n_elements: usize) -> anyhow::Result<Vec<f32>> {
         for j in 0..16 {
             let byte = data[offset + j];
             let lo = (byte & 0xF) as i32 - 8;
-            let hi = (byte >> 4) as i32 - 8;
             out.push(lo as f32 * scale);
+        }
+        for j in 0..16 {
+            let byte = data[offset + j];
+            let hi = (byte >> 4) as i32 - 8;
             out.push(hi as f32 * scale);
         }
         offset += 16;
@@ -70,4 +78,25 @@ fn dequantize_q8_0(data: &[u8], n_elements: usize) -> anyhow::Result<Vec<f32>> {
     }
     out.truncate(n_elements);
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn q4_0_dequantizes_low_nibbles_as_first_half_of_block() -> anyhow::Result<()> {
+        let mut data = Vec::new();
+        data.extend_from_slice(&f16::from_f32(1.0).to_le_bytes());
+        data.extend((0u8..16).map(|i| i | (i << 4)));
+
+        let values = dequantize(&data, GgmlType::Q4_0, 32)?;
+        let expected = (-8..8)
+            .chain(-8..8)
+            .map(|value| value as f32)
+            .collect::<Vec<_>>();
+
+        assert_eq!(values, expected);
+        Ok(())
+    }
 }
