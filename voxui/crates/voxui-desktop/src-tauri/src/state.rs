@@ -87,6 +87,19 @@ impl Default for AppConfig {
 }
 
 impl AppConfig {
+    pub fn from_save_value_preserving(current: &Self, value: serde_json::Value) -> Result<Self> {
+        let has_model_root = value.get("model_root").is_some();
+        let has_selected_model_choice_id = value.get("selected_model_choice_id").is_some();
+        let mut next: Self = serde_json::from_value(value)?;
+        if !has_model_root {
+            next.model_root = current.model_root.clone();
+        }
+        if !has_selected_model_choice_id {
+            next.selected_model_choice_id = current.selected_model_choice_id.clone();
+        }
+        Ok(next)
+    }
+
     pub fn config_path() -> PathBuf {
         PathBuf::from("voxui_config.json")
     }
@@ -232,6 +245,61 @@ mod tests {
 
         assert!(!loaded.model_root.trim().is_empty());
         assert_eq!(loaded.selected_model_choice_id, "");
+    }
+
+    #[test]
+    fn save_value_without_new_selection_fields_preserves_existing_values() {
+        let current = AppConfig {
+            model_root: "D:/Models".to_string(),
+            selected_model_choice_id: "voxcpm2-q4-lm::lora_ft2.gguf".to_string(),
+            ..AppConfig::default()
+        };
+        let value = serde_json::json!({
+            "model_dir": "models/legacy",
+            "backend": "CPU"
+        });
+
+        let next = AppConfig::from_save_value_preserving(&current, value).unwrap();
+
+        assert_eq!(next.model_root, "D:/Models");
+        assert_eq!(
+            next.selected_model_choice_id,
+            "voxcpm2-q4-lm::lora_ft2.gguf"
+        );
+        assert_eq!(next.model_dir, "models/legacy");
+        assert_eq!(next.backend, "CPU");
+    }
+
+    #[test]
+    fn save_value_with_new_selection_fields_uses_explicit_values() {
+        let current = AppConfig {
+            model_root: "D:/Models".to_string(),
+            selected_model_choice_id: "voxcpm2-q4-lm::lora_ft2.gguf".to_string(),
+            ..AppConfig::default()
+        };
+        let value = serde_json::json!({
+            "model_root": "D:/OtherModels",
+            "selected_model_choice_id": "",
+            "backend": "CPU"
+        });
+
+        let next = AppConfig::from_save_value_preserving(&current, value).unwrap();
+
+        assert_eq!(next.model_root, "D:/OtherModels");
+        assert_eq!(next.selected_model_choice_id, "");
+        assert_eq!(next.backend, "CPU");
+    }
+
+    #[test]
+    fn default_model_root_uses_program_folder_models_with_normalized_separators() {
+        let exe = std::env::current_exe().unwrap();
+        let expected_path = exe.parent().unwrap().join("models");
+
+        assert_eq!(default_program_models_dir().unwrap(), expected_path);
+        assert_eq!(
+            default_model_root(),
+            expected_path.to_string_lossy().replace('\\', "/")
+        );
     }
 
     #[test]

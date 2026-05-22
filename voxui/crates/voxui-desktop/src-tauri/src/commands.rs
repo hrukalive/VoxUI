@@ -349,12 +349,14 @@ pub fn get_config(state: State<AppState>) -> AppConfig {
 }
 
 #[tauri::command(rename_all = "snake_case")]
-pub fn save_config(state: State<AppState>, config: AppConfig) -> Result<(), String> {
-    config.save().map_err(|e| format!("{e}"))?;
-    *state
+pub fn save_config(state: State<AppState>, config: serde_json::Value) -> Result<(), String> {
+    let mut guard = state
         .config
         .lock()
-        .map_err(|_| "config lock poisoned".to_string())? = config;
+        .map_err(|_| "config lock poisoned".to_string())?;
+    let next = AppConfig::from_save_value_preserving(&guard, config).map_err(|e| format!("{e}"))?;
+    next.save().map_err(|e| format!("{e}"))?;
+    *guard = next;
     Ok(())
 }
 
