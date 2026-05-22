@@ -8,11 +8,13 @@ use tauri::{AppHandle, Emitter, State};
 use voxui_audio::{AudioPlayer, AudioSystem};
 use voxui_inference::VoxCPMEngine;
 
+use tauri_plugin_dialog::DialogExt;
+
 use crate::desktop_core::{
-    discover_models_root, scan_lora_entries, scan_model_entries, LoraEntry, ModelEntry,
-    SynthesisArgs,
+    discover_models_root, scan_lora_entries, scan_model_choices, scan_model_entries, LoraEntry,
+    ModelChoice, ModelEntry, SynthesisArgs,
 };
-use crate::state::{AppConfig, AppState};
+use crate::state::{default_program_models_dir, AppConfig, AppState};
 
 #[derive(Serialize, Clone)]
 pub struct ModelInfo {
@@ -48,6 +50,25 @@ pub struct ApplyLoraArgs {
     pub lora_dir: Option<String>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct LoadModelChoiceArgs {
+    pub choice_id: String,
+    pub model_dir: String,
+    pub model_path: String,
+    pub lora_path: Option<String>,
+    pub backend: String,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub struct LoadProgressPayload {
+    pub phase: String,
+    pub file_label: Option<String>,
+    pub bytes_read: u64,
+    pub total_bytes: u64,
+    pub backend: Option<String>,
+}
+
 #[tauri::command]
 pub fn list_models() -> Vec<ModelEntry> {
     let root = discover_models_root();
@@ -58,6 +79,17 @@ pub fn list_models() -> Vec<ModelEntry> {
         tracing::debug!("list_models entry name={} path={}", entry.name, entry.path);
     }
     entries
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub fn list_model_choices(model_root: String) -> Vec<ModelChoice> {
+    let root = if model_root.trim().is_empty() {
+        default_program_models_dir().unwrap_or_else(|| PathBuf::from("models"))
+    } else {
+        PathBuf::from(model_root)
+    };
+    tracing::debug!("list_model_choices model_root={}", root.display());
+    scan_model_choices(&root)
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -197,6 +229,90 @@ pub async fn load_model(
         .map_err(|_| "engine lock poisoned".to_string())? = Some(engine);
     let _ = app.emit("engine-ready", info.clone());
     drop(_busy);
+    Ok(info)
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn load_model_choice(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    args: LoadModelChoiceArgs,
+) -> Result<ModelInfo, String> {
+    tracing::debug!(
+        "load_model_choice requested choice_id={} model_dir={} lora_path={:?} backend={}",
+        args.choice_id,
+        args.model_dir,
+        args.lora_path,
+        args.backend
+    );
+    let _busy = match state.try_begin_synthesis() {
+        Ok(guard) => guard,
+        Err(_) => return Err(engine_busy_message()),
+    };
+    state.cancel_load.store(false, Ordering::Release);
+    let cancel_token = Arc::clone(&state.cancel_load);
+
+    let started_at = Instant::now();
+    let model_dir = PathBuf::from(&args.model_dir);
+    let model_path = PathBuf::from(&args.model_path);
+    let lora_path = args.lora_path.clone().map(PathBuf::from);
+    let requested_backend = args.backend.clone();
+    let choice_id = args.choice_id.clone();
+    let (device, actual_backend, warning) = select_device(&requested_backend);
+    let actual_backend_for_task = actual_backend.clone();
+    let engine_slot = Arc::clone(&state.engine);
+    let app_for_task = app.clone();
+
+    let engine = match tokio::task::spawn_blocking(move || {
+        read_file_for_progress(&app_for_task, &model_path, "model.gguf", &cancel_token)?;
+        if let Some(path) = lora_path.as_ref() {
+            let label = path
+                .file_name()
+                .and_then(|value| value.to_str())
+                .unwrap_or("LoRA GGUF");
+            read_file_for_progress(&app_for_task, path, label, &cancel_token)?;
+        }
+        emit_device_loading(&app_for_task, &actual_backend_for_task);
+        if cancel_token.load(Ordering::Relaxed) {
+            return Err("model loading cancelled".to_string());
+        }
+
+        let mut engine =
+            VoxCPMEngine::load_with_progress(&model_dir, device, |_, _| {}, Some(&cancel_token))
+                .map_err(|err| format!("{err:#}"))?;
+        if let Some(path) = lora_path.as_ref() {
+            if cancel_token.load(Ordering::Relaxed) {
+                return Err("model loading cancelled".to_string());
+            }
+            engine
+                .load_lora(path)
+                .map_err(|err| format!("LoRA load failed: {err:#}"))?;
+        }
+        Ok::<_, String>(engine)
+    })
+    .await
+    {
+        Ok(Ok(engine)) => engine,
+        Ok(Err(message)) => return Err(format!("model load failed: {message}")),
+        Err(err) => return Err(format!("model load task failed: {err}")),
+    };
+
+    let info = ModelInfo {
+        architecture: engine.architecture().to_string(),
+        sample_rate: engine.sample_rate(),
+        backend: actual_backend,
+        warning,
+    };
+
+    *engine_slot
+        .lock()
+        .map_err(|_| "engine lock poisoned".to_string())? = Some(engine);
+    tracing::debug!(
+        "load_model_choice complete choice_id={} elapsed_seconds={:.3}",
+        choice_id,
+        started_at.elapsed().as_secs_f64()
+    );
+    let _ = app.emit("engine-ready", info.clone());
     Ok(info)
 }
 
@@ -360,6 +476,24 @@ pub fn save_config(state: State<AppState>, config: serde_json::Value) -> Result<
     Ok(())
 }
 
+#[tauri::command]
+pub async fn browse_model_root(app: AppHandle) -> Result<Option<String>, String> {
+    tokio::task::spawn_blocking(move || {
+        app.dialog()
+            .file()
+            .set_title("Select models folder")
+            .blocking_pick_folder()
+            .map(|path| {
+                path.into_path()
+                    .map(|path| path.to_string_lossy().replace('\\', "/"))
+                    .map_err(|err| format!("selected folder is not a filesystem path: {err}"))
+            })
+            .transpose()
+    })
+    .await
+    .map_err(|err| format!("folder browser task failed: {err}"))?
+}
+
 #[tauri::command(rename_all = "snake_case")]
 pub async fn test_audio_device(host: String, device: String) -> Result<(), String> {
     tracing::debug!("test_audio_device requested host={host} device={device}");
@@ -460,6 +594,65 @@ fn emit_synthesis_error(app: &AppHandle, index: u32, message: String) -> Result<
         },
     );
     Err(message)
+}
+
+fn emit_read_progress(app: &AppHandle, file_label: &str, bytes_read: u64, total_bytes: u64) {
+    let _ = app.emit(
+        "load-progress",
+        LoadProgressPayload {
+            phase: "reading".to_string(),
+            file_label: Some(file_label.to_string()),
+            bytes_read,
+            total_bytes,
+            backend: None,
+        },
+    );
+}
+
+fn read_file_for_progress(
+    app: &AppHandle,
+    path: &PathBuf,
+    file_label: &str,
+    cancel: &std::sync::atomic::AtomicBool,
+) -> Result<(), String> {
+    use std::io::Read;
+
+    let mut file = std::fs::File::open(path)
+        .map_err(|err| format!("failed to open {}: {err}", path.display()))?;
+    let total = file
+        .metadata()
+        .map_err(|err| format!("failed to read metadata for {}: {err}", path.display()))?
+        .len();
+    let mut read = 0u64;
+    let mut buffer = vec![0u8; 1024 * 1024];
+    emit_read_progress(app, file_label, 0, total);
+    loop {
+        if cancel.load(Ordering::Relaxed) {
+            return Err("model loading cancelled".to_string());
+        }
+        let count = file
+            .read(&mut buffer)
+            .map_err(|err| format!("failed to read {}: {err}", path.display()))?;
+        if count == 0 {
+            break;
+        }
+        read += count as u64;
+        emit_read_progress(app, file_label, read.min(total), total);
+    }
+    Ok(())
+}
+
+fn emit_device_loading(app: &AppHandle, backend: &str) {
+    let _ = app.emit(
+        "load-progress",
+        LoadProgressPayload {
+            phase: "device_loading".to_string(),
+            file_label: None,
+            bytes_read: 0,
+            total_bytes: 0,
+            backend: Some(backend.to_string()),
+        },
+    );
 }
 
 fn is_busy_message(message: &str) -> bool {

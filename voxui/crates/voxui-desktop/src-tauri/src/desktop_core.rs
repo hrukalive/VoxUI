@@ -31,6 +31,13 @@ pub struct ModelChoice {
     pub lora_size_bytes: Option<u64>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ActivityState {
+    Idle,
+    Loading,
+    Generating,
+}
+
 impl LoraEntry {
     pub fn none() -> Self {
         Self {
@@ -61,6 +68,20 @@ impl SynthesisArgs {
             ..SynthesisRequest::default()
         }
     }
+}
+
+pub fn load_button_enabled(
+    selected_choice_id: Option<&str>,
+    loaded_choice_id: Option<&str>,
+    activity: ActivityState,
+) -> bool {
+    if activity != ActivityState::Idle {
+        return false;
+    }
+    let Some(selected) = selected_choice_id.filter(|value| !value.trim().is_empty()) else {
+        return false;
+    };
+    Some(selected) != loaded_choice_id
 }
 
 pub fn scan_model_entries(models_root: &Path) -> Vec<ModelEntry> {
@@ -204,7 +225,9 @@ pub fn display_path(path: &Path) -> String {
 }
 
 fn file_size(path: &Path) -> u64 {
-    fs::metadata(path).map(|metadata| metadata.len()).unwrap_or(0)
+    fs::metadata(path)
+        .map(|metadata| metadata.len())
+        .unwrap_or(0)
 }
 
 fn optional_string(value: Option<String>) -> Option<String> {
@@ -291,7 +314,11 @@ mod tests {
             ]
         );
         assert!(choices[0].lora_path.is_none());
-        assert!(choices[2].lora_path.as_ref().unwrap().ends_with("lora_alpha.gguf"));
+        assert!(choices[2]
+            .lora_path
+            .as_ref()
+            .unwrap()
+            .ends_with("lora_alpha.gguf"));
     }
 
     #[test]
@@ -306,6 +333,40 @@ mod tests {
         assert!(choices
             .iter()
             .any(|choice| choice.id == "voxcpm2-q4-lm::lora_ft2.gguf"));
+    }
+
+    #[test]
+    fn load_button_state_requires_selected_different_idle_choice() {
+        assert!(super::load_button_enabled(
+            Some("model-a"),
+            None,
+            super::ActivityState::Idle
+        ));
+        assert!(super::load_button_enabled(
+            Some("model-b"),
+            Some("model-a"),
+            super::ActivityState::Idle
+        ));
+        assert!(!super::load_button_enabled(
+            Some("model-a"),
+            Some("model-a"),
+            super::ActivityState::Idle
+        ));
+        assert!(!super::load_button_enabled(
+            None,
+            None,
+            super::ActivityState::Idle
+        ));
+        assert!(!super::load_button_enabled(
+            Some("model-a"),
+            None,
+            super::ActivityState::Loading
+        ));
+        assert!(!super::load_button_enabled(
+            Some("model-a"),
+            None,
+            super::ActivityState::Generating
+        ));
     }
 
     #[test]
