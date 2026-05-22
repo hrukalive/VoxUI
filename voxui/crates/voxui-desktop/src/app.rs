@@ -223,6 +223,7 @@ pub fn App() -> impl IntoView {
     let (model_root, set_model_root) = signal(String::new());
     let (selected_choice_id, set_selected_choice_id) = signal(String::new());
     let (loaded_choice_id, set_loaded_choice_id) = signal(None::<String>);
+    let (loaded_choice_name, set_loaded_choice_name) = signal(String::new());
     let (model_choices, set_model_choices) = signal(Vec::<ModelChoice>::new());
     let (load_progress, set_load_progress) = signal(LoadProgress::Hidden);
     let (load_in_progress, set_load_in_progress) = signal(false);
@@ -524,9 +525,44 @@ pub fn App() -> impl IntoView {
     };
 
     let on_choice_selected = move |choice_id: String| {
-        set_selected_choice_id.set(choice_id);
+        let next_selected_choice_id = choice_id;
+        set_selected_choice_id.set(next_selected_choice_id.clone());
         set_no_model.set(model_choices.get_untracked().is_empty());
         set_status_message.set(String::new());
+
+        let next_choices = model_choices.get_untracked();
+        let (selected_model_dir, selected_lora_path) = choice_config_fields(
+            next_choices.clone(),
+            next_selected_choice_id.clone(),
+        );
+        let config = serde_json::json!({
+            "model_root": model_root.get_untracked(),
+            "selected_model_choice_id": next_selected_choice_id,
+            "model_dir": selected_model_dir,
+            "lora_dir": selected_lora_path,
+            "prompt_wav_path": non_empty_option(prompt_wav_path.get_untracked()),
+            "prompt_text": non_empty_option(prompt_text.get_untracked()),
+            "reference_wav_path": non_empty_option(reference_wav_path.get_untracked()),
+            "backend": backend.get_untracked(),
+            "audio_host": audio_host.get_untracked(),
+            "audio_device": audio_device.get_untracked(),
+            "max_chars": max_chars.get_untracked(),
+            "dit_steps": dit_steps.get_untracked(),
+            "language": match lang.get_untracked() {
+                Language::English => "English",
+                Language::Chinese => "Chinese",
+            },
+        });
+
+        spawn_local(async move {
+            if let Err(e) =
+                tauri_api::invoke_unit("save_config", &serde_json::json!({ "config": config }))
+                    .await
+            {
+                debug_log(&format!("dropdown selection save error {e}"));
+                set_status_message.set(e);
+            }
+        });
     };
 
     let on_load_or_cancel = move |_| {
@@ -581,6 +617,7 @@ pub fn App() -> impl IntoView {
                     ));
                     set_engine_ready.set(true);
                     set_loaded_choice_id.set(Some(choice.id.clone()));
+                    set_loaded_choice_name.set(choice.name.clone());
                     set_actual_backend.set(info.backend.clone());
                     set_status.set("ready".into());
                     set_status_message.set(info.warning.unwrap_or_default());
@@ -727,18 +764,6 @@ pub fn App() -> impl IntoView {
             .map(|choice| choice.name)
             .unwrap_or_default()
     });
-    let loaded_choice_name = Signal::derive(move || {
-        loaded_choice_id
-            .get()
-            .and_then(|id| {
-                model_choices
-                    .get()
-                    .into_iter()
-                    .find(|choice| choice.id == id)
-            })
-            .map(|choice| choice.name)
-            .unwrap_or_default()
-    });
     let generating =
         Signal::derive(move || active_index.get().is_some() || status.get() == "generating");
     let loading_or_generating = Signal::derive(move || load_in_progress.get() || generating.get());
@@ -777,7 +802,7 @@ pub fn App() -> impl IntoView {
                 lang=lang
                 status=status
                 selected_choice_name=selected_choice_name
-                loaded_choice_name=loaded_choice_name
+                loaded_choice_name=loaded_choice_name.into()
                 actual_backend=actual_backend
                 audio_host=audio_host
                 audio_device=audio_device
