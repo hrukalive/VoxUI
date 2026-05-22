@@ -447,22 +447,25 @@ def main() -> None:
 
     from voxcpm import VoxCPM
 
-    model_dir = resolve_python_model_dir(args.repo_root, args.model_dir, args.variant)
-
-    model = VoxCPM(
-        voxcpm_model_path=str(model_dir),
-        zipenhancer_model_path=None,
-        enable_denoiser=False,
-        optimize=False,
-        device="cpu",
-    )
-    force_runtime_dtype(model, args.runtime_dtype)
-
     if args.trace_kind == "stop":
         if args.variant not in {"0.5", "1.5"}:
             raise ValueError("stop traces only support VoxCPM variants 0.5 and 1.5")
+        if args.stop_max_len <= 0:
+            parser.error("--stop-max-len must be > 0 for stop traces")
+        if args.stop_min_len >= args.stop_max_len:
+            parser.error("--stop-min-len must be < --stop-max-len for stop traces")
         if args.prompt_wav_path or args.prompt_text or args.reference_wav_path:
             raise ValueError("stop traces currently support zero-shot generation only")
+
+        model_dir = resolve_python_model_dir(args.repo_root, args.model_dir, args.variant)
+        model = VoxCPM(
+            voxcpm_model_path=str(model_dir),
+            zipenhancer_model_path=None,
+            enable_denoiser=False,
+            optimize=False,
+            device="cpu",
+        )
+        force_runtime_dtype(model, args.runtime_dtype)
 
         trace = run_v1_stop_trace(
             model.tts_model,
@@ -511,6 +514,15 @@ def main() -> None:
         )
         return
 
+    model = VoxCPM(
+        voxcpm_model_path=str(args.model_dir),
+        zipenhancer_model_path=None,
+        enable_denoiser=False,
+        optimize=False,
+        device="cpu",
+    )
+    force_runtime_dtype(model, args.runtime_dtype)
+
     capture = TraceCapture(model)
     capture.install()
 
@@ -549,7 +561,7 @@ def main() -> None:
         tensors=tensors,
         metadata={
             "seed": args.seed,
-            "source_model_dir": str(model_dir.resolve()),
+            "source_model_dir": str(args.model_dir.resolve()),
             "runtime_dtype": args.runtime_dtype,
         },
     )
