@@ -65,7 +65,11 @@ pub fn SettingsModal(
                                 on:click=move |_| {
                                     spawn_local(async move {
                                         match tauri_api::invoke_no_args::<Option<String>>("browse_model_root").await {
-                                            Ok(Some(path)) => set_sel_model_root.set(path),
+                                            Ok(Some(path)) => {
+                                                if !loading_or_generating.get_untracked() {
+                                                    set_sel_model_root.set(path);
+                                                }
+                                            }
                                             Ok(None) => {}
                                             Err(e) => {
                                                 web_sys::console::error_1(&format!("Browse error: {e}").into());
