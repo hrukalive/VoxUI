@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Instant;
@@ -254,8 +254,7 @@ pub async fn load_model_choice(
 
     let started_at = Instant::now();
     let model_dir = PathBuf::from(&args.model_dir);
-    let model_path = PathBuf::from(&args.model_path);
-    let lora_path = args.lora_path.clone().map(PathBuf::from);
+    let (model_path, lora_path) = load_paths_from_args(&args)?;
     let requested_backend = args.backend.clone();
     let choice_id = args.choice_id.clone();
     let (device, actual_backend, warning) = select_device(&requested_backend);
@@ -287,6 +286,9 @@ pub async fn load_model_choice(
             engine
                 .load_lora(path)
                 .map_err(|err| format!("LoRA load failed: {err:#}"))?;
+            if cancel_token.load(Ordering::Relaxed) {
+                return Err("model loading cancelled".to_string());
+            }
         }
         Ok::<_, String>(engine)
     })
@@ -609,6 +611,80 @@ fn emit_read_progress(app: &AppHandle, file_label: &str, bytes_read: u64, total_
     );
 }
 
+fn canonical_model_path(model_dir: &Path) -> PathBuf {
+    model_dir.join("model.gguf")
+}
+
+fn load_paths_from_args(args: &LoadModelChoiceArgs) -> Result<(PathBuf, Option<PathBuf>), String> {
+    let model_dir = PathBuf::from(&args.model_dir);
+    let _ignored_payload_model_path = &args.model_path;
+    let model_path = canonical_model_path(&model_dir);
+    let lora_path = validate_lora_path_for_model(&model_dir, args.lora_path.as_deref())?;
+    Ok((model_path, lora_path))
+}
+
+fn validate_lora_path_for_model(
+    model_dir: &Path,
+    lora_path: Option<&str>,
+) -> Result<Option<PathBuf>, String> {
+    let Some(lora_path) = lora_path.filter(|value| !value.trim().is_empty()) else {
+        return Ok(None);
+    };
+
+    let model_dir = model_dir.canonicalize().map_err(|err| {
+        format!(
+            "failed to canonicalize model dir {}: {err}",
+            model_dir.display()
+        )
+    })?;
+    let lora_path = PathBuf::from(lora_path.trim());
+    let canonical_lora_path = lora_path.canonicalize().map_err(|err| {
+        format!(
+            "failed to canonicalize LoRA path {}: {err}",
+            lora_path.display()
+        )
+    })?;
+    let parent = canonical_lora_path.parent().ok_or_else(|| {
+        format!(
+            "LoRA path has no parent directory: {}",
+            canonical_lora_path.display()
+        )
+    })?;
+    if parent != model_dir {
+        return Err(format!(
+            "LoRA file must be a direct file under model dir {}",
+            model_dir.display()
+        ));
+    }
+    if !canonical_lora_path.is_file() {
+        return Err(format!(
+            "LoRA path must be a file: {}",
+            canonical_lora_path.display()
+        ));
+    }
+    let file_name = canonical_lora_path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| {
+            format!(
+                "LoRA path has invalid filename: {}",
+                canonical_lora_path.display()
+            )
+        })?;
+    if !file_name.starts_with("lora_") {
+        return Err(format!("LoRA filename must start with lora_: {file_name}"));
+    }
+    if canonical_lora_path
+        .extension()
+        .and_then(|value| value.to_str())
+        != Some("gguf")
+    {
+        return Err(format!("LoRA file must have .gguf extension: {file_name}"));
+    }
+
+    Ok(Some(canonical_lora_path))
+}
+
 fn read_file_for_progress(
     app: &AppHandle,
     path: &PathBuf,
@@ -693,12 +769,82 @@ fn select_cuda_device() -> (candle_core::Device, String, Option<String>) {
 
 #[cfg(test)]
 mod tests {
-    use super::{engine_busy_message, is_busy_message};
+    use super::{
+        canonical_model_path, engine_busy_message, is_busy_message, load_paths_from_args,
+        validate_lora_path_for_model, LoadModelChoiceArgs,
+    };
+    use std::fs;
+    use tempfile::tempdir;
 
     #[test]
     fn classifies_busy_messages() {
         assert!(is_busy_message(&engine_busy_message()));
         assert!(is_busy_message("Synthesis already in progress"));
         assert!(!is_busy_message("generation failed: missing tensor"));
+    }
+
+    #[test]
+    fn validates_lora_path_is_direct_lora_gguf_under_model_dir() {
+        let tmp = tempdir().unwrap();
+        let model_dir = tmp.path().join("model-a");
+        fs::create_dir_all(&model_dir).unwrap();
+        let lora_path = model_dir.join("lora_ft2.gguf");
+        fs::write(&lora_path, b"placeholder").unwrap();
+
+        assert_eq!(
+            validate_lora_path_for_model(&model_dir, None).unwrap(),
+            None
+        );
+        assert_eq!(
+            validate_lora_path_for_model(&model_dir, Some(lora_path.to_str().unwrap())).unwrap(),
+            Some(lora_path.canonicalize().unwrap())
+        );
+    }
+
+    #[test]
+    fn rejects_lora_paths_outside_model_dir_or_wrong_shape() {
+        let tmp = tempdir().unwrap();
+        let model_dir = tmp.path().join("model-a");
+        let sibling = tmp.path().join("sibling");
+        let subdir = model_dir.join("subdir");
+        fs::create_dir_all(&subdir).unwrap();
+        fs::create_dir_all(&sibling).unwrap();
+        let not_lora = model_dir.join("not_lora.gguf");
+        let wrong_extension = model_dir.join("lora_ft2.bin");
+        let nested = subdir.join("lora_ft2.gguf");
+        let outside = sibling.join("lora_ft2.gguf");
+        for path in [&not_lora, &wrong_extension, &nested, &outside] {
+            fs::write(path, b"placeholder").unwrap();
+        }
+
+        for rejected in [&not_lora, &wrong_extension, &nested, &outside] {
+            assert!(
+                validate_lora_path_for_model(&model_dir, Some(rejected.to_str().unwrap())).is_err(),
+                "expected {} to be rejected",
+                rejected.display()
+            );
+        }
+    }
+
+    #[test]
+    fn load_paths_are_derived_from_model_dir_not_payload_model_path() {
+        let tmp = tempdir().unwrap();
+        let model_dir = tmp.path().join("model-a");
+        fs::create_dir_all(&model_dir).unwrap();
+        fs::write(model_dir.join("model.gguf"), b"placeholder").unwrap();
+        let payload_model_path = tmp.path().join("sibling").join("model.gguf");
+        let args = LoadModelChoiceArgs {
+            choice_id: "model-a".to_string(),
+            model_dir: model_dir.to_string_lossy().into_owned(),
+            model_path: payload_model_path.to_string_lossy().into_owned(),
+            lora_path: None,
+            backend: "CPU".to_string(),
+        };
+
+        let (model_path, lora_path) = load_paths_from_args(&args).unwrap();
+
+        assert_eq!(model_path, canonical_model_path(&model_dir));
+        assert_ne!(model_path, payload_model_path);
+        assert_eq!(lora_path, None);
     }
 }
