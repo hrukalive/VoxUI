@@ -452,6 +452,8 @@ def main() -> None:
             raise ValueError("stop traces only support VoxCPM variants 0.5 and 1.5")
         if args.stop_max_len <= 0:
             parser.error("--stop-max-len must be > 0 for stop traces")
+        if args.stop_min_len < 0:
+            parser.error("--stop-min-len must be >= 0 for stop traces")
         if args.stop_min_len >= args.stop_max_len:
             parser.error("--stop-min-len must be < --stop-max-len for stop traces")
         if args.prompt_wav_path or args.prompt_text or args.reference_wav_path:
