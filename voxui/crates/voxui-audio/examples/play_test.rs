@@ -23,7 +23,7 @@ fn main() {
         })
         .collect();
 
-    let player = AudioPlayer::new(&host, &device, sample_rate).unwrap();
+    let mut player = AudioPlayer::new(&host, &device, sample_rate).unwrap();
     println!("\nPlaying 440Hz sine on {} / {}", host, device);
     player.play_blocking(samples).unwrap();
     println!("Done!");

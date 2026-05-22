@@ -5,10 +5,10 @@ use leptos::prelude::*;
 pub fn StatusBar(
     lang: ReadSignal<Language>,
     status: ReadSignal<String>,
-    load_step: ReadSignal<String>,
-    model_name: ReadSignal<String>,
+    selected_choice_name: Signal<String>,
+    loaded_choice_name: Signal<String>,
+    selected_matches_loaded: Signal<bool>,
     actual_backend: ReadSignal<String>,
-    lora_dir: ReadSignal<String>,
     audio_host: ReadSignal<String>,
     audio_device: ReadSignal<String>,
     status_message: ReadSignal<String>,
@@ -16,14 +16,8 @@ pub fn StatusBar(
     let status_text = move || {
         let l = lang.get();
         let status = match status.get().as_str() {
-            "loading" => {
-                let step = load_step.get();
-                if step.is_empty() {
-                    l.t("loading").to_string()
-                } else {
-                    format!("{} {}", l.t("loading"), step)
-                }
-            }
+            "loading" => l.t("loading").to_string(),
+            "idle" => l.t("idle").to_string(),
             "ready" => l.t("ready").to_string(),
             "generating" => l.t("generating").to_string(),
             other => other.to_string(),
@@ -37,38 +31,32 @@ pub fn StatusBar(
     };
 
     let right_text = move || {
-        let model = model_name.get();
-        if model.is_empty() {
-            return String::new();
-        }
-
+        let selected = selected_choice_name.get();
+        let loaded = loaded_choice_name.get();
+        let selected_matches_loaded = selected_matches_loaded.get();
         let backend = actual_backend.get();
         let host = audio_host.get();
         let device = audio_device.get();
-        let lora = lora_dir.get();
-        let lora_label = if lora.trim().is_empty() || lora == "None" {
-            "LoRA: None".to_string()
-        } else {
-            let normalized = lora.replace('\\', "/");
-            let basename = normalized.rsplit('/').next().unwrap_or(lora.as_str());
-            format!("LoRA: {}", basename)
-        };
-
-        let audio = if host.is_empty() && device.is_empty() {
-            String::new()
-        } else if host.is_empty() {
-            device
-        } else if device.is_empty() {
-            host
-        } else {
-            format!("{}/{}", host, device)
-        };
-
-        [model, backend, audio, lora_label]
-            .into_iter()
-            .filter(|part| !part.is_empty())
-            .collect::<Vec<_>>()
-            .join(" | ")
+        let mut parts = Vec::new();
+        if !loaded.is_empty() {
+            parts.push(format!("{}: {}", lang.get().t("loaded"), loaded));
+        }
+        if !selected.is_empty() && !selected_matches_loaded {
+            parts.push(format!("{}: {}", lang.get().t("selected"), selected));
+        }
+        if !backend.is_empty() {
+            parts.push(backend);
+        }
+        if !host.is_empty() || !device.is_empty() {
+            parts.push(if host.is_empty() {
+                device
+            } else if device.is_empty() {
+                host
+            } else {
+                format!("{host}/{device}")
+            });
+        }
+        parts.join(" | ")
     };
 
     view! {

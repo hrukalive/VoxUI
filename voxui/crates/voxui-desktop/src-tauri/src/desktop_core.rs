@@ -20,6 +20,24 @@ pub struct LoraEntry {
     pub path: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ModelChoice {
+    pub id: String,
+    pub name: String,
+    pub model_dir: String,
+    pub model_path: String,
+    pub model_size_bytes: u64,
+    pub lora_path: Option<String>,
+    pub lora_size_bytes: Option<u64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ActivityState {
+    Idle,
+    Loading,
+    Generating,
+}
+
 impl LoraEntry {
     pub fn none() -> Self {
         Self {
@@ -52,6 +70,20 @@ impl SynthesisArgs {
     }
 }
 
+pub fn load_button_enabled(
+    selected_choice_id: Option<&str>,
+    loaded_choice_id: Option<&str>,
+    activity: ActivityState,
+) -> bool {
+    if activity != ActivityState::Idle {
+        return false;
+    }
+    let Some(selected) = selected_choice_id.filter(|value| !value.trim().is_empty()) else {
+        return false;
+    };
+    Some(selected) != loaded_choice_id
+}
+
 pub fn scan_model_entries(models_root: &Path) -> Vec<ModelEntry> {
     let mut entries = fs::read_dir(models_root)
         .into_iter()
@@ -71,6 +103,75 @@ pub fn scan_model_entries(models_root: &Path) -> Vec<ModelEntry> {
 
     entries.sort_by(|left, right| left.name.cmp(&right.name));
     entries
+}
+
+pub fn scan_model_choices(models_root: &Path) -> Vec<ModelChoice> {
+    let mut choices = Vec::new();
+    let mut model_dirs = fs::read_dir(models_root)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|entry| {
+            let path = entry.path();
+            if !path.is_dir() {
+                return None;
+            }
+            let model_path = path.join("model.gguf");
+            if !model_path.is_file() {
+                return None;
+            }
+            let name = entry.file_name().to_string_lossy().into_owned();
+            Some((name, path, model_path))
+        })
+        .collect::<Vec<_>>();
+
+    model_dirs.sort_by(|left, right| left.0.cmp(&right.0));
+
+    for (model_name, model_dir, model_path) in model_dirs {
+        let model_size_bytes = file_size(&model_path);
+        choices.push(ModelChoice {
+            id: model_name.clone(),
+            name: model_name.clone(),
+            model_dir: display_path(&model_dir),
+            model_path: display_path(&model_path),
+            model_size_bytes,
+            lora_path: None,
+            lora_size_bytes: None,
+        });
+
+        let mut loras = fs::read_dir(&model_dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter_map(|entry| {
+                let path = entry.path();
+                let file_name = entry.file_name().to_string_lossy().into_owned();
+                let is_lora_file = path.is_file()
+                    && path.extension().and_then(|value| value.to_str()) == Some("gguf")
+                    && file_name.starts_with("lora_");
+                if !is_lora_file {
+                    return None;
+                }
+                let stem = path.file_stem()?.to_string_lossy().into_owned();
+                Some((file_name, stem, path))
+            })
+            .collect::<Vec<_>>();
+        loras.sort_by(|left, right| left.0.cmp(&right.0));
+
+        for (file_name, lora_name, lora_path) in loras {
+            choices.push(ModelChoice {
+                id: format!("{model_name}::{file_name}"),
+                name: format!("{model_name} | {lora_name}"),
+                model_dir: display_path(&model_dir),
+                model_path: display_path(&model_path),
+                model_size_bytes,
+                lora_path: Some(display_path(&lora_path)),
+                lora_size_bytes: Some(file_size(&lora_path)),
+            });
+        }
+    }
+
+    choices
 }
 
 pub fn scan_lora_entries(model_dir: &Path) -> Vec<LoraEntry> {
@@ -121,6 +222,12 @@ pub fn discover_models_root() -> PathBuf {
 
 pub fn display_path(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
+}
+
+fn file_size(path: &Path) -> u64 {
+    fs::metadata(path)
+        .map(|metadata| metadata.len())
+        .unwrap_or(0)
 }
 
 fn optional_string(value: Option<String>) -> Option<String> {
@@ -207,7 +314,11 @@ mod tests {
             ]
         );
         assert!(choices[0].lora_path.is_none());
-        assert!(choices[2].lora_path.as_ref().unwrap().ends_with("lora_alpha.gguf"));
+        assert!(choices[2]
+            .lora_path
+            .as_ref()
+            .unwrap()
+            .ends_with("lora_alpha.gguf"));
     }
 
     #[test]
@@ -222,6 +333,40 @@ mod tests {
         assert!(choices
             .iter()
             .any(|choice| choice.id == "voxcpm2-q4-lm::lora_ft2.gguf"));
+    }
+
+    #[test]
+    fn load_button_state_requires_selected_different_idle_choice() {
+        assert!(super::load_button_enabled(
+            Some("model-a"),
+            None,
+            super::ActivityState::Idle
+        ));
+        assert!(super::load_button_enabled(
+            Some("model-b"),
+            Some("model-a"),
+            super::ActivityState::Idle
+        ));
+        assert!(!super::load_button_enabled(
+            Some("model-a"),
+            Some("model-a"),
+            super::ActivityState::Idle
+        ));
+        assert!(!super::load_button_enabled(
+            None,
+            None,
+            super::ActivityState::Idle
+        ));
+        assert!(!super::load_button_enabled(
+            Some("model-a"),
+            None,
+            super::ActivityState::Loading
+        ));
+        assert!(!super::load_button_enabled(
+            Some("model-a"),
+            None,
+            super::ActivityState::Generating
+        ));
     }
 
     #[test]

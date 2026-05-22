@@ -1,4 +1,3 @@
-use crate::app::{LoraEntry, ModelEntry};
 use crate::i18n::Language;
 use crate::tauri_api;
 use leptos::prelude::*;
@@ -7,9 +6,7 @@ use wasm_bindgen_futures::spawn_local;
 #[component]
 pub fn SettingsModal(
     lang: ReadSignal<Language>,
-    /// Current values
-    model_dir: ReadSignal<String>,
-    lora_dir: ReadSignal<String>,
+    model_root: ReadSignal<String>,
     backend: ReadSignal<String>,
     audio_host: ReadSignal<String>,
     audio_device: ReadSignal<String>,
@@ -18,17 +15,14 @@ pub fn SettingsModal(
     prompt_wav_path: ReadSignal<String>,
     prompt_text: ReadSignal<String>,
     reference_wav_path: ReadSignal<String>,
-    /// Available options
-    models: ReadSignal<Vec<ModelEntry>>,
-    loras: ReadSignal<Vec<LoraEntry>>,
     hosts: ReadSignal<Vec<String>>,
     devices: ReadSignal<Vec<String>>,
-    /// Callbacks
+    loading_or_generating: Signal<bool>,
+    settings_apply_in_progress: ReadSignal<bool>,
     on_close: impl Fn(()) + 'static + Clone,
     on_apply: impl Fn(SettingsValues) + 'static,
 ) -> impl IntoView {
-    let (sel_model, set_sel_model) = signal(model_dir.get_untracked());
-    let (sel_lora, set_sel_lora) = signal(lora_dir.get_untracked());
+    let (sel_model_root, set_sel_model_root) = signal(model_root.get_untracked());
     let (sel_backend, set_sel_backend) = signal(backend.get_untracked());
     let (sel_host, set_sel_host) = signal(audio_host.get_untracked());
     let (sel_device, set_sel_device) = signal(audio_device.get_untracked());
@@ -53,48 +47,46 @@ pub fn SettingsModal(
                     <button class="text-gray-400 hover:text-white" on:click={
                         let on_close = on_close.clone();
                         move |_| on_close(())
-                    }>"✕"</button>
+                    } disabled=move || loading_or_generating.get()>"x"</button>
                 </div>
                 <div class="p-4 space-y-4">
-                    // Model directory
-                    <SettingsField label=move || lang.get().t("model")>
-                        <select
-                            class="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1 text-sm"
-                            on:change=move |ev| set_sel_model.set(event_target_value(&ev))
-                        >
-                            <For
-                                each=move || models.get()
-                                key=|model| model.path.clone()
-                                children=move |model| {
-                                    let selected = model.path == sel_model.get();
-                                    view! { <option value={model.path.clone()} selected=selected>{model.name}</option> }
-                                }
+                    <SettingsField label=move || lang.get().t("models_folder")>
+                        <div class="flex gap-2">
+                            <input
+                                type="text"
+                                class="flex-1 min-w-0 bg-gray-900 border border-gray-600 rounded px-2 py-1 text-sm"
+                                prop:value=move || sel_model_root.get()
+                                disabled=move || loading_or_generating.get()
+                                on:input=move |ev| set_sel_model_root.set(event_target_value(&ev))
                             />
-                        </select>
+                            <button
+                                class="px-3 py-1 rounded bg-gray-600 hover:bg-gray-500 text-sm whitespace-nowrap disabled:opacity-50"
+                                disabled=move || loading_or_generating.get()
+                                on:click=move |_| {
+                                    spawn_local(async move {
+                                        match tauri_api::invoke_no_args::<Option<String>>("browse_model_root").await {
+                                            Ok(Some(path)) => {
+                                                if !loading_or_generating.get_untracked() {
+                                                    set_sel_model_root.set(path);
+                                                }
+                                            }
+                                            Ok(None) => {}
+                                            Err(e) => {
+                                                web_sys::console::error_1(&format!("Browse error: {e}").into());
+                                            }
+                                        }
+                                    });
+                                }
+                            >
+                                {move || lang.get().t("browse")}
+                            </button>
+                        </div>
                     </SettingsField>
 
-                    // LoRA
-                    <SettingsField label=move || lang.get().t("lora")>
-                        <select
-                            class="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1 text-sm"
-                            on:change=move |ev| set_sel_lora.set(event_target_value(&ev))
-                        >
-                            <For
-                                each=move || loras.get()
-                                key=|lora| lora.path.clone().unwrap_or_else(|| "None".to_string())
-                                children=move |lora| {
-                                    let value = lora.path.clone().unwrap_or_default();
-                                    let selected = value == sel_lora.get() || (value.is_empty() && sel_lora.get() == "None");
-                                    view! { <option value={value} selected=selected>{lora.name}</option> }
-                                }
-                            />
-                        </select>
-                    </SettingsField>
-
-                    // Backend
                     <SettingsField label=move || lang.get().t("backend")>
                         <select
                             class="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1 text-sm"
+                            disabled=move || loading_or_generating.get()
                             on:change=move |ev| set_sel_backend.set(event_target_value(&ev))
                         >
                             <option value="CPU" selected=move || sel_backend.get() == "CPU">"CPU"</option>
@@ -102,10 +94,10 @@ pub fn SettingsModal(
                         </select>
                     </SettingsField>
 
-                    // Audio host
                     <SettingsField label=move || lang.get().t("audio_host")>
                         <select
                             class="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1 text-sm"
+                            disabled=move || loading_or_generating.get()
                             on:change=move |ev| set_sel_host.set(event_target_value(&ev))
                         >
                             <For
@@ -120,11 +112,11 @@ pub fn SettingsModal(
                         </select>
                     </SettingsField>
 
-                    // Audio device
                     <SettingsField label=move || lang.get().t("audio_device")>
                         <div class="flex gap-2">
                             <select
                                 class="flex-1 bg-gray-900 border border-gray-600 rounded px-2 py-1 text-sm"
+                                disabled=move || loading_or_generating.get()
                                 on:change=move |ev| set_sel_device.set(event_target_value(&ev))
                             >
                                 <For
@@ -139,7 +131,7 @@ pub fn SettingsModal(
                             </select>
                             <button
                                 class="px-3 py-1 rounded bg-gray-600 hover:bg-gray-500 text-sm whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed"
-                                disabled=move || testing_audio.get()
+                                disabled=move || testing_audio.get() || loading_or_generating.get()
                                 on:click=move |_| {
                                     let host = sel_host.get();
                                     let device = sel_device.get();
@@ -159,12 +151,12 @@ pub fn SettingsModal(
                         </div>
                     </SettingsField>
 
-                    // Max chars
                     <SettingsField label=move || lang.get().t("max_chars")>
                         <input
                             type="number"
                             class="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1 text-sm"
                             prop:value=move || sel_max_chars.get().to_string()
+                            disabled=move || loading_or_generating.get()
                             on:input=move |ev| {
                                 if let Ok(v) = event_target_value(&ev).parse::<usize>() {
                                     set_sel_max_chars.set(v);
@@ -173,12 +165,12 @@ pub fn SettingsModal(
                         />
                     </SettingsField>
 
-                    // DIT steps
                     <SettingsField label=move || lang.get().t("dit_steps")>
                         <input
                             type="number"
                             class="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1 text-sm"
                             prop:value=move || sel_dit_steps.get().to_string()
+                            disabled=move || loading_or_generating.get()
                             on:input=move |ev| {
                                 if let Ok(v) = event_target_value(&ev).parse::<usize>() {
                                     set_sel_dit_steps.set(v);
@@ -187,39 +179,39 @@ pub fn SettingsModal(
                         />
                     </SettingsField>
 
-                    // Prompt WAV path
                     <SettingsField label=move || lang.get().t("prompt_wav")>
                         <input
                             type="text"
                             class="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1 text-sm"
                             prop:value=move || sel_prompt_wav.get()
+                            disabled=move || loading_or_generating.get()
                             on:input=move |ev| set_sel_prompt_wav.set(event_target_value(&ev))
                         />
                     </SettingsField>
 
-                    // Prompt text
                     <SettingsField label=move || lang.get().t("prompt_text")>
                         <textarea
                             class="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1 text-sm min-h-16 resize-y"
                             prop:value=move || sel_prompt_text.get()
+                            disabled=move || loading_or_generating.get()
                             on:input=move |ev| set_sel_prompt_text.set(event_target_value(&ev))
                         />
                     </SettingsField>
 
-                    // Reference WAV path
                     <SettingsField label=move || lang.get().t("reference_wav")>
                         <input
                             type="text"
                             class="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1 text-sm"
                             prop:value=move || sel_reference_wav.get()
+                            disabled=move || loading_or_generating.get()
                             on:input=move |ev| set_sel_reference_wav.set(event_target_value(&ev))
                         />
                     </SettingsField>
 
-                    // Language
                     <SettingsField label=move || lang.get().t("language")>
                         <select
                             class="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1 text-sm"
+                            disabled=move || loading_or_generating.get()
                             on:change=move |ev| set_sel_language.set(event_target_value(&ev))
                         >
                             <option value="Chinese" selected=move || sel_language.get() == "Chinese">"中文"</option>
@@ -230,6 +222,7 @@ pub fn SettingsModal(
                 <div class="flex justify-end gap-2 px-4 py-3 border-t border-gray-700">
                     <button
                         class="px-4 py-1.5 rounded bg-gray-600 hover:bg-gray-500 text-sm"
+                        disabled=move || loading_or_generating.get()
                         on:click={
                             let on_close = on_close_apply.clone();
                             move |_| on_close(())
@@ -239,10 +232,10 @@ pub fn SettingsModal(
                     </button>
                     <button
                         class="px-4 py-1.5 rounded bg-blue-600 hover:bg-blue-700 text-sm font-medium"
+                        disabled=move || settings_apply_in_progress.get() || loading_or_generating.get()
                         on:click=move |_| {
                             on_apply(SettingsValues {
-                                model_dir: sel_model.get(),
-                                lora_dir: sel_lora.get(),
+                                model_root: sel_model_root.get(),
                                 backend: sel_backend.get(),
                                 audio_host: sel_host.get(),
                                 audio_device: sel_device.get(),
@@ -265,8 +258,7 @@ pub fn SettingsModal(
 
 #[derive(Clone, Debug)]
 pub struct SettingsValues {
-    pub model_dir: String,
-    pub lora_dir: String,
+    pub model_root: String,
     pub backend: String,
     pub audio_host: String,
     pub audio_device: String,
