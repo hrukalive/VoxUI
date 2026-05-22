@@ -236,6 +236,7 @@ pub fn App() -> impl IntoView {
     let (model_choices, set_model_choices) = signal(Vec::<ModelChoice>::new());
     let (load_progress, set_load_progress) = signal(LoadProgress::Hidden);
     let (load_in_progress, set_load_in_progress) = signal(false);
+    let (selection_save_in_progress, set_selection_save_in_progress) = signal(false);
     let (settings_apply_in_progress, set_settings_apply_in_progress) = signal(false);
 
     let (backend, set_backend) = signal("CUDA".to_string());
@@ -535,7 +536,12 @@ pub fn App() -> impl IntoView {
     };
 
     let on_choice_selected = move |choice_id: String| {
-        if settings_apply_in_progress.get_untracked() {
+        if selection_save_in_progress.get_untracked()
+            || settings_apply_in_progress.get_untracked()
+            || load_in_progress.get_untracked()
+            || active_index.get_untracked().is_some()
+            || status.get_untracked() == "generating"
+        {
             set_status_message
                 .set("Finish the current operation before changing settings".to_string());
             return;
@@ -570,6 +576,7 @@ pub fn App() -> impl IntoView {
             },
         });
 
+        set_selection_save_in_progress.set(true);
         spawn_local(async move {
             if let Err(e) =
                 tauri_api::invoke_unit("save_config", &serde_json::json!({ "config": config }))
@@ -578,11 +585,13 @@ pub fn App() -> impl IntoView {
                 debug_log(&format!("dropdown selection save error {e}"));
                 set_status_message.set(e);
             }
+            set_selection_save_in_progress.set(false);
         });
     };
 
     let on_load_or_cancel = move |_| {
-        if settings_apply_in_progress.get_untracked() {
+        if selection_save_in_progress.get_untracked() || settings_apply_in_progress.get_untracked()
+        {
             set_status_message
                 .set("Finish the current operation before changing settings".to_string());
             return;
@@ -663,6 +672,7 @@ pub fn App() -> impl IntoView {
         if active_index.get_untracked().is_some()
             || status.get_untracked() == "generating"
             || load_in_progress.get_untracked()
+            || selection_save_in_progress.get_untracked()
             || settings_apply_in_progress.get_untracked()
         {
             set_status_message
@@ -800,6 +810,9 @@ pub fn App() -> impl IntoView {
             .map(|choice| choice_identity_key(&model_root.get(), &choice))
             .unwrap_or_default()
     });
+    let selected_matches_loaded = Signal::derive(move || {
+        selected_choice_key.get() == loaded_choice_key.get()
+    });
     let generating =
         Signal::derive(move || active_index.get().is_some() || status.get() == "generating");
 
@@ -809,15 +822,18 @@ pub fn App() -> impl IntoView {
                 lang=lang
                 choices=model_choices
                 selected_choice_id=selected_choice_id
-                selected_choice_key=selected_choice_key
-                loaded_choice_key=loaded_choice_key.into()
+                selected_matches_loaded=selected_matches_loaded
                 load_in_progress=load_in_progress
                 generating=generating
+                selection_save_in_progress=selection_save_in_progress
                 settings_apply_in_progress=settings_apply_in_progress
                 on_choice_selected=on_choice_selected
                 on_load_or_cancel=on_load_or_cancel
                 on_settings=move |_| {
                     if settings_apply_in_progress.get_untracked() {
+                        set_status_message
+                            .set("Finish the current operation before changing settings".to_string());
+                    } else if selection_save_in_progress.get_untracked() {
                         set_status_message
                             .set("Finish the current operation before changing settings".to_string());
                     } else if active_index.get_untracked().is_some()
@@ -843,6 +859,7 @@ pub fn App() -> impl IntoView {
                 status=status
                 selected_choice_name=selected_choice_name
                 loaded_choice_name=loaded_choice_name.into()
+                selected_matches_loaded=selected_matches_loaded
                 actual_backend=actual_backend
                 audio_host=audio_host
                 audio_device=audio_device
@@ -864,7 +881,10 @@ pub fn App() -> impl IntoView {
                     devices=devices
                     settings_apply_in_progress=settings_apply_in_progress
                     loading_or_generating=Signal::derive(move || {
-                        load_in_progress.get() || generating.get() || settings_apply_in_progress.get()
+                        load_in_progress.get()
+                            || generating.get()
+                            || selection_save_in_progress.get()
+                            || settings_apply_in_progress.get()
                     })
                     on_close=move |_| set_show_settings.set(false)
                     on_apply=on_apply_settings

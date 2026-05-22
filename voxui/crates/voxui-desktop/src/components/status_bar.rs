@@ -7,6 +7,7 @@ pub fn StatusBar(
     status: ReadSignal<String>,
     selected_choice_name: Signal<String>,
     loaded_choice_name: Signal<String>,
+    selected_matches_loaded: Signal<bool>,
     actual_backend: ReadSignal<String>,
     audio_host: ReadSignal<String>,
     audio_device: ReadSignal<String>,
@@ -32,6 +33,7 @@ pub fn StatusBar(
     let right_text = move || {
         let selected = selected_choice_name.get();
         let loaded = loaded_choice_name.get();
+        let selected_matches_loaded = selected_matches_loaded.get();
         let backend = actual_backend.get();
         let host = audio_host.get();
         let device = audio_device.get();
@@ -39,7 +41,7 @@ pub fn StatusBar(
         if !loaded.is_empty() {
             parts.push(format!("{}: {}", lang.get().t("loaded"), loaded));
         }
-        if !selected.is_empty() && selected != loaded {
+        if !selected.is_empty() && !selected_matches_loaded {
             parts.push(format!("{}: {}", lang.get().t("selected"), selected));
         }
         if !backend.is_empty() {

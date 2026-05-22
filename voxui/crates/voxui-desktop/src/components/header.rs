@@ -7,21 +7,25 @@ pub fn Header(
     lang: ReadSignal<Language>,
     choices: ReadSignal<Vec<ModelChoice>>,
     selected_choice_id: ReadSignal<String>,
-    selected_choice_key: Signal<String>,
-    loaded_choice_key: Signal<String>,
+    selected_matches_loaded: Signal<bool>,
     load_in_progress: ReadSignal<bool>,
     generating: Signal<bool>,
+    selection_save_in_progress: ReadSignal<bool>,
     settings_apply_in_progress: ReadSignal<bool>,
     on_choice_selected: impl Fn(String) + 'static + Clone,
     on_load_or_cancel: impl Fn(()) + 'static + Clone,
     on_settings: impl Fn(()) + 'static,
 ) -> impl IntoView {
     let can_load = move || {
-        if load_in_progress.get() || generating.get() || settings_apply_in_progress.get() {
+        if load_in_progress.get()
+            || generating.get()
+            || selection_save_in_progress.get()
+            || settings_apply_in_progress.get()
+        {
             return false;
         }
         let selected = selected_choice_id.get();
-        !selected.is_empty() && selected_choice_key.get() != loaded_choice_key.get()
+        !selected.is_empty() && !selected_matches_loaded.get()
     };
 
     view! {
@@ -33,6 +37,7 @@ pub fn Header(
                 disabled=move || {
                     load_in_progress.get()
                         || generating.get()
+                        || selection_save_in_progress.get()
                         || settings_apply_in_progress.get()
                         || choices.get().is_empty()
                 }
@@ -68,7 +73,12 @@ pub fn Header(
             <button
                 class="p-2 rounded hover:bg-gray-700 transition-colors text-gray-300 hover:text-white disabled:opacity-50"
                 title=move || lang.get().t("settings")
-                disabled=move || load_in_progress.get() || generating.get() || settings_apply_in_progress.get()
+                disabled=move || {
+                    load_in_progress.get()
+                        || generating.get()
+                        || selection_save_in_progress.get()
+                        || settings_apply_in_progress.get()
+                }
                 on:click=move |_| on_settings(())
             >
                 <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
