@@ -1,4 +1,5 @@
 pub mod config;
+pub mod model_discovery;
 pub mod types;
 
 pub fn run() {
