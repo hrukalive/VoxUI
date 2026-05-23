@@ -1,6 +1,10 @@
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 
+use candle_core::Device;
 use tauri::{Emitter, State, Window};
+use tokio::task;
+use voxui_inference::VoxCPMEngine;
 
 use crate::app_core::AppCore;
 use crate::generation_queue::HistoryItem;
@@ -34,6 +38,70 @@ pub fn set_config_patch(
 #[tauri::command]
 pub fn discover_models(state: State<'_, SharedAppCore>) -> Result<Vec<ModelChoice>, String> {
     with_core(state, |core| core.rescan_models())
+}
+
+#[tauri::command]
+pub fn load_model(
+    window: Window,
+    state: State<'_, SharedAppCore>,
+    choice_id: String,
+) -> Result<crate::types::LoadStartResult, String> {
+    let choice = with_core(state.clone(), |core| {
+        let choice = core.selected_choice().map_err(|err| anyhow::anyhow!(err.to_string()))?;
+        if choice.id != choice_id {
+            return Err(anyhow::anyhow!(
+                "requested choice does not match selected model"
+            ));
+        }
+        core.mark_load_started();
+        Ok(choice)
+    })?;
+
+    let shared = state.inner().clone();
+    task::spawn_blocking(move || {
+        let result = load_engine_for_choice(&window, &choice);
+        let done = match result {
+            Ok(engine) => {
+                if let Ok(mut core) = shared.lock() {
+                    core.mark_load_success(choice.id.clone(), engine);
+                }
+                crate::types::ModelLoadDoneEvent {
+                    status: "success".to_string(),
+                    selected_model_id: Some(choice.id.clone()),
+                    loaded_model_id: Some(choice.id.clone()),
+                    error: None,
+                }
+            }
+            Err(error) => {
+                if let Ok(mut core) = shared.lock() {
+                    core.mark_load_finished_without_swap();
+                    let loaded = core.snapshot().loaded_model_id;
+                    let _ = window.emit(
+                        "model_load_done",
+                        crate::types::ModelLoadDoneEvent {
+                            status: "error".to_string(),
+                            selected_model_id: Some(choice.id.clone()),
+                            loaded_model_id: loaded,
+                            error: Some(error),
+                        },
+                    );
+                    return;
+                }
+                crate::types::ModelLoadDoneEvent {
+                    status: "error".to_string(),
+                    selected_model_id: Some(choice.id.clone()),
+                    loaded_model_id: None,
+                    error: Some("app state lock poisoned".to_string()),
+                }
+            }
+        };
+        let _ = window.emit("model_load_done", done);
+    });
+
+    Ok(crate::types::LoadStartResult {
+        started: true,
+        choice_id,
+    })
 }
 
 #[tauri::command]
@@ -76,4 +144,51 @@ pub fn stop_audio(window: Window) -> Result<CommandResult, String> {
         )
         .map_err(|error| error.to_string())?;
     Ok(CommandResult { ok: true })
+}
+
+fn load_engine_for_choice(
+    window: &Window,
+    choice: &crate::types::ModelChoice,
+) -> Result<VoxCPMEngine, String> {
+    let total_bytes = choice.model_bytes + choice.lora_bytes;
+    window
+        .emit(
+            "model_load_progress",
+            crate::types::ModelLoadProgressEvent {
+                phase: "reading".to_string(),
+                loaded_bytes: total_bytes,
+                total_bytes,
+                component: None,
+                component_index: 0,
+                component_total: 0,
+            },
+        )
+        .map_err(|err| err.to_string())?;
+
+    let cancel = AtomicBool::new(false);
+    let mut engine = VoxCPMEngine::load_with_progress(
+        &choice.model_dir,
+        Device::Cpu,
+        |current, total| {
+            let _ = window.emit(
+                "model_load_progress",
+                crate::types::ModelLoadProgressEvent {
+                    phase: "device_loading".to_string(),
+                    loaded_bytes: total_bytes,
+                    total_bytes,
+                    component: None,
+                    component_index: current,
+                    component_total: total,
+                },
+            );
+        },
+        Some(&cancel),
+    )
+    .map_err(|err| err.to_string())?;
+
+    if let Some(lora_path) = choice.lora_path.as_ref() {
+        engine.load_lora(lora_path).map_err(|err| err.to_string())?;
+    }
+
+    Ok(engine)
 }

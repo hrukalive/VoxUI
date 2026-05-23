@@ -108,3 +108,13 @@ fn enqueue_generation_creates_queued_item_when_loaded() {
     assert_eq!(snapshot.history.len(), 1);
     assert_eq!(snapshot.history[0], item);
 }
+
+#[test]
+fn failed_load_preserves_previous_loaded_model_id() {
+    let mut core = AppCore::from_config(AppConfig::default()).unwrap();
+    core.set_loaded_model_for_test("old-model".to_string());
+
+    core.finish_model_load_for_test(Err("load failed".to_string()));
+
+    assert_eq!(core.snapshot().loaded_model_id.as_deref(), Some("old-model"));
+}

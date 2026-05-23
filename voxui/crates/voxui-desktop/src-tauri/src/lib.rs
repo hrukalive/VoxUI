@@ -24,6 +24,7 @@ pub fn run() {
             commands::get_app_state,
             commands::set_config_patch,
             commands::discover_models,
+            commands::load_model,
             commands::enqueue_generation,
             commands::cancel_model_load,
             commands::cancel_generation,

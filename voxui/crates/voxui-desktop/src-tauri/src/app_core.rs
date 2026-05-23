@@ -4,13 +4,13 @@ use crate::generation_queue::{GenerationQueue, HistoryItem};
 use crate::model_discovery::discover_models;
 use crate::types::{AppConfig, AppSnapshot, ConfigPatch, LoadUiState, ModelChoice};
 
-#[derive(Debug)]
 pub struct AppCore {
     config: AppConfig,
     models: Vec<ModelChoice>,
     selected_model_id: Option<String>,
     loaded_model_id: Option<String>,
     load_state: LoadUiState,
+    engine: Option<voxui_inference::VoxCPMEngine>,
     queue: GenerationQueue,
 }
 
@@ -29,6 +29,7 @@ impl AppCore {
             selected_model_id,
             loaded_model_id: None,
             load_state: LoadUiState::Idle,
+            engine: None,
             queue: GenerationQueue::default(),
         })
     }
@@ -121,8 +122,44 @@ impl AppCore {
         self.mark_load_finished_without_swap();
     }
 
+    pub fn selected_choice(&self) -> Result<ModelChoice> {
+        let selected = self
+            .selected_model_id
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("no model selected"))?;
+        self.models
+            .iter()
+            .find(|choice| &choice.id == selected)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("selected model is no longer available"))
+    }
+
+    pub fn mark_load_started(&mut self) {
+        self.load_state = LoadUiState::Loading;
+    }
+
+    pub fn mark_load_success(
+        &mut self,
+        choice_id: String,
+        engine: voxui_inference::VoxCPMEngine,
+    ) {
+        self.engine = Some(engine);
+        self.loaded_model_id = Some(choice_id);
+        self.load_state = LoadUiState::Idle;
+    }
+
     pub fn mark_load_finished_without_swap(&mut self) {
         self.load_state = LoadUiState::Idle;
+    }
+
+    pub fn finish_model_load_for_test(&mut self, result: Result<(), String>) {
+        match result {
+            Ok(()) => {
+                self.loaded_model_id = Some("new-model".to_string());
+                self.load_state = LoadUiState::Idle;
+            }
+            Err(_) => self.mark_load_finished_without_swap(),
+        }
     }
 
     pub fn cancel_generation_item(&mut self, item_id: &str) -> bool {

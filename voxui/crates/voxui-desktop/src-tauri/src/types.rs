@@ -95,6 +95,12 @@ pub struct CommandResult {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LoadStartResult {
+    pub started: bool,
+    pub choice_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ConfigPatch {
     #[serde(
         default,
