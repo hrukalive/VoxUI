@@ -1,3 +1,6 @@
+pub mod config;
+pub mod types;
+
 pub fn run() {
     let _ = tracing_subscriber::fmt().try_init();
     tauri::Builder::default()
