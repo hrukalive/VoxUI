@@ -199,6 +199,24 @@ fn model_load_cannot_start_while_generation_is_active() {
 }
 
 #[test]
+fn generation_cannot_start_while_model_load_is_active() {
+    let mut core = AppCore::from_config(AppConfig::default()).unwrap();
+    core.set_loaded_model_for_test("model".to_string());
+    let item = core.enqueue_generation("hello".to_string()).unwrap();
+    let (_load_id, _cancel) = core.begin_model_load_for_test();
+
+    let error = match core.begin_generation_run(&item.id) {
+        Ok(_) => panic!("generation should not start while model load is active"),
+        Err(error) => error,
+    };
+    let snapshot = core.snapshot();
+
+    assert!(error.contains("model load already in progress"));
+    assert_eq!(snapshot.history[0].status, HistoryStatus::Queued);
+    assert_eq!(snapshot.history[0].error, None);
+}
+
+#[test]
 fn failed_load_preserves_previous_loaded_model_id() {
     let mut core = AppCore::from_config(AppConfig::default()).unwrap();
     core.set_loaded_model_for_test("old-model".to_string());

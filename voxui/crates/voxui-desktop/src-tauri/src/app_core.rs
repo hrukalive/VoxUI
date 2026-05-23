@@ -194,6 +194,9 @@ impl AppCore {
     }
 
     pub fn begin_generation_run(&mut self, item_id: &str) -> Result<GenerationRun, String> {
+        if self.active_load.is_some() || self.load_state == LoadUiState::Loading {
+            return Err("model load already in progress".to_string());
+        }
         let item = self
             .queue
             .items()
