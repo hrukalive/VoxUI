@@ -1,5 +1,7 @@
+pub mod audio;
 pub mod config;
 pub mod model_discovery;
+pub mod playback;
 pub mod types;
 
 pub fn run() {
