@@ -100,3 +100,10 @@ pub struct AudioDeviceDto {
     pub name: String,
     pub host_name: String,
 }
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RequestSnapshot {
+    pub model_id: String,
+    pub backend: BackendKind,
+    pub generation: GenerationSettings,
+}
