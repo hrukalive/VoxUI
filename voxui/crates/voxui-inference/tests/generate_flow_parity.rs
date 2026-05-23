@@ -1,7 +1,9 @@
 use std::path::{Path, PathBuf};
 
 use candle_core::Device;
-use voxui_inference::{SynthesisRequest, VoxCPMEngine};
+use voxui_inference::{
+    fsq::FSQLayer, GgufModelLoader, ModelConfig, ModelVariant, SynthesisRequest, VoxCPMEngine,
+};
 
 fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -83,6 +85,33 @@ fn voxcpm05_first_patch_flow_matches_python_trace() {
 }
 
 #[test]
+fn voxcpm05_fsq_prefill_matches_python_trace() {
+    assert_fsq_prefill_matches_python_trace(
+        "voxcpm05-fp16",
+        "voxcpm05_zero_shot",
+        ModelVariant::VoxCpm05,
+    );
+}
+
+#[test]
+fn voxcpm15_fsq_prefill_matches_python_trace() {
+    assert_fsq_prefill_matches_python_trace(
+        "voxcpm15-fp16",
+        "voxcpm15_zero_shot",
+        ModelVariant::VoxCpm15,
+    );
+}
+
+#[test]
+fn voxcpm2_fsq_prefill_matches_python_trace() {
+    assert_fsq_prefill_matches_python_trace(
+        "voxcpm2-fp16",
+        "voxcpm2_zero_shot",
+        ModelVariant::VoxCpm2,
+    );
+}
+
+#[test]
 fn voxcpm2_reference_request_uses_reference_audio_without_prompt_text() {
     let root = repo_root();
     let wav = std::fs::read_dir(root.join("for_test_wav"))
@@ -107,4 +136,30 @@ fn voxcpm2_reference_request_uses_reference_audio_without_prompt_text() {
 
     assert!(!samples.is_empty());
     assert!(samples.iter().all(|v| v.is_finite()));
+}
+
+fn assert_fsq_prefill_matches_python_trace(
+    model_name: &str,
+    trace_name: &str,
+    variant: ModelVariant,
+) {
+    let root = repo_root();
+    let model_dir = root.join("models").join(model_name);
+    let loader = GgufModelLoader::from_model_dir(&model_dir, Device::Cpu).unwrap();
+    let config = ModelConfig::load(&model_dir, variant).unwrap();
+    let fsq = FSQLayer::load(
+        &loader,
+        config.scalar_quantization_latent_dim,
+        config.scalar_quantization_scale as f64,
+    )
+    .unwrap();
+    let trace =
+        voxui_inference::trace::TraceCase::load(root.join("goldens").join(trace_name)).unwrap();
+
+    let actual = fsq
+        .forward(&trace.tensor("base_lm_prefill_hidden").unwrap())
+        .unwrap();
+
+    voxui_inference::trace::assert_close(&actual, &trace.tensor("first_fsq_hidden").unwrap(), 2e-3)
+        .unwrap();
 }
