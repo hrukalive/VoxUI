@@ -1,4 +1,5 @@
 mod app;
+mod components;
 mod i18n;
 mod tauri_api;
 
