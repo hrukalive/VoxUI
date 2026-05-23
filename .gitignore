@@ -7,6 +7,7 @@ target/
 
 # Tauri build output
 /src-tauri/gen/
+**/src-tauri/gen/
 /src-tauri/.tauri/
 
 # Rust backup files
@@ -15,6 +16,7 @@ target/
 # Local agent worktrees
 .worktrees
 .worktrees/
+.superpowers/
 
 # Keep Cargo.lock for Tauri apps
 !Cargo.lock

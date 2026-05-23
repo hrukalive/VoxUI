@@ -1,33 +1,30 @@
 {
+  "$schema": "https://schema.tauri.app/config/2",
   "productName": "AhanSays",
   "version": "0.1.0",
-  "identifier": "com.voxui.app",
+  "identifier": "com.voxui.ahansays",
   "build": {
-    "frontendDist": "../dist",
-    "devUrl": "http://localhost:8080",
-    "beforeDevCommand": {
-      "script": "trunk serve --port 8080 --open=false",
-      "cwd": ".."
-    },
-    "beforeBuildCommand": {
-      "script": "trunk build --release",
-      "cwd": ".."
-    }
+    "beforeDevCommand": "trunk serve --port 1420 --open=false",
+    "beforeBuildCommand": "trunk build --release",
+    "devUrl": "http://localhost:1420",
+    "frontendDist": "../dist"
   },
   "app": {
-    "withGlobalTauri": true,
     "windows": [
       {
         "title": "AhanSays",
-        "width": 800,
-        "height": 600,
-        "resizable": true,
-        "minWidth": 600,
-        "minHeight": 400
+        "width": 980,
+        "height": 720,
+        "minWidth": 760,
+        "minHeight": 520
       }
     ],
     "security": {
       "csp": null
     }
+  },
+  "bundle": {
+    "active": false,
+    "targets": "all"
   }
 }
