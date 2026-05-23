@@ -361,6 +361,9 @@ impl AppCore {
     }
 
     pub fn mark_load_started(&mut self) -> Result<(u64, Arc<AtomicBool>)> {
+        if self.active_generation_item_id.is_some() {
+            bail!("generation already in progress");
+        }
         if self.active_load.is_some() || self.load_state == LoadUiState::Loading {
             bail!("model load already in progress");
         }

@@ -184,6 +184,21 @@ fn begin_generation_rejects_second_active_generation_without_consuming_queue() {
 }
 
 #[test]
+fn model_load_cannot_start_while_generation_is_active() {
+    let mut core = AppCore::from_config(AppConfig::default()).unwrap();
+    core.set_loaded_model_for_test("model".to_string());
+    let item = core.enqueue_generation("hello".to_string()).unwrap();
+    core.begin_generation_for_test(&item.id).unwrap();
+
+    let error = core.mark_load_started().unwrap_err();
+    let snapshot = core.snapshot();
+
+    assert!(error.to_string().contains("generation already in progress"));
+    assert_eq!(snapshot.load_state, LoadUiState::Idle);
+    assert_eq!(snapshot.history[0].status, HistoryStatus::Generating);
+}
+
+#[test]
 fn failed_load_preserves_previous_loaded_model_id() {
     let mut core = AppCore::from_config(AppConfig::default()).unwrap();
     core.set_loaded_model_for_test("old-model".to_string());
