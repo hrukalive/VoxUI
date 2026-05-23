@@ -24,6 +24,7 @@ pub fn App() -> impl IntoView {
                 selected_model_id=Some("ahan-default".to_owned())
                 loaded_model_id=None
                 load_disabled=false
+                on_model_select=|_| {}
                 on_load=move || set_load_open.set(true)
                 on_open_settings=move || set_settings_open.set(true)
             />

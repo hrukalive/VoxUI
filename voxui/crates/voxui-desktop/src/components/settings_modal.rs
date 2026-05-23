@@ -20,25 +20,26 @@ pub fn SettingsModal(
                     </header>
                     <div class="settings-grid">
                         <label>
-                            <span>{labels.model}</span>
-                            <input type="text" value="" placeholder={labels.model} disabled=true />
+                            <span>{labels.model_folder}</span>
+                            <input type="text" value="" placeholder={labels.model_folder} disabled=true />
                         </label>
                         <label>
-                            <span>{"Language"}</span>
+                            <span>{labels.language}</span>
                             <select>
-                                <option>{"中文"}</option>
-                                <option>{"English"}</option>
+                                <option>{labels.system}</option>
+                                <option>{labels.chinese}</option>
+                                <option>{labels.english}</option>
                             </select>
                         </label>
                         <label>
-                            <span>{"Backend"}</span>
+                            <span>{labels.backend}</span>
                             <select>
-                                <option>{"CPU"}</option>
-                                <option>{"CUDA"}</option>
+                                <option>{labels.cpu}</option>
+                                <option>{labels.cuda}</option>
                             </select>
                         </label>
                         <label>
-                            <span>{"Volume"}</span>
+                            <span>{labels.volume}</span>
                             <input type="range" min="0" max="100" value="80" />
                         </label>
                     </div>

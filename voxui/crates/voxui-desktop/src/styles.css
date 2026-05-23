@@ -260,14 +260,28 @@ body {
 }
 
 .progress-track {
+  display: block;
+  width: 100%;
   height: 10px;
   overflow: hidden;
   border-radius: 999px;
   background: #0c1118;
+  border: 0;
+  appearance: none;
 }
 
-.progress-bar {
+.progress-track::-webkit-progress-bar {
+  border-radius: inherit;
+  background: #0c1118;
+}
+
+.progress-track::-webkit-progress-value {
   height: 100%;
+  border-radius: inherit;
+  background: #d5b15b;
+}
+
+.progress-track::-moz-progress-bar {
   border-radius: inherit;
   background: #d5b15b;
 }

@@ -21,12 +21,17 @@ pub fn LoadProgressModal(
                             {"×"}
                         </button>
                     </header>
-                    <div class="progress-track" aria-valuemin="0" aria-valuemax="100" aria-valuenow=move || normalized_percent() as i32>
-                        <div
-                            class="progress-bar"
-                            style:width=move || format!("{}%", normalized_percent())
-                        ></div>
-                    </div>
+                    <progress
+                        class="progress-track"
+                        role="progressbar"
+                        max="100"
+                        value=move || normalized_percent()
+                        aria-valuemin="0"
+                        aria-valuemax="100"
+                        aria-valuenow=move || normalized_percent() as i32
+                    >
+                        {move || format!("{:.0}%", normalized_percent())}
+                    </progress>
                     <p class="progress-label">{move || format!("{:.0}%", normalized_percent())}</p>
                 </section>
             </div>

@@ -10,6 +10,7 @@ pub fn Header(
     selected_model_id: Option<String>,
     loaded_model_id: Option<String>,
     load_disabled: bool,
+    on_model_select: impl Fn(String) + 'static + Copy,
     on_load: impl Fn() + 'static + Copy,
     on_open_settings: impl Fn() + 'static + Copy,
 ) -> impl IntoView {
@@ -22,7 +23,11 @@ pub fn Header(
                 <span>{labels.subtitle}</span>
             </div>
 
-            <select class="model-select" aria-label={labels.model}>
+            <select
+                class="model-select"
+                aria-label={labels.model}
+                on:change=move |event| on_model_select(event_target_value(&event))
+            >
                 <option value="">{labels.model}</option>
                 {models
                     .into_iter()
