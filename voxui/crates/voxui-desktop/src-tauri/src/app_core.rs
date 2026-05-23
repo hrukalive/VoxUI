@@ -51,8 +51,8 @@ impl AppCore {
         }
 
         if let Some(selected_model_id) = patch.selected_model_id {
-            self.selected_model_id = selected_model_id.clone();
-            self.config.selected_model_id = selected_model_id;
+            self.selected_model_id = select_existing_model(selected_model_id, &self.models);
+            self.config.selected_model_id = self.selected_model_id.clone();
         }
 
         if let Some(language) = patch.language {
@@ -259,6 +259,35 @@ mod tests {
         assert_eq!(snapshot.config.audio_host, None);
         assert_eq!(snapshot.config.audio_device, None);
         assert_eq!(snapshot.config.volume, 0.0);
+    }
+
+    #[test]
+    fn apply_patch_normalizes_missing_selected_model_id() {
+        let temp = TempDir::new().unwrap();
+        write_model(temp.path(), "alpha");
+
+        let mut core = AppCore::from_config(AppConfig {
+            model_root: Some(temp.path().to_path_buf()),
+            ..AppConfig::default()
+        })
+        .unwrap();
+
+        let snapshot = core
+            .apply_patch(ConfigPatch {
+                model_root: None,
+                selected_model_id: Some(Some("missing".to_string())),
+                language: None,
+                backend: None,
+                audio_host: None,
+                audio_device: None,
+                volume: None,
+                max_input_chars: None,
+                generation: None,
+            })
+            .unwrap();
+
+        assert_eq!(snapshot.selected_model_id.as_deref(), Some("alpha"));
+        assert_eq!(snapshot.config.selected_model_id.as_deref(), Some("alpha"));
     }
 
     #[test]
