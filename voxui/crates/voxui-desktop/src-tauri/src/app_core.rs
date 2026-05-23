@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
@@ -5,6 +6,7 @@ use anyhow::{bail, Context, Result};
 
 use crate::generation_queue::{GenerationQueue, HistoryItem};
 use crate::model_discovery::discover_models;
+use crate::playback::{GeneratedAudio, GeneratedAudioCache};
 use crate::types::{AppConfig, AppSnapshot, ConfigPatch, LoadUiState, ModelChoice};
 
 struct ActiveModelLoad {
@@ -22,6 +24,7 @@ pub struct AppCore {
     next_load_id: u64,
     active_load: Option<ActiveModelLoad>,
     queue: GenerationQueue,
+    audio_cache: GeneratedAudioCache,
 }
 
 impl AppCore {
@@ -43,6 +46,7 @@ impl AppCore {
             next_load_id: 1,
             active_load: None,
             queue: GenerationQueue::default(),
+            audio_cache: GeneratedAudioCache::default(),
         })
     }
 
@@ -131,6 +135,117 @@ impl AppCore {
             .find(|item| item.id == id)
             .cloned()
             .context("queued item was not found after enqueue")
+    }
+
+    pub fn regenerate_item(&mut self, item_id: &str, config: &AppConfig) -> Result<()> {
+        let loaded_model_id = self
+            .loaded_model_id
+            .clone()
+            .context("no model loaded for generation")?;
+        if !self
+            .queue
+            .start_regeneration(item_id, loaded_model_id, config)
+        {
+            bail!("unknown history item: {item_id}");
+        }
+        Ok(())
+    }
+
+    pub fn config(&self) -> &AppConfig {
+        &self.config
+    }
+
+    pub fn has_audio(&self, item_id: &str) -> bool {
+        self.queue
+            .items()
+            .iter()
+            .find(|item| item.id == item_id)
+            .map(|item| item.has_audio && self.audio_cache.contains(item_id))
+            .unwrap_or(false)
+    }
+
+    pub fn generate_item<F>(&mut self, item_id: &str, progress: F) -> Result<(u32, f32)>
+    where
+        F: Fn(usize, usize),
+    {
+        if !self.queue.mark_generating(item_id) {
+            bail!("unknown history item: {item_id}");
+        }
+
+        let result = self.generate_item_inner(item_id, progress);
+        match result {
+            Ok((sample_rate, duration_seconds)) => {
+                self.queue.mark_ready(item_id);
+                Ok((sample_rate, duration_seconds))
+            }
+            Err(error) => {
+                self.queue.mark_failed(item_id, error.to_string());
+                Err(error)
+            }
+        }
+    }
+
+    fn generate_item_inner<F>(&mut self, item_id: &str, progress: F) -> Result<(u32, f32)>
+    where
+        F: Fn(usize, usize),
+    {
+        let request = self.synthesis_request(item_id)?;
+        let engine = self
+            .engine
+            .as_mut()
+            .context("no model engine loaded for generation")?;
+        let sample_rate = engine.sample_rate();
+        let progress_item_id = item_id.to_string();
+        let queue = RefCell::new(&mut self.queue);
+        let samples = engine.generate_cancellable(
+            request,
+            |current, total| {
+                queue
+                    .borrow_mut()
+                    .mark_progress(&progress_item_id, current, total);
+                progress(current, total);
+            },
+            None,
+        )?;
+        let duration_seconds = samples.len() as f32 / sample_rate as f32;
+        self.audio_cache.insert(
+            item_id.to_string(),
+            GeneratedAudio {
+                samples,
+                sample_rate,
+            },
+        );
+        Ok((sample_rate, duration_seconds))
+    }
+
+    pub fn synthesis_request_for_test(
+        &self,
+        item_id: &str,
+    ) -> Result<voxui_inference::SynthesisRequest> {
+        self.synthesis_request(item_id)
+    }
+
+    fn synthesis_request(&self, item_id: &str) -> Result<voxui_inference::SynthesisRequest> {
+        let item = self
+            .queue
+            .items()
+            .iter()
+            .find(|item| item.id == item_id)
+            .ok_or_else(|| anyhow::anyhow!("unknown history item: {item_id}"))?;
+        Ok(voxui_inference::SynthesisRequest {
+            text: item.text.clone(),
+            prompt_wav_path: item.snapshot.generation.prompt_wav_path.clone(),
+            prompt_text: item.snapshot.generation.prompt_text.clone(),
+            reference_wav_path: item.snapshot.generation.reference_wav_path.clone(),
+            cfg_value: item.snapshot.generation.cfg_value,
+            inference_timesteps: item.snapshot.generation.inference_timesteps,
+            min_len: item.snapshot.generation.min_len,
+            max_len: item.snapshot.generation.max_len,
+            normalize: false,
+            retry_badcase: item.snapshot.generation.retry_badcase,
+            retry_badcase_max_times: item.snapshot.generation.retry_badcase_max_times,
+            retry_badcase_ratio_threshold: item.snapshot.generation.retry_badcase_ratio_threshold,
+        })
     }
 
     pub fn cancel_model_load_state(&mut self) {

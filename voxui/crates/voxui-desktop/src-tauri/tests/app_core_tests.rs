@@ -110,6 +110,19 @@ fn enqueue_generation_creates_queued_item_when_loaded() {
 }
 
 #[test]
+fn request_snapshot_converts_to_synthesis_request() {
+    let mut core = AppCore::from_config(AppConfig::default()).unwrap();
+    core.set_loaded_model_for_test("model".to_string());
+    let item = core.enqueue_generation(" hello world ".to_string()).unwrap();
+
+    let request = core.synthesis_request_for_test(&item.id).unwrap();
+
+    assert_eq!(request.text, "hello world");
+    assert_eq!(request.inference_timesteps, 10);
+    assert_eq!(request.cfg_value, 2.0);
+}
+
+#[test]
 fn failed_load_preserves_previous_loaded_model_id() {
     let mut core = AppCore::from_config(AppConfig::default()).unwrap();
     core.set_loaded_model_for_test("old-model".to_string());

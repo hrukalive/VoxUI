@@ -16,6 +16,10 @@ impl GeneratedAudioCache {
         self.audios.insert(id, audio);
     }
 
+    pub fn contains(&self, id: &str) -> bool {
+        self.audios.contains_key(id)
+    }
+
     pub fn get(&self, id: &str) -> Option<&GeneratedAudio> {
         self.audios.get(id)
     }

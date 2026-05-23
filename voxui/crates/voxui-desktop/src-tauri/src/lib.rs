@@ -26,8 +26,10 @@ pub fn run() {
             commands::discover_models,
             commands::load_model,
             commands::enqueue_generation,
+            commands::regenerate,
             commands::cancel_model_load,
             commands::cancel_generation,
+            commands::play_audio,
             commands::stop_audio,
         ])
         .run(tauri::generate_context!())

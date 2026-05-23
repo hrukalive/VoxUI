@@ -8,7 +8,10 @@ use voxui_inference::VoxCPMEngine;
 
 use crate::app_core::AppCore;
 use crate::generation_queue::HistoryItem;
-use crate::types::{AppSnapshot, CommandResult, ConfigPatch, ModelChoice, PlaybackStateEvent};
+use crate::types::{
+    AppSnapshot, CommandResult, ConfigPatch, GenerationDoneEvent, GenerationProgressEvent,
+    ModelChoice, PlaybackStateEvent,
+};
 
 pub type SharedAppCore = Arc<Mutex<AppCore>>;
 
@@ -122,10 +125,28 @@ pub fn load_model(
 
 #[tauri::command]
 pub fn enqueue_generation(
+    window: Window,
     state: State<'_, SharedAppCore>,
     text: String,
 ) -> Result<HistoryItem, String> {
-    with_core(state, |core| core.enqueue_generation(text))
+    let item = with_core(state.clone(), |core| core.enqueue_generation(text))?;
+    spawn_generation(window, state.inner().clone(), item.id.clone());
+    Ok(item)
+}
+
+#[tauri::command]
+pub fn regenerate(
+    window: Window,
+    state: State<'_, SharedAppCore>,
+    item_id: String,
+) -> Result<CommandResult, String> {
+    with_core(state.clone(), |core| {
+        let config = core.config().clone();
+        core.regenerate_item(&item_id, &config)?;
+        Ok(CommandResult { ok: true })
+    })?;
+    spawn_generation(window, state.inner().clone(), item_id);
+    Ok(CommandResult { ok: true })
 }
 
 #[tauri::command]
@@ -146,6 +167,30 @@ pub fn cancel_generation(
             ok: core.cancel_generation_item(&item_id),
         })
     })
+}
+
+#[tauri::command]
+pub fn play_audio(
+    window: Window,
+    state: State<'_, SharedAppCore>,
+    item_id: String,
+) -> Result<CommandResult, String> {
+    with_core(state, |core| {
+        if !core.has_audio(&item_id) {
+            return Err(anyhow::anyhow!("unknown item or no generated audio: {item_id}"));
+        }
+        Ok(())
+    })?;
+    window
+        .emit(
+            "playback_state",
+            PlaybackStateEvent {
+                item_id: Some(item_id),
+                state: "playing".to_string(),
+            },
+        )
+        .map_err(|err| err.to_string())?;
+    Ok(CommandResult { ok: true })
 }
 
 #[tauri::command]
@@ -207,4 +252,42 @@ fn load_engine_for_choice(
     }
 
     Ok(engine)
+}
+
+fn spawn_generation(window: Window, shared: SharedAppCore, item_id: String) {
+    task::spawn_blocking(move || {
+        let progress_window = window.clone();
+        let progress_item_id = item_id.clone();
+        let result = match shared.lock() {
+            Ok(mut core) => core.generate_item(&item_id, |current, total| {
+                let _ = progress_window.emit(
+                    "generation_progress",
+                    GenerationProgressEvent {
+                        item_id: progress_item_id.clone(),
+                        current,
+                        total,
+                    },
+                );
+            }),
+            Err(_) => Err(anyhow::anyhow!("app state lock poisoned")),
+        };
+
+        let done = match result {
+            Ok((sample_rate, duration_seconds)) => GenerationDoneEvent {
+                item_id,
+                status: "ready".to_string(),
+                error: None,
+                sample_rate: Some(sample_rate),
+                duration_seconds: Some(duration_seconds),
+            },
+            Err(error) => GenerationDoneEvent {
+                item_id,
+                status: "failed".to_string(),
+                error: Some(error.to_string()),
+                sample_rate: None,
+                duration_seconds: None,
+            },
+        };
+        let _ = window.emit("generation_done", done);
+    });
 }
