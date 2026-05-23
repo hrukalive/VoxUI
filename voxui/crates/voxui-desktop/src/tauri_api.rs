@@ -115,6 +115,34 @@ pub async fn get_app_state() -> Result<AppSnapshot, String> {
     serde_wasm_bindgen::from_value(value).map_err(|err| err.to_string())
 }
 
+pub async fn enqueue_generation(text: String) -> Result<HistoryItem, String> {
+    let args = serde_wasm_bindgen::to_value(&serde_json::json!({ "text": text }))
+        .map_err(|err| err.to_string())?;
+    let value = invoke("enqueue_generation", args)
+        .await
+        .map_err(stringify_js_error)?;
+
+    serde_wasm_bindgen::from_value(value).map_err(|err| err.to_string())
+}
+
+pub async fn play_audio(item_id: String) -> Result<(), String> {
+    let args = serde_wasm_bindgen::to_value(&serde_json::json!({ "item_id": item_id }))
+        .map_err(|err| err.to_string())?;
+    invoke("play_audio", args)
+        .await
+        .map_err(stringify_js_error)
+        .map(|_| ())
+}
+
+pub async fn regenerate(item_id: String) -> Result<(), String> {
+    let args = serde_wasm_bindgen::to_value(&serde_json::json!({ "item_id": item_id }))
+        .map_err(|err| err.to_string())?;
+    invoke("regenerate", args)
+        .await
+        .map_err(stringify_js_error)
+        .map(|_| ())
+}
+
 fn stringify_js_error(value: JsValue) -> String {
     if let Some(message) = value.as_string() {
         return message;
