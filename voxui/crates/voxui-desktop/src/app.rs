@@ -1,12 +1,10 @@
 use leptos::prelude::*;
 
-mod i18n_bridge {
-    pub use crate::i18n::{labels, UiLanguage};
-}
+use crate::i18n::{labels, UiLanguage};
 
 #[component]
 pub fn App() -> impl IntoView {
-    let labels = i18n_bridge::labels(i18n_bridge::UiLanguage::Chinese);
+    let labels = labels(UiLanguage::Chinese);
 
     view! {
         <div class="app-shell">
