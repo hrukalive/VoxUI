@@ -11,8 +11,8 @@ use voxui_inference::VoxCPMEngine;
 use crate::app_core::AppCore;
 use crate::generation_queue::HistoryItem;
 use crate::types::{
-    AppSnapshot, CommandResult, ConfigPatch, GenerationDoneEvent, GenerationProgressEvent,
-    ModelChoice, PlaybackStateEvent,
+    AppSnapshot, AudioStateDto, CommandResult, ConfigPatch, GenerationDoneEvent,
+    GenerationProgressEvent, ModelChoice, PlaybackStateEvent,
 };
 
 pub type SharedAppCore = Arc<Mutex<AppCore>>;
@@ -46,6 +46,12 @@ pub fn discover_models(state: State<'_, SharedAppCore>) -> Result<Vec<ModelChoic
 }
 
 #[tauri::command]
+pub fn get_audio_state() -> AudioStateDto {
+    let system = AudioSystem::new();
+    crate::audio::audio_state(&system)
+}
+
+#[tauri::command]
 pub fn browse_model_dir(app: AppHandle) -> Result<Option<String>, String> {
     Ok(app
         .dialog()
@@ -72,11 +78,12 @@ pub fn test_audio(state: State<'_, SharedAppCore>) -> Result<CommandResult, Stri
         .audio_host
         .clone()
         .unwrap_or_else(|| system.default_host_name());
-    let device = config
-        .audio_device
-        .clone()
-        .map(Ok)
-        .unwrap_or_else(|| system.default_device_name(&host))
+    let devices = crate::audio::list_devices(&system, &host).map_err(|err| err.to_string())?;
+    let device = crate::audio::resolve_output_device_name(
+        config.audio_device.clone(),
+        &devices,
+        system.default_device_name(&host),
+    )
         .map_err(|err| err.to_string())?;
     let sample_rate = 48_000;
     let samples = crate::audio::sine_with_fades(sample_rate, 48_000, 440.0, config.volume);

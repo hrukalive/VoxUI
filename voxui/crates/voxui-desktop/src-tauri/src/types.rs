@@ -208,6 +208,13 @@ pub struct AudioDeviceDto {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AudioStateDto {
+    pub hosts: Vec<AudioHostDto>,
+    pub devices: Vec<AudioDeviceDto>,
+    pub default_host: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RequestSnapshot {
     pub model_id: String,
     pub backend: BackendKind,

@@ -24,6 +24,7 @@ pub fn run() {
             commands::get_app_state,
             commands::set_config_patch,
             commands::discover_models,
+            commands::get_audio_state,
             commands::browse_model_dir,
             commands::browse_prompt_wav,
             commands::browse_reference_wav,

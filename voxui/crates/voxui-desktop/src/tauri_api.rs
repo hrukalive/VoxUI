@@ -33,6 +33,24 @@ pub struct AppConfig {
     pub generation: GenerationSettings,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct AudioState {
+    pub hosts: Vec<AudioHost>,
+    pub devices: Vec<AudioDevice>,
+    pub default_host: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AudioHost {
+    pub name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AudioDevice {
+    pub name: String,
+    pub host_name: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct GenerationSettings {
     pub cfg_value: f32,
@@ -140,6 +158,14 @@ struct ItemArgs {
 
 pub async fn get_app_state() -> Result<AppSnapshot, String> {
     let value = invoke("get_app_state", JsValue::NULL)
+        .await
+        .map_err(stringify_js_error)?;
+
+    serde_wasm_bindgen::from_value(value).map_err(|err| err.to_string())
+}
+
+pub async fn get_audio_state() -> Result<AudioState, String> {
+    let value = invoke("get_audio_state", JsValue::NULL)
         .await
         .map_err(stringify_js_error)?;
 

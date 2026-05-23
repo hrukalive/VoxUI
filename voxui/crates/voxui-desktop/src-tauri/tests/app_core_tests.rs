@@ -87,6 +87,32 @@ fn startup_replaces_stale_saved_selection_with_first_model_in_config_snapshot() 
 }
 
 #[test]
+fn changing_audio_host_clears_saved_audio_device() {
+    let mut core = AppCore::from_config(AppConfig {
+        audio_host: Some("Wasapi".to_string()),
+        audio_device: Some("Speakers".to_string()),
+        ..AppConfig::default()
+    })
+    .unwrap();
+
+    let snapshot = core
+        .apply_patch(ConfigPatch {
+            model_root: None,
+            selected_model_id: None,
+            language: None,
+            backend: None,
+            audio_host: Some(Some("Asio".to_string())),
+            audio_device: None,
+            volume: None,
+            max_input_chars: None,
+            generation: None,
+        })
+        .unwrap();
+
+    assert_eq!(snapshot.config.audio_host.as_deref(), Some("Asio"));
+    assert_eq!(snapshot.config.audio_device, None);
+}
+#[test]
 fn enqueue_generation_rejects_when_no_model_is_loaded() {
     let mut core = AppCore::from_config(AppConfig::default()).unwrap();
 

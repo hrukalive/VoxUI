@@ -1,12 +1,16 @@
 use leptos::prelude::*;
 
 use crate::i18n::Labels;
-use crate::tauri_api::{AppConfig, BackendKind, ConfigPatch, GenerationSettings, LanguageMode};
+use crate::tauri_api::{
+    AppConfig, AudioDevice, AudioHost, AudioState, BackendKind, ConfigPatch, GenerationSettings,
+    LanguageMode,
+};
 
 #[component]
 pub fn SettingsModal(
     labels: Labels,
     config: impl Fn() -> AppConfig + Send + Sync + 'static + Copy,
+    audio_state: impl Fn() -> AudioState + Send + Sync + 'static + Copy,
     open: impl Fn() -> bool + Send + Sync + 'static + Copy,
     on_close: impl Fn() + Send + Sync + 'static + Copy,
     on_config_patch: impl Fn(ConfigPatch) + Send + Sync + 'static + Copy,
@@ -105,12 +109,21 @@ pub fn SettingsModal(
                                             let value = event_target_value(&event);
                                             on_config_patch(ConfigPatch {
                                                 audio_host: Some(if value.is_empty() { None } else { Some(value) }),
+                                                audio_device: Some(None),
                                                 ..ConfigPatch::default()
                                             });
                                         }
                                     >
                                         <option value="">{"Default"}</option>
-                                        {move || config().audio_host.map(|host| view! { <option value={host.clone()}>{host.clone()}</option> })}
+                                        <For
+                                            each=move || audio_hosts_with_current(audio_state(), config().audio_host)
+                                            key=|host| host.name.clone()
+                                            children=move |host| {
+                                                let name = host.name;
+                                                let label = name.clone();
+                                                view! { <option value={name}>{label}</option> }
+                                            }
+                                        />
                                     </select>
                                 </label>
                                 <label class="settings-field" for="settings-output-device">
@@ -127,7 +140,15 @@ pub fn SettingsModal(
                                         }
                                     >
                                         <option value="">{"Default"}</option>
-                                        {move || config().audio_device.map(|device| view! { <option value={device.clone()}>{device.clone()}</option> })}
+                                        <For
+                                            each=move || audio_devices_for_selected_host(audio_state(), &config())
+                                            key=|device| format!("{}:{}", device.host_name, device.name)
+                                            children=move |device| {
+                                                let name = device.name;
+                                                let label = name.clone();
+                                                view! { <option value={name}>{label}</option> }
+                                            }
+                                        />
                                     </select>
                                 </label>
                                 <label class="settings-field" for="settings-volume">
@@ -266,6 +287,51 @@ pub fn SettingsModal(
             </div>
         </Show>
     }
+}
+
+fn audio_hosts_with_current(mut state: AudioState, current_host: Option<String>) -> Vec<AudioHost> {
+    if let Some(current_host) = current_host {
+        if !state.hosts.iter().any(|host| host.name == current_host) {
+            state.hosts.push(AudioHost { name: current_host });
+        }
+    }
+
+    state.hosts
+}
+
+fn audio_devices_for_selected_host(mut state: AudioState, config: &AppConfig) -> Vec<AudioDevice> {
+    let selected_host = config
+        .audio_host
+        .as_deref()
+        .or(state.default_host.as_deref());
+    let Some(selected_host) = selected_host else {
+        return config
+            .audio_device
+            .clone()
+            .map(|name| AudioDevice {
+                name,
+                host_name: String::new(),
+            })
+            .into_iter()
+            .collect();
+    };
+
+    let mut devices = state
+        .devices
+        .drain(..)
+        .filter(|device| device.host_name == selected_host)
+        .collect::<Vec<_>>();
+
+    if let Some(current_device) = config.audio_device.as_ref() {
+        if !devices.iter().any(|device| device.name == *current_device) {
+            devices.push(AudioDevice {
+                name: current_device.clone(),
+                host_name: selected_host.to_string(),
+            });
+        }
+    }
+
+    devices
 }
 
 fn language_value(language: LanguageMode) -> &'static str {

@@ -8,8 +8,8 @@ use crate::components::load_progress_modal::LoadProgressModal;
 use crate::components::settings_modal::SettingsModal;
 use crate::i18n::{labels, UiLanguage};
 use crate::tauri_api::{
-    AppConfig, AppSnapshot, BackendKind, ConfigPatch, GenerationSettings, LanguageMode,
-    LoadUiState,
+    AppConfig, AppSnapshot, AudioState, BackendKind, ConfigPatch, GenerationSettings,
+    LanguageMode, LoadUiState,
 };
 
 #[component]
@@ -18,10 +18,16 @@ pub fn App() -> impl IntoView {
     let (settings_open, set_settings_open) = signal(false);
     let (load_open, set_load_open) = signal(false);
     let (snapshot, set_snapshot) = signal(None::<AppSnapshot>);
+    let (audio_state, set_audio_state) = signal(AudioState::default());
 
     spawn_local(async move {
         if let Ok(next_snapshot) = crate::tauri_api::get_app_state().await {
             set_snapshot.set(Some(next_snapshot));
+        }
+    });
+    spawn_local(async move {
+        if let Ok(next_audio_state) = crate::tauri_api::get_audio_state().await {
+            set_audio_state.set(next_audio_state);
         }
     });
 
@@ -93,6 +99,7 @@ pub fn App() -> impl IntoView {
             <SettingsModal
                 labels=labels
                 config=move || current_snapshot().config
+                audio_state=move || audio_state.get()
                 open=move || settings_open.get()
                 on_close=move || set_settings_open.set(false)
                 on_config_patch=move |patch| {

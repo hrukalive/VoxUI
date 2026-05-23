@@ -90,6 +90,9 @@ impl AppCore {
             self.config.backend = backend;
         }
         if let Some(audio_host) = patch.audio_host {
+            if self.config.audio_host != audio_host {
+                self.config.audio_device = None;
+            }
             self.config.audio_host = audio_host;
         }
         if let Some(audio_device) = patch.audio_device {
