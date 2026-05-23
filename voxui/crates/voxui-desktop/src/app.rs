@@ -8,7 +8,8 @@ use crate::components::load_progress_modal::LoadProgressModal;
 use crate::components::settings_modal::SettingsModal;
 use crate::i18n::{labels, UiLanguage};
 use crate::tauri_api::{
-    AppConfig, AppSnapshot, BackendKind, GenerationSettings, LanguageMode, LoadUiState,
+    AppConfig, AppSnapshot, BackendKind, ConfigPatch, GenerationSettings, LanguageMode,
+    LoadUiState,
 };
 
 #[component]
@@ -91,21 +92,60 @@ pub fn App() -> impl IntoView {
             }}
             <SettingsModal
                 labels=labels
+                config=move || current_snapshot().config
                 open=move || settings_open.get()
                 on_close=move || set_settings_open.set(false)
+                on_config_patch=move |patch| {
+                    spawn_local(async move {
+                        if let Ok(next_snapshot) = crate::tauri_api::set_config_patch(patch).await {
+                            set_snapshot.set(Some(next_snapshot));
+                        }
+                    });
+                }
                 on_browse_model_dir=move || {
                     spawn_local(async move {
-                        let _ = crate::tauri_api::browse_model_dir().await;
+                        if let Ok(Some(path)) = crate::tauri_api::browse_model_dir().await {
+                            if let Ok(next_snapshot) = crate::tauri_api::set_config_patch(ConfigPatch {
+                                model_root: Some(Some(path)),
+                                ..ConfigPatch::default()
+                            })
+                            .await
+                            {
+                                set_snapshot.set(Some(next_snapshot));
+                            }
+                        }
                     });
                 }
                 on_browse_prompt_wav=move || {
                     spawn_local(async move {
-                        let _ = crate::tauri_api::browse_prompt_wav().await;
+                        if let Ok(Some(path)) = crate::tauri_api::browse_prompt_wav().await {
+                            let mut generation = current_snapshot().config.generation;
+                            generation.prompt_wav_path = Some(path);
+                            if let Ok(next_snapshot) = crate::tauri_api::set_config_patch(ConfigPatch {
+                                generation: Some(generation),
+                                ..ConfigPatch::default()
+                            })
+                            .await
+                            {
+                                set_snapshot.set(Some(next_snapshot));
+                            }
+                        }
                     });
                 }
                 on_browse_reference_wav=move || {
                     spawn_local(async move {
-                        let _ = crate::tauri_api::browse_reference_wav().await;
+                        if let Ok(Some(path)) = crate::tauri_api::browse_reference_wav().await {
+                            let mut generation = current_snapshot().config.generation;
+                            generation.reference_wav_path = Some(path);
+                            if let Ok(next_snapshot) = crate::tauri_api::set_config_patch(ConfigPatch {
+                                generation: Some(generation),
+                                ..ConfigPatch::default()
+                            })
+                            .await
+                            {
+                                set_snapshot.set(Some(next_snapshot));
+                            }
+                        }
                     });
                 }
                 on_test_audio=move || {

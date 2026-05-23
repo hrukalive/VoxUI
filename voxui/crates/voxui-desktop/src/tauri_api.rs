@@ -47,6 +47,28 @@ pub struct GenerationSettings {
     pub reference_wav_path: Option<String>,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+pub struct ConfigPatch {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_root: Option<Option<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub selected_model_id: Option<Option<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub language: Option<LanguageMode>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub backend: Option<BackendKind>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub audio_host: Option<Option<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub audio_device: Option<Option<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub volume: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_input_chars: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub generation: Option<GenerationSettings>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ModelChoice {
     pub id: String,
@@ -136,6 +158,16 @@ pub async fn browse_reference_wav() -> Result<Option<String>, String> {
     browse_path("browse_reference_wav").await
 }
 
+pub async fn set_config_patch(patch: ConfigPatch) -> Result<AppSnapshot, String> {
+    let args = serde_wasm_bindgen::to_value(&serde_json::json!({ "patch": patch }))
+        .map_err(|err| err.to_string())?;
+    let value = invoke("set_config_patch", args)
+        .await
+        .map_err(stringify_js_error)?;
+
+    serde_wasm_bindgen::from_value(value).map_err(|err| err.to_string())
+}
+
 pub async fn enqueue_generation(text: String) -> Result<HistoryItem, String> {
     let args = serde_wasm_bindgen::to_value(&serde_json::json!({ "text": text }))
         .map_err(|err| err.to_string())?;
@@ -169,6 +201,21 @@ pub async fn test_audio() -> Result<(), String> {
         .await
         .map_err(stringify_js_error)
         .map(|_| ())
+}
+
+pub async fn listen_app_event(
+    event: &'static str,
+    handler: impl Fn(JsValue) + 'static,
+) -> Result<(), String> {
+    let closure = Closure::wrap(Box::new(handler) as Box<dyn Fn(JsValue)>);
+    let value = listen(event, &closure).await;
+
+    if value.is_undefined() || value.is_function() {
+        closure.forget();
+        Ok(())
+    } else {
+        Err(stringify_js_error(value))
+    }
 }
 
 async fn browse_path(command: &str) -> Result<Option<String>, String> {
