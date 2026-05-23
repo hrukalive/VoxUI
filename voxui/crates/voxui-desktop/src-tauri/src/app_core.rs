@@ -2,7 +2,7 @@ use anyhow::{bail, Context, Result};
 
 use crate::generation_queue::{GenerationQueue, HistoryItem};
 use crate::model_discovery::discover_models;
-use crate::types::{AppConfig, AppSnapshot, LoadUiState, ModelChoice};
+use crate::types::{AppConfig, AppSnapshot, ConfigPatch, LoadUiState, ModelChoice};
 
 #[derive(Debug)]
 pub struct AppCore {
@@ -44,6 +44,53 @@ impl AppCore {
         }
     }
 
+    pub fn apply_patch(&mut self, patch: ConfigPatch) -> Result<AppSnapshot> {
+        if let Some(model_root) = patch.model_root {
+            self.config.model_root = model_root;
+            self.rescan_models()?;
+        }
+
+        if let Some(selected_model_id) = patch.selected_model_id {
+            self.selected_model_id = selected_model_id.clone();
+            self.config.selected_model_id = selected_model_id;
+        }
+
+        if let Some(language) = patch.language {
+            self.config.language = language;
+        }
+        if let Some(backend) = patch.backend {
+            self.config.backend = backend;
+        }
+        if let Some(audio_host) = patch.audio_host {
+            self.config.audio_host = audio_host;
+        }
+        if let Some(audio_device) = patch.audio_device {
+            self.config.audio_device = audio_device;
+        }
+        if let Some(volume) = patch.volume {
+            self.config.volume = volume.clamp(0.0, 1.0);
+        }
+        if let Some(max_input_chars) = patch.max_input_chars {
+            self.config.max_input_chars = max_input_chars.max(1);
+        }
+        if let Some(generation) = patch.generation {
+            self.config.generation = generation;
+        }
+
+        Ok(self.snapshot())
+    }
+
+    pub fn rescan_models(&mut self) -> Result<Vec<ModelChoice>> {
+        self.models = match self.config.model_root.as_deref() {
+            Some(root) => discover_models(root)?,
+            None => Vec::new(),
+        };
+        self.selected_model_id =
+            select_existing_model(self.selected_model_id.clone(), &self.models);
+        self.config.selected_model_id = self.selected_model_id.clone();
+        Ok(self.models.clone())
+    }
+
     pub fn enqueue_generation(&mut self, text: String) -> Result<HistoryItem> {
         let text = text.trim().to_string();
         if text.is_empty() {
@@ -68,6 +115,14 @@ impl AppCore {
             .find(|item| item.id == id)
             .cloned()
             .context("queued item was not found after enqueue")
+    }
+
+    pub fn cancel_model_load_state(&mut self) {
+        self.load_state = LoadUiState::Idle;
+    }
+
+    pub fn cancel_generation_item(&mut self, item_id: &str) -> bool {
+        self.queue.cancel_queued(item_id)
     }
 
     pub fn set_loaded_model_for_test(&mut self, model_id: String) {
@@ -98,4 +153,124 @@ fn select_existing_model(saved: Option<String>, models: &[ModelChoice]) -> Optio
     }
 
     models.first().map(|model| model.id.clone())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+    use std::path::Path;
+
+    use tempfile::TempDir;
+
+    use super::*;
+    use crate::types::{BackendKind, ConfigPatch, GenerationSettings, LanguageMode};
+
+    #[test]
+    fn apply_patch_rescans_model_root_and_clamps_values() {
+        let temp = TempDir::new().unwrap();
+        write_model(temp.path(), "alpha");
+
+        let mut core = AppCore::from_config(AppConfig::default()).unwrap();
+        let snapshot = core
+            .apply_patch(ConfigPatch {
+                model_root: Some(Some(temp.path().to_path_buf())),
+                selected_model_id: None,
+                language: Some(LanguageMode::English),
+                backend: Some(BackendKind::Cuda),
+                audio_host: Some(Some("host-a".to_string())),
+                audio_device: Some(Some("device-a".to_string())),
+                volume: Some(1.25),
+                max_input_chars: Some(0),
+                generation: Some(GenerationSettings {
+                    cfg_value: 3.0,
+                    ..GenerationSettings::default()
+                }),
+            })
+            .unwrap();
+
+        assert_eq!(snapshot.models.len(), 1);
+        assert_eq!(snapshot.selected_model_id.as_deref(), Some("alpha"));
+        assert_eq!(snapshot.config.selected_model_id.as_deref(), Some("alpha"));
+        assert_eq!(snapshot.config.language, LanguageMode::English);
+        assert_eq!(snapshot.config.backend, BackendKind::Cuda);
+        assert_eq!(snapshot.config.audio_host.as_deref(), Some("host-a"));
+        assert_eq!(snapshot.config.audio_device.as_deref(), Some("device-a"));
+        assert_eq!(snapshot.config.volume, 1.0);
+        assert_eq!(snapshot.config.max_input_chars, 1);
+        assert_eq!(snapshot.config.generation.cfg_value, 3.0);
+    }
+
+    #[test]
+    fn rescan_models_preserves_valid_selection_and_updates_config() {
+        let temp = TempDir::new().unwrap();
+        write_model(temp.path(), "alpha");
+        write_model(temp.path(), "beta");
+
+        let mut config = AppConfig {
+            model_root: Some(temp.path().to_path_buf()),
+            selected_model_id: Some("beta".to_string()),
+            ..AppConfig::default()
+        };
+        let mut core = AppCore::from_config(config.clone()).unwrap();
+
+        fs::remove_file(temp.path().join("beta").join("model.gguf")).unwrap();
+        let models = core.rescan_models().unwrap();
+
+        config.selected_model_id = Some("alpha".to_string());
+        assert_eq!(models.len(), 1);
+        assert_eq!(core.snapshot().selected_model_id.as_deref(), Some("alpha"));
+        assert_eq!(
+            core.snapshot().config.selected_model_id,
+            config.selected_model_id
+        );
+    }
+
+    #[test]
+    fn apply_patch_can_clear_nullable_config_fields() {
+        let mut core = AppCore::from_config(AppConfig {
+            selected_model_id: Some("missing".to_string()),
+            audio_host: Some("host-a".to_string()),
+            audio_device: Some("device-a".to_string()),
+            ..AppConfig::default()
+        })
+        .unwrap();
+
+        let snapshot = core
+            .apply_patch(ConfigPatch {
+                model_root: Some(None),
+                selected_model_id: Some(None),
+                language: None,
+                backend: None,
+                audio_host: Some(None),
+                audio_device: Some(None),
+                volume: Some(-0.5),
+                max_input_chars: None,
+                generation: None,
+            })
+            .unwrap();
+
+        assert!(snapshot.models.is_empty());
+        assert_eq!(snapshot.selected_model_id, None);
+        assert_eq!(snapshot.config.selected_model_id, None);
+        assert_eq!(snapshot.config.audio_host, None);
+        assert_eq!(snapshot.config.audio_device, None);
+        assert_eq!(snapshot.config.volume, 0.0);
+    }
+
+    #[test]
+    fn cancel_generation_item_only_cancels_queued_items() {
+        let mut core = AppCore::from_config(AppConfig::default()).unwrap();
+        core.set_loaded_model_for_test("alpha".to_string());
+        let item = core.enqueue_generation("hello".to_string()).unwrap();
+
+        assert!(core.cancel_generation_item(&item.id));
+        assert!(!core.cancel_generation_item(&item.id));
+        assert!(!core.cancel_generation_item("missing"));
+    }
+
+    fn write_model(root: &Path, name: &str) {
+        let model_dir = root.join(name);
+        fs::create_dir_all(&model_dir).unwrap();
+        fs::write(model_dir.join("model.gguf"), b"model").unwrap();
+    }
 }

@@ -4,6 +4,14 @@ use serde::{Deserialize, Serialize};
 
 use crate::generation_queue::HistoryItem;
 
+fn deserialize_double_option<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(deserializer).map(Some)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LanguageMode {
@@ -79,6 +87,89 @@ impl Default for AppConfig {
             generation: GenerationSettings::default(),
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CommandResult {
+    pub ok: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ConfigPatch {
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_double_option"
+    )]
+    pub model_root: Option<Option<PathBuf>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_double_option"
+    )]
+    pub selected_model_id: Option<Option<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language: Option<LanguageMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backend: Option<BackendKind>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_double_option"
+    )]
+    pub audio_host: Option<Option<String>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_double_option"
+    )]
+    pub audio_device: Option<Option<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub volume: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_input_chars: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub generation: Option<GenerationSettings>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ModelLoadProgressEvent {
+    pub phase: String,
+    pub loaded_bytes: u64,
+    pub total_bytes: u64,
+    pub component: Option<String>,
+    pub component_index: usize,
+    pub component_total: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ModelLoadDoneEvent {
+    pub status: String,
+    pub selected_model_id: Option<String>,
+    pub loaded_model_id: Option<String>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GenerationProgressEvent {
+    pub item_id: String,
+    pub current: usize,
+    pub total: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GenerationDoneEvent {
+    pub item_id: String,
+    pub status: String,
+    pub error: Option<String>,
+    pub sample_rate: Option<u32>,
+    pub duration_seconds: Option<f32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PlaybackStateEvent {
+    pub item_id: Option<String>,
+    pub state: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
