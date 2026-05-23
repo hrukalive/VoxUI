@@ -118,6 +118,10 @@ impl AppCore {
     }
 
     pub fn cancel_model_load_state(&mut self) {
+        self.mark_load_finished_without_swap();
+    }
+
+    pub fn mark_load_finished_without_swap(&mut self) {
         self.load_state = LoadUiState::Idle;
     }
 
