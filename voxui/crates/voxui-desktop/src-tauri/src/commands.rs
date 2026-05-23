@@ -2,8 +2,10 @@ use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 
 use candle_core::Device;
-use tauri::{Emitter, State, Window};
+use tauri::{AppHandle, Emitter, State, Window};
+use tauri_plugin_dialog::DialogExt;
 use tokio::task;
+use voxui_audio::{AudioPlayer, AudioSystem};
 use voxui_inference::VoxCPMEngine;
 
 use crate::app_core::AppCore;
@@ -41,6 +43,50 @@ pub fn set_config_patch(
 #[tauri::command]
 pub fn discover_models(state: State<'_, SharedAppCore>) -> Result<Vec<ModelChoice>, String> {
     with_core(state, |core| core.rescan_models())
+}
+
+#[tauri::command]
+pub fn browse_model_dir(app: AppHandle) -> Result<Option<String>, String> {
+    Ok(app
+        .dialog()
+        .file()
+        .blocking_pick_folder()
+        .map(|path| path.to_string()))
+}
+
+#[tauri::command]
+pub fn browse_prompt_wav(app: AppHandle) -> Result<Option<String>, String> {
+    browse_wav_file(app)
+}
+
+#[tauri::command]
+pub fn browse_reference_wav(app: AppHandle) -> Result<Option<String>, String> {
+    browse_wav_file(app)
+}
+
+#[tauri::command]
+pub fn test_audio(state: State<'_, SharedAppCore>) -> Result<CommandResult, String> {
+    let config = with_core(state, |core| Ok(core.snapshot().config))?;
+    let system = AudioSystem::new();
+    let host = config
+        .audio_host
+        .clone()
+        .unwrap_or_else(|| system.default_host_name());
+    let device = config
+        .audio_device
+        .clone()
+        .map(Ok)
+        .unwrap_or_else(|| system.default_device_name(&host))
+        .map_err(|err| err.to_string())?;
+    let sample_rate = 48_000;
+    let samples = crate::audio::sine_with_fades(sample_rate, 48_000, 440.0, config.volume);
+    let mut player =
+        AudioPlayer::new(&host, &device, sample_rate).map_err(|err| err.to_string())?;
+    player
+        .play_blocking(samples)
+        .map_err(|err| err.to_string())?;
+
+    Ok(CommandResult { ok: true })
 }
 
 #[tauri::command]
@@ -252,6 +298,15 @@ fn load_engine_for_choice(
     }
 
     Ok(engine)
+}
+
+fn browse_wav_file(app: AppHandle) -> Result<Option<String>, String> {
+    Ok(app
+        .dialog()
+        .file()
+        .add_filter("WAV audio", &["wav"])
+        .blocking_pick_file()
+        .map(|path| path.to_string()))
 }
 
 fn spawn_generation(window: Window, shared: SharedAppCore, item_id: String) {

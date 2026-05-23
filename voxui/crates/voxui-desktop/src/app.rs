@@ -93,6 +93,26 @@ pub fn App() -> impl IntoView {
                 labels=labels
                 open=move || settings_open.get()
                 on_close=move || set_settings_open.set(false)
+                on_browse_model_dir=move || {
+                    spawn_local(async move {
+                        let _ = crate::tauri_api::browse_model_dir().await;
+                    });
+                }
+                on_browse_prompt_wav=move || {
+                    spawn_local(async move {
+                        let _ = crate::tauri_api::browse_prompt_wav().await;
+                    });
+                }
+                on_browse_reference_wav=move || {
+                    spawn_local(async move {
+                        let _ = crate::tauri_api::browse_reference_wav().await;
+                    });
+                }
+                on_test_audio=move || {
+                    spawn_local(async move {
+                        let _ = crate::tauri_api::test_audio().await;
+                    });
+                }
             />
             <LoadProgressModal
                 labels=labels

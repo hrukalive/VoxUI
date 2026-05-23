@@ -5,6 +5,9 @@ use wasm_bindgen::prelude::*;
 extern "C" {
     #[wasm_bindgen(catch, js_namespace = ["window", "__TAURI__", "core"])]
     async fn invoke(cmd: &str, args: JsValue) -> Result<JsValue, JsValue>;
+
+    #[wasm_bindgen(js_namespace = ["window", "__TAURI__", "event"])]
+    async fn listen(event: &str, handler: &Closure<dyn Fn(JsValue)>) -> JsValue;
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -121,6 +124,18 @@ pub async fn get_app_state() -> Result<AppSnapshot, String> {
     serde_wasm_bindgen::from_value(value).map_err(|err| err.to_string())
 }
 
+pub async fn browse_model_dir() -> Result<Option<String>, String> {
+    browse_path("browse_model_dir").await
+}
+
+pub async fn browse_prompt_wav() -> Result<Option<String>, String> {
+    browse_path("browse_prompt_wav").await
+}
+
+pub async fn browse_reference_wav() -> Result<Option<String>, String> {
+    browse_path("browse_reference_wav").await
+}
+
 pub async fn enqueue_generation(text: String) -> Result<HistoryItem, String> {
     let args = serde_wasm_bindgen::to_value(&serde_json::json!({ "text": text }))
         .map_err(|err| err.to_string())?;
@@ -147,6 +162,21 @@ pub async fn regenerate(item_id: String) -> Result<(), String> {
         .await
         .map_err(stringify_js_error)
         .map(|_| ())
+}
+
+pub async fn test_audio() -> Result<(), String> {
+    invoke("test_audio", JsValue::NULL)
+        .await
+        .map_err(stringify_js_error)
+        .map(|_| ())
+}
+
+async fn browse_path(command: &str) -> Result<Option<String>, String> {
+    let value = invoke(command, JsValue::NULL)
+        .await
+        .map_err(stringify_js_error)?;
+
+    serde_wasm_bindgen::from_value(value).map_err(|err| err.to_string())
 }
 
 fn stringify_js_error(value: JsValue) -> String {

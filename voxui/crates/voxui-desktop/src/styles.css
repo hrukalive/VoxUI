@@ -209,6 +209,8 @@ body {
 
 .modal {
   width: min(520px, 100%);
+  max-height: calc(100vh - 48px);
+  overflow: auto;
   border: 1px solid #3a4656;
   border-radius: 8px;
   background: #151b23;
@@ -230,28 +232,105 @@ body {
   font-weight: 650;
 }
 
+.settings-modal {
+  width: min(760px, 100%);
+}
+
+.settings-content {
+  display: grid;
+  gap: 18px;
+}
+
+.settings-section {
+  display: grid;
+  gap: 12px;
+}
+
+.settings-section h3 {
+  margin: 0;
+  color: #f2f4f7;
+  font-size: 14px;
+  font-weight: 650;
+}
+
 .settings-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 14px;
+  gap: 12px 14px;
 }
 
-.settings-grid label {
+.settings-field {
   display: grid;
   gap: 6px;
   color: #a9b3c1;
   font-size: 13px;
 }
 
-.settings-grid input,
-.settings-grid select {
+.settings-field input,
+.settings-field select,
+.settings-field textarea {
   min-width: 0;
-  height: 34px;
   border: 1px solid #3a4656;
   border-radius: 6px;
   background: #10161f;
   color: #e7eaee;
+  font: inherit;
+}
+
+.settings-field input,
+.settings-field select {
+  height: 34px;
   padding: 0 10px;
+}
+
+.settings-field textarea {
+  min-height: 74px;
+  resize: vertical;
+  padding: 8px 10px;
+}
+
+.settings-field-with-button {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+}
+
+.settings-field-with-button label {
+  grid-column: 1 / -1;
+}
+
+.settings-action-field {
+  align-content: end;
+}
+
+.settings-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #a9b3c1;
+  font-size: 13px;
+}
+
+.settings-checkbox input {
+  width: 16px;
+  height: 16px;
+  accent-color: #d5b15b;
+}
+
+.settings-field input[type="range"] {
+  padding: 0;
+  accent-color: #d5b15b;
+}
+
+@media (max-width: 820px) {
+  .settings-grid,
+  .settings-field-with-button {
+    grid-template-columns: 1fr;
+  }
+}
+
+.settings-grid input,
+.settings-grid select {
   font: inherit;
 }
 
