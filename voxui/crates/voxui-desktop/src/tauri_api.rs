@@ -107,6 +107,12 @@ pub enum HistoryStatus {
     Playing,
 }
 
+#[derive(Debug, Serialize)]
+struct ItemArgs {
+    #[serde(rename = "itemId")]
+    item_id: String,
+}
+
 pub async fn get_app_state() -> Result<AppSnapshot, String> {
     let value = invoke("get_app_state", JsValue::NULL)
         .await
@@ -126,8 +132,8 @@ pub async fn enqueue_generation(text: String) -> Result<HistoryItem, String> {
 }
 
 pub async fn play_audio(item_id: String) -> Result<(), String> {
-    let args = serde_wasm_bindgen::to_value(&serde_json::json!({ "item_id": item_id }))
-        .map_err(|err| err.to_string())?;
+    let args =
+        serde_wasm_bindgen::to_value(&ItemArgs { item_id }).map_err(|err| err.to_string())?;
     invoke("play_audio", args)
         .await
         .map_err(stringify_js_error)
@@ -135,8 +141,8 @@ pub async fn play_audio(item_id: String) -> Result<(), String> {
 }
 
 pub async fn regenerate(item_id: String) -> Result<(), String> {
-    let args = serde_wasm_bindgen::to_value(&serde_json::json!({ "item_id": item_id }))
-        .map_err(|err| err.to_string())?;
+    let args =
+        serde_wasm_bindgen::to_value(&ItemArgs { item_id }).map_err(|err| err.to_string())?;
     invoke("regenerate", args)
         .await
         .map_err(stringify_js_error)
