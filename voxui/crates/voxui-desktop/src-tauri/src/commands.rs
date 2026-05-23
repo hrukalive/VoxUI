@@ -259,7 +259,7 @@ fn spawn_generation(window: Window, shared: SharedAppCore, item_id: String) {
         let progress_window = window.clone();
         let progress_item_id = item_id.clone();
         let result = match shared.lock() {
-            Ok(mut core) => core.generate_item(&item_id, |current, total| {
+            Ok(mut core) => core.run_generation_now(&item_id, |current, total| {
                 let _ = progress_window.emit(
                     "generation_progress",
                     GenerationProgressEvent {
@@ -269,7 +269,7 @@ fn spawn_generation(window: Window, shared: SharedAppCore, item_id: String) {
                     },
                 );
             }),
-            Err(_) => Err(anyhow::anyhow!("app state lock poisoned")),
+            Err(_) => Err("app state lock poisoned".to_string()),
         };
 
         let done = match result {

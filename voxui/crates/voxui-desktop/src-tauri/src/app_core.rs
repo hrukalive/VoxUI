@@ -164,12 +164,16 @@ impl AppCore {
             .unwrap_or(false)
     }
 
-    pub fn generate_item<F>(&mut self, item_id: &str, progress: F) -> Result<(u32, f32)>
+    pub fn run_generation_now<F>(
+        &mut self,
+        item_id: &str,
+        progress: F,
+    ) -> Result<(u32, f32), String>
     where
         F: Fn(usize, usize),
     {
         if !self.queue.mark_generating(item_id) {
-            bail!("unknown history item: {item_id}");
+            return Err(format!("unknown history item: {item_id}"));
         }
 
         let result = self.generate_item_inner(item_id, progress);
@@ -179,7 +183,8 @@ impl AppCore {
                 Ok((sample_rate, duration_seconds))
             }
             Err(error) => {
-                self.queue.mark_failed(item_id, error.to_string());
+                let error = error.to_string();
+                self.queue.mark_failed(item_id, error.clone());
                 Err(error)
             }
         }
