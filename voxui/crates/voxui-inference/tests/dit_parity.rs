@@ -33,3 +33,43 @@ fn first_dit_patch_matches_python_trace_with_fixed_noise() {
         .unwrap();
     voxui_inference::trace::assert_close(&actual, &expected, 8e-3).unwrap();
 }
+
+#[test]
+fn voxcpm05_first_dit_patch_matches_python_trace_with_fixed_noise() {
+    let root = repo_root();
+    let model_dir = root.join("models/voxcpm05-fp16");
+    let loader = GgufModelLoader::from_model_dir(&model_dir, Device::Cpu).unwrap();
+    let config = ModelConfig::load(&model_dir, ModelVariant::VoxCpm05).unwrap();
+    let dit = DiT::load_from_config(&loader, &config).unwrap();
+
+    let trace =
+        voxui_inference::trace::TraceCase::load(root.join("goldens/voxcpm05_zero_shot")).unwrap();
+    let cond = trace.tensor("first_dit_cond").unwrap();
+    let mu = trace.tensor("first_dit_mu").unwrap();
+    let noise = trace.tensor("first_dit_noise").unwrap();
+    let expected = trace.tensor("first_dit_patch").unwrap();
+    let actual = dit
+        .solve_euler_with_noise(&mu, &cond, &noise, 4, 2.0)
+        .unwrap();
+    voxui_inference::trace::assert_close(&actual, &expected, 8e-3).unwrap();
+}
+
+#[test]
+fn voxcpm15_first_dit_patch_matches_python_trace_with_fixed_noise() {
+    let root = repo_root();
+    let model_dir = root.join("models/voxcpm15-fp16");
+    let loader = GgufModelLoader::from_model_dir(&model_dir, Device::Cpu).unwrap();
+    let config = ModelConfig::load(&model_dir, ModelVariant::VoxCpm15).unwrap();
+    let dit = DiT::load_from_config(&loader, &config).unwrap();
+
+    let trace =
+        voxui_inference::trace::TraceCase::load(root.join("goldens/voxcpm15_zero_shot")).unwrap();
+    let cond = trace.tensor("first_dit_cond").unwrap();
+    let mu = trace.tensor("first_dit_mu").unwrap();
+    let noise = trace.tensor("first_dit_noise").unwrap();
+    let expected = trace.tensor("first_dit_patch").unwrap();
+    let actual = dit
+        .solve_euler_with_noise(&mu, &cond, &noise, 4, 2.0)
+        .unwrap();
+    voxui_inference::trace::assert_close(&actual, &expected, 8e-3).unwrap();
+}

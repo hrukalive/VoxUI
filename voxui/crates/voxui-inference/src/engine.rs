@@ -972,6 +972,59 @@ fn latent_to_patches(latent: &Tensor, patch_size: usize) -> Result<Tensor> {
         .map_err(Into::into)
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::manifest::ModelVariant;
+
+    #[test]
+    fn voxcpm05_manifest_rates_give_python_patch_audio_lengths() {
+        let model = ModelConfig {
+            schema_version: 2,
+            architecture: "voxcpm".to_string(),
+            variant: ModelVariant::VoxCpm05,
+            special_tokens: crate::manifest::SpecialTokens {
+                audio_start: 101,
+                audio_end: 102,
+                ref_audio_start: None,
+                ref_audio_end: None,
+            },
+            patch_size: 2,
+            feat_dim: 64,
+            scalar_quantization_latent_dim: 256,
+            scalar_quantization_scale: 9.0,
+            audio_vae: crate::manifest::AudioVaeManifest {
+                encoder_dim: Some(128),
+                decoder_dim: Some(1536),
+                sample_rate: 16_000,
+                out_sample_rate: None,
+                latent_dim: 64,
+                chunk_size: 640,
+                decode_chunk_size: 640,
+                encoder_rates: vec![2, 5, 8, 8],
+                decoder_rates: vec![8, 8, 5, 2],
+            },
+            lm_config: serde_json::json!({}),
+            encoder_config: serde_json::json!({}),
+            dit_config: serde_json::json!({}),
+            residual_lm_num_layers: Some(6),
+            residual_lm_no_rope: Some(false),
+        };
+
+        let audio_chunk_size =
+            product_or_manifest(&model.audio_vae.encoder_rates, model.audio_vae.chunk_size);
+        let decode_chunk_size = product_or_manifest(
+            &model.audio_vae.decoder_rates,
+            model.audio_vae.decode_chunk_size,
+        );
+
+        assert_eq!(audio_chunk_size, 640);
+        assert_eq!(decode_chunk_size, 640);
+        assert_eq!(model.patch_size * audio_chunk_size, 1280);
+        assert_eq!(model.patch_size * decode_chunk_size, 1280);
+    }
+}
+
 fn patches_to_latent(patches: &[Tensor], latent_dim: usize, patch_size: usize) -> Result<Tensor> {
     if patches.is_empty() {
         bail!("no latent patches to decode");

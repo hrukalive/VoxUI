@@ -43,6 +43,19 @@ fn audiovae_decode_matches_python_trace_head() {
 }
 
 #[test]
+fn voxcpm05_audiovae_decode_matches_python_trace_head() {
+    let root = repo_root();
+    let vae = load_vae(&root, "voxcpm05-fp16", ModelVariant::VoxCpm05);
+
+    let trace =
+        voxui_inference::trace::TraceCase::load(root.join("goldens/voxcpm05_zero_shot")).unwrap();
+    let latent = trace.tensor("generated_latent").unwrap();
+    let expected = trace.tensor("decoded_wav_head").unwrap();
+    let decoded = vae.decode(&latent).unwrap();
+    voxui_inference::trace::assert_close_prefix(&decoded, &expected, 2e-3).unwrap();
+}
+
+#[test]
 fn audiovae_encode_matches_python_trace() {
     let root = repo_root();
     let vae = load_voxcpm2_vae(&root);
@@ -55,8 +68,12 @@ fn audiovae_encode_matches_python_trace() {
 }
 
 fn load_voxcpm2_vae(root: &Path) -> AudioVAE {
-    let model_dir = root.join("models/voxcpm2-fp16");
+    load_vae(root, "voxcpm2-fp16", ModelVariant::VoxCpm2)
+}
+
+fn load_vae(root: &Path, model_name: &str, variant: ModelVariant) -> AudioVAE {
+    let model_dir = root.join("models").join(model_name);
     let loader = GgufModelLoader::from_model_dir(&model_dir, Device::Cpu).unwrap();
-    let config = ModelConfig::load(&model_dir, ModelVariant::VoxCpm2).unwrap();
+    let config = ModelConfig::load(&model_dir, variant).unwrap();
     AudioVAE::load_from_config(&loader, &config.audio_vae).unwrap()
 }

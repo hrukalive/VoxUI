@@ -126,9 +126,10 @@ impl ModelConfig {
             .context("config.json must include architecture or architectures")?;
         validate_config_architecture(&architecture, variant)?;
 
+        let defaults = default_audio_vae_config(variant);
         let audio_vae = AudioVaeManifest {
-            encoder_dim: raw.audio_vae_config.encoder_dim,
-            decoder_dim: raw.audio_vae_config.decoder_dim,
+            encoder_dim: raw.audio_vae_config.encoder_dim.or(defaults.encoder_dim),
+            decoder_dim: raw.audio_vae_config.decoder_dim.or(defaults.decoder_dim),
             sample_rate: raw
                 .audio_vae_config
                 .sample_rate
@@ -139,10 +140,26 @@ impl ModelConfig {
                 .latent_dim
                 .or(raw.feat_dim)
                 .unwrap_or(64),
-            chunk_size: raw.audio_vae_config.chunk_size.unwrap_or(20),
-            decode_chunk_size: raw.audio_vae_config.decode_chunk_size.unwrap_or(240),
-            encoder_rates: raw.audio_vae_config.encoder_rates,
-            decoder_rates: raw.audio_vae_config.decoder_rates,
+            chunk_size: raw
+                .audio_vae_config
+                .chunk_size
+                .or(defaults.chunk_size)
+                .unwrap_or(20),
+            decode_chunk_size: raw
+                .audio_vae_config
+                .decode_chunk_size
+                .or(defaults.decode_chunk_size)
+                .unwrap_or(240),
+            encoder_rates: if raw.audio_vae_config.encoder_rates.is_empty() {
+                defaults.encoder_rates
+            } else {
+                raw.audio_vae_config.encoder_rates
+            },
+            decoder_rates: if raw.audio_vae_config.decoder_rates.is_empty() {
+                defaults.decoder_rates
+            } else {
+                raw.audio_vae_config.decoder_rates
+            },
         };
 
         Ok(Self {
@@ -182,6 +199,44 @@ fn default_sample_rate(variant: ModelVariant) -> u32 {
         ModelVariant::VoxCpm05 => 16_000,
         ModelVariant::VoxCpm15 => 44_100,
         ModelVariant::VoxCpm2 => 16_000,
+    }
+}
+
+fn default_audio_vae_config(variant: ModelVariant) -> RawAudioVaeConfig {
+    match variant {
+        ModelVariant::VoxCpm05 => RawAudioVaeConfig {
+            encoder_dim: Some(128),
+            decoder_dim: Some(1536),
+            sample_rate: Some(16_000),
+            out_sample_rate: None,
+            latent_dim: Some(64),
+            chunk_size: Some(640),
+            decode_chunk_size: Some(640),
+            encoder_rates: vec![2, 5, 8, 8],
+            decoder_rates: vec![8, 8, 5, 2],
+        },
+        ModelVariant::VoxCpm15 => RawAudioVaeConfig {
+            encoder_dim: Some(64),
+            decoder_dim: Some(2048),
+            sample_rate: Some(44_100),
+            out_sample_rate: None,
+            latent_dim: Some(64),
+            chunk_size: Some(1764),
+            decode_chunk_size: Some(1764),
+            encoder_rates: vec![2, 3, 6, 7, 7],
+            decoder_rates: vec![7, 7, 6, 3, 2],
+        },
+        ModelVariant::VoxCpm2 => RawAudioVaeConfig {
+            encoder_dim: Some(128),
+            decoder_dim: Some(2048),
+            sample_rate: Some(16_000),
+            out_sample_rate: Some(48_000),
+            latent_dim: Some(64),
+            chunk_size: Some(640),
+            decode_chunk_size: Some(3840),
+            encoder_rates: vec![2, 5, 8, 8],
+            decoder_rates: vec![8, 6, 5, 2, 2, 2],
+        },
     }
 }
 

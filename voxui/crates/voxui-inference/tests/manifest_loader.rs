@@ -97,6 +97,34 @@ fn model_config_defaults_voxcpm05_output_sample_rate_to_16khz() {
 }
 
 #[test]
+fn model_config_defaults_voxcpm05_audio_vae_rates_to_python_defaults() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(
+        dir.path().join("config.json"),
+        r#"{
+            "architecture": "voxcpm",
+            "patch_size": 2,
+            "feat_dim": 64,
+            "scalar_quantization_latent_dim": 256,
+            "scalar_quantization_scale": 9,
+            "lm_config": {"hidden_size": 1024},
+            "encoder_config": {},
+            "dit_config": {}
+        }"#,
+    )
+    .unwrap();
+
+    let model = ModelConfig::load(dir.path(), ModelVariant::VoxCpm05).unwrap();
+
+    assert_eq!(model.audio_vae.encoder_dim, Some(128));
+    assert_eq!(model.audio_vae.decoder_dim, Some(1536));
+    assert_eq!(model.audio_vae.encoder_rates, vec![2, 5, 8, 8]);
+    assert_eq!(model.audio_vae.decoder_rates, vec![8, 8, 5, 2]);
+    assert_eq!(model.audio_vae.chunk_size, 640);
+    assert_eq!(model.audio_vae.decode_chunk_size, 640);
+}
+
+#[test]
 fn model_config_defaults_voxcpm15_output_sample_rate_to_44_1khz() {
     let dir = tempfile::tempdir().unwrap();
     fs::write(

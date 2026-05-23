@@ -387,10 +387,16 @@ impl DiT {
         let angles = positions
             .unsqueeze(1)?
             .broadcast_mul(&freqs.unsqueeze(0)?)?;
-        Ok((
-            (angles.cos()? * scaling_factor)?,
-            (angles.sin()? * scaling_factor)?,
-        ))
+        // The Python reference creates the RoPE buffers before loading weights and
+        // then casts the module through bfloat16. Match that cached-buffer rounding
+        // before returning to f32 runtime math.
+        let cos_cache = (angles.cos()? * scaling_factor)?
+            .to_dtype(DType::BF16)?
+            .to_dtype(DType::F32)?;
+        let sin_cache = (angles.sin()? * scaling_factor)?
+            .to_dtype(DType::BF16)?
+            .to_dtype(DType::F32)?;
+        Ok((cos_cache, sin_cache))
     }
 
     /// Run the DiT forward pass (single evaluation).
