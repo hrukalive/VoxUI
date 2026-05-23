@@ -45,3 +45,69 @@ body {
   color: #a9b3c1;
   font-size: 13px;
 }
+
+.model-select {
+  margin-left: auto;
+  min-width: 260px;
+  height: 34px;
+  border: 1px solid #3a4656;
+  border-radius: 6px;
+  background: #10161f;
+  color: #e7eaee;
+  padding: 0 10px;
+}
+
+.primary-button,
+.generate-button,
+.icon-button {
+  height: 34px;
+  border: 1px solid #3a4656;
+  border-radius: 6px;
+  background: #1d2632;
+  color: #e7eaee;
+  padding: 0 12px;
+}
+
+.primary-button,
+.generate-button {
+  background: #d5b15b;
+  border-color: #d5b15b;
+  color: #15120b;
+}
+
+.history-panel {
+  min-height: 0;
+  overflow: auto;
+  padding: 18px;
+}
+
+.empty-history {
+  margin: 0;
+  color: #8995a5;
+}
+
+.composer-panel {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 12px;
+  padding: 14px 18px;
+  border-top: 1px solid #2b3442;
+  background: #151b23;
+}
+
+.composer-input {
+  width: 100%;
+  min-height: 74px;
+  resize: none;
+  border: 1px solid #3a4656;
+  border-radius: 8px;
+  background: #10161f;
+  color: #e7eaee;
+  padding: 10px;
+  font: inherit;
+}
+
+.generate-button {
+  align-self: end;
+  min-width: 96px;
+}

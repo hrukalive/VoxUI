@@ -1,4 +1,6 @@
 mod app;
+mod i18n;
+mod tauri_api;
 
 use wasm_bindgen::JsCast;
 
