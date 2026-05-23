@@ -256,37 +256,73 @@ fn load_engine_for_choice(
 
 fn spawn_generation(window: Window, shared: SharedAppCore, item_id: String) {
     task::spawn_blocking(move || {
-        let progress_window = window.clone();
-        let progress_item_id = item_id.clone();
-        let result = match shared.lock() {
-            Ok(mut core) => core.run_generation_now(&item_id, |current, total| {
-                let _ = progress_window.emit(
-                    "generation_progress",
-                    GenerationProgressEvent {
-                        item_id: progress_item_id.clone(),
-                        current,
-                        total,
-                    },
-                );
-            }),
+        let run = match shared.lock() {
+            Ok(mut core) => core.begin_generation_run(&item_id),
             Err(_) => Err("app state lock poisoned".to_string()),
         };
+        let run = match run {
+            Ok(run) => run,
+            Err(error) => {
+                let _ = window.emit(
+                    "generation_done",
+                    GenerationDoneEvent {
+                        item_id,
+                        status: "skipped".to_string(),
+                        error: Some(error),
+                        sample_rate: None,
+                        duration_seconds: None,
+                    },
+                );
+                return;
+            }
+        };
+
+        let progress_window = window.clone();
+        let progress_shared = shared.clone();
+        let progress_item_id = run.item_id.clone();
+        let result = AppCore::execute_generation_run(run, |current, total| {
+            if let Ok(mut core) = progress_shared.lock() {
+                core.mark_generation_progress(&progress_item_id, current, total);
+            }
+            let _ = progress_window.emit(
+                "generation_progress",
+                GenerationProgressEvent {
+                    item_id: progress_item_id.clone(),
+                    current,
+                    total,
+                },
+            );
+        });
 
         let done = match result {
-            Ok((sample_rate, duration_seconds)) => GenerationDoneEvent {
-                item_id,
-                status: "ready".to_string(),
-                error: None,
-                sample_rate: Some(sample_rate),
-                duration_seconds: Some(duration_seconds),
-            },
-            Err(error) => GenerationDoneEvent {
-                item_id,
-                status: "failed".to_string(),
-                error: Some(error.to_string()),
-                sample_rate: None,
-                duration_seconds: None,
-            },
+            Ok((run, samples, duration_seconds)) => {
+                let item_id = run.item_id.clone();
+                let sample_rate = run.sample_rate;
+                if let Ok(mut core) = shared.lock() {
+                    core.finish_generation_success(run, samples, duration_seconds);
+                }
+                GenerationDoneEvent {
+                    item_id,
+                    status: "ready".to_string(),
+                    error: None,
+                    sample_rate: Some(sample_rate),
+                    duration_seconds: Some(duration_seconds),
+                }
+            }
+            Err((run, error)) => {
+                let item_id = run.item_id.clone();
+                let error = match shared.lock() {
+                    Ok(mut core) => core.finish_generation_failure(run, error),
+                    Err(_) => error,
+                };
+                GenerationDoneEvent {
+                    item_id,
+                    status: "failed".to_string(),
+                    error: Some(error),
+                    sample_rate: None,
+                    duration_seconds: None,
+                }
+            }
         };
         let _ = window.emit("generation_done", done);
     });

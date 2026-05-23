@@ -1,13 +1,13 @@
-use std::cell::RefCell;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use anyhow::{bail, Context, Result};
 
-use crate::generation_queue::{GenerationQueue, HistoryItem};
+use crate::generation_queue::{GenerationQueue, HistoryItem, HistoryStatus};
 use crate::model_discovery::discover_models;
 use crate::playback::{GeneratedAudio, GeneratedAudioCache};
 use crate::types::{AppConfig, AppSnapshot, ConfigPatch, LoadUiState, ModelChoice};
+use voxui_inference::{SynthesisRequest, VoxCPMEngine};
 
 struct ActiveModelLoad {
     id: u64,
@@ -25,6 +25,14 @@ pub struct AppCore {
     active_load: Option<ActiveModelLoad>,
     queue: GenerationQueue,
     audio_cache: GeneratedAudioCache,
+    active_generation_item_id: Option<String>,
+}
+
+pub struct GenerationRun {
+    pub item_id: String,
+    pub request: SynthesisRequest,
+    pub engine: VoxCPMEngine,
+    pub sample_rate: u32,
 }
 
 impl AppCore {
@@ -47,6 +55,7 @@ impl AppCore {
             active_load: None,
             queue: GenerationQueue::default(),
             audio_cache: GeneratedAudioCache::default(),
+            active_generation_item_id: None,
         })
     }
 
@@ -172,55 +181,134 @@ impl AppCore {
     where
         F: Fn(usize, usize),
     {
-        if !self.queue.mark_generating(item_id) {
-            return Err(format!("unknown history item: {item_id}"));
-        }
-
-        let result = self.generate_item_inner(item_id, progress);
+        let run = self.begin_generation_run(item_id)?;
+        let result = Self::execute_generation_run(run, progress);
         match result {
-            Ok((sample_rate, duration_seconds)) => {
-                self.queue.mark_ready(item_id);
+            Ok((run, samples, duration_seconds)) => {
+                let sample_rate = run.sample_rate;
+                self.finish_generation_success(run, samples, duration_seconds);
                 Ok((sample_rate, duration_seconds))
             }
-            Err(error) => {
-                let error = error.to_string();
-                self.queue.mark_failed(item_id, error.clone());
-                Err(error)
-            }
+            Err((run, error)) => Err(self.finish_generation_failure(run, error)),
         }
     }
 
-    fn generate_item_inner<F>(&mut self, item_id: &str, progress: F) -> Result<(u32, f32)>
+    pub fn begin_generation_run(&mut self, item_id: &str) -> Result<GenerationRun, String> {
+        let item = self
+            .queue
+            .items()
+            .iter()
+            .find(|item| item.id == item_id)
+            .ok_or_else(|| format!("unknown history item: {item_id}"))?;
+        if item.status != HistoryStatus::Queued {
+            return Err(format!(
+                "history item is not queued for generation: {item_id}"
+            ));
+        }
+        if self.active_generation_item_id.is_some() {
+            return Err("generation already in progress".to_string());
+        }
+        let request = self
+            .synthesis_request(item_id)
+            .map_err(|error| error.to_string())?;
+        let engine = self
+            .engine
+            .take()
+            .ok_or_else(|| "no model engine loaded for generation".to_string())?;
+        let sample_rate = engine.sample_rate();
+
+        if let Err(error) = self.begin_generation_state(item_id) {
+            self.engine = Some(engine);
+            return Err(error);
+        }
+
+        Ok(GenerationRun {
+            item_id: item_id.to_string(),
+            request,
+            engine,
+            sample_rate,
+        })
+    }
+
+    pub fn begin_generation_for_test(&mut self, item_id: &str) -> Result<(), String> {
+        self.begin_generation_state(item_id)
+    }
+
+    fn begin_generation_state(&mut self, item_id: &str) -> Result<(), String> {
+        let item = self
+            .queue
+            .items()
+            .iter()
+            .find(|item| item.id == item_id)
+            .ok_or_else(|| format!("unknown history item: {item_id}"))?;
+        if item.status != HistoryStatus::Queued {
+            return Err(format!(
+                "history item is not queued for generation: {item_id}"
+            ));
+        }
+        if self.active_generation_item_id.is_some() {
+            return Err("generation already in progress".to_string());
+        }
+        if !self.queue.mark_generating(item_id) {
+            return Err(format!("unknown history item: {item_id}"));
+        }
+        self.active_generation_item_id = Some(item_id.to_string());
+        Ok(())
+    }
+
+    pub fn mark_generation_progress(&mut self, item_id: &str, current: usize, total: usize) -> bool {
+        self.queue.mark_progress(item_id, current, total)
+    }
+
+    pub fn finish_generation_success(
+        &mut self,
+        run: GenerationRun,
+        samples: Vec<f32>,
+        duration_seconds: f32,
+    ) {
+        let item_id = run.item_id;
+        self.engine = Some(run.engine);
+        if self.active_generation_item_id.as_deref() == Some(item_id.as_str()) {
+            self.active_generation_item_id = None;
+        }
+        self.audio_cache.insert(
+            item_id.clone(),
+            GeneratedAudio {
+                samples,
+                sample_rate: run.sample_rate,
+            },
+        );
+        self.queue.mark_ready(&item_id);
+        let _ = duration_seconds;
+    }
+
+    pub fn finish_generation_failure(&mut self, run: GenerationRun, error: String) -> String {
+        let item_id = run.item_id;
+        self.engine = Some(run.engine);
+        if self.active_generation_item_id.as_deref() == Some(item_id.as_str()) {
+            self.active_generation_item_id = None;
+        }
+        self.queue.mark_failed(&item_id, error.clone());
+        error
+    }
+
+    pub fn execute_generation_run<F>(
+        mut run: GenerationRun,
+        progress: F,
+    ) -> std::result::Result<(GenerationRun, Vec<f32>, f32), (GenerationRun, String)>
     where
         F: Fn(usize, usize),
     {
-        let request = self.synthesis_request(item_id)?;
-        let engine = self
+        match run
             .engine
-            .as_mut()
-            .context("no model engine loaded for generation")?;
-        let sample_rate = engine.sample_rate();
-        let progress_item_id = item_id.to_string();
-        let queue = RefCell::new(&mut self.queue);
-        let samples = engine.generate_cancellable(
-            request,
-            |current, total| {
-                queue
-                    .borrow_mut()
-                    .mark_progress(&progress_item_id, current, total);
-                progress(current, total);
-            },
-            None,
-        )?;
-        let duration_seconds = samples.len() as f32 / sample_rate as f32;
-        self.audio_cache.insert(
-            item_id.to_string(),
-            GeneratedAudio {
-                samples,
-                sample_rate,
-            },
-        );
-        Ok((sample_rate, duration_seconds))
+            .generate_cancellable(run.request.clone(), progress, None)
+        {
+            Ok(samples) => {
+                let duration_seconds = samples.len() as f32 / run.sample_rate as f32;
+                Ok((run, samples, duration_seconds))
+            }
+            Err(error) => Err((run, error.to_string())),
+        }
     }
 
     pub fn synthesis_request_for_test(

@@ -1,9 +1,10 @@
 use std::fs;
+use std::path::PathBuf;
 
 use tempfile::TempDir;
 use voxui_desktop::app_core::{load_button_enabled, AppCore};
 use voxui_desktop::generation_queue::HistoryStatus;
-use voxui_desktop::types::{AppConfig, ConfigPatch, LoadUiState};
+use voxui_desktop::types::{AppConfig, ConfigPatch, GenerationSettings, LoadUiState};
 
 #[test]
 fn load_button_requires_selection_and_difference_from_loaded() {
@@ -111,15 +112,75 @@ fn enqueue_generation_creates_queued_item_when_loaded() {
 
 #[test]
 fn request_snapshot_converts_to_synthesis_request() {
-    let mut core = AppCore::from_config(AppConfig::default()).unwrap();
+    let mut core = AppCore::from_config(AppConfig {
+        generation: GenerationSettings {
+            cfg_value: 3.5,
+            inference_timesteps: 22,
+            min_len: 7,
+            max_len: 77,
+            retry_badcase: false,
+            retry_badcase_max_times: 9,
+            retry_badcase_ratio_threshold: 4.25,
+            prompt_wav_path: Some(PathBuf::from("prompt.wav")),
+            prompt_text: Some("prompt text".to_string()),
+            reference_wav_path: Some(PathBuf::from("reference.wav")),
+        },
+        ..AppConfig::default()
+    })
+    .unwrap();
     core.set_loaded_model_for_test("model".to_string());
     let item = core.enqueue_generation(" hello world ".to_string()).unwrap();
 
     let request = core.synthesis_request_for_test(&item.id).unwrap();
 
     assert_eq!(request.text, "hello world");
-    assert_eq!(request.inference_timesteps, 10);
-    assert_eq!(request.cfg_value, 2.0);
+    assert_eq!(request.prompt_wav_path, Some(PathBuf::from("prompt.wav")));
+    assert_eq!(request.prompt_text.as_deref(), Some("prompt text"));
+    assert_eq!(
+        request.reference_wav_path,
+        Some(PathBuf::from("reference.wav"))
+    );
+    assert_eq!(request.cfg_value, 3.5);
+    assert_eq!(request.inference_timesteps, 22);
+    assert_eq!(request.min_len, 7);
+    assert_eq!(request.max_len, 77);
+    assert!(!request.normalize);
+    assert!(!request.retry_badcase);
+    assert_eq!(request.retry_badcase_max_times, 9);
+    assert_eq!(request.retry_badcase_ratio_threshold, 4.25);
+}
+
+#[test]
+fn run_generation_now_does_not_revive_canceled_item() {
+    let mut core = AppCore::from_config(AppConfig::default()).unwrap();
+    core.set_loaded_model_for_test("model".to_string());
+    let item = core.enqueue_generation("hello".to_string()).unwrap();
+
+    assert!(core.cancel_generation_item(&item.id));
+    let error = core.run_generation_now(&item.id, |_, _| {}).unwrap_err();
+    let snapshot = core.snapshot();
+
+    assert!(error.contains("not queued"));
+    assert_eq!(snapshot.history[0].status, HistoryStatus::Canceled);
+    assert_eq!(snapshot.history[0].error, None);
+    assert!(!snapshot.history[0].has_audio);
+}
+
+#[test]
+fn begin_generation_rejects_second_active_generation_without_consuming_queue() {
+    let mut core = AppCore::from_config(AppConfig::default()).unwrap();
+    core.set_loaded_model_for_test("model".to_string());
+    let first = core.enqueue_generation("first".to_string()).unwrap();
+    let second = core.enqueue_generation("second".to_string()).unwrap();
+
+    core.begin_generation_for_test(&first.id).unwrap();
+    let error = core.begin_generation_for_test(&second.id).unwrap_err();
+    let snapshot = core.snapshot();
+
+    assert!(error.contains("generation already in progress"));
+    assert_eq!(snapshot.history[0].status, HistoryStatus::Generating);
+    assert_eq!(snapshot.history[1].status, HistoryStatus::Queued);
+    assert_eq!(snapshot.history[1].error, None);
 }
 
 #[test]
