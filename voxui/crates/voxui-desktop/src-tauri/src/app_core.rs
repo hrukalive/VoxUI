@@ -1,8 +1,16 @@
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+
 use anyhow::{bail, Context, Result};
 
 use crate::generation_queue::{GenerationQueue, HistoryItem};
 use crate::model_discovery::discover_models;
 use crate::types::{AppConfig, AppSnapshot, ConfigPatch, LoadUiState, ModelChoice};
+
+struct ActiveModelLoad {
+    id: u64,
+    cancel: Arc<AtomicBool>,
+}
 
 pub struct AppCore {
     config: AppConfig,
@@ -11,6 +19,8 @@ pub struct AppCore {
     loaded_model_id: Option<String>,
     load_state: LoadUiState,
     engine: Option<voxui_inference::VoxCPMEngine>,
+    next_load_id: u64,
+    active_load: Option<ActiveModelLoad>,
     queue: GenerationQueue,
 }
 
@@ -30,6 +40,8 @@ impl AppCore {
             loaded_model_id: None,
             load_state: LoadUiState::Idle,
             engine: None,
+            next_load_id: 1,
+            active_load: None,
             queue: GenerationQueue::default(),
         })
     }
@@ -47,11 +59,13 @@ impl AppCore {
 
     pub fn apply_patch(&mut self, patch: ConfigPatch) -> Result<AppSnapshot> {
         if let Some(model_root) = patch.model_root {
+            self.cancel_model_load_state();
             self.config.model_root = model_root;
             self.rescan_models()?;
         }
 
         if let Some(selected_model_id) = patch.selected_model_id {
+            self.cancel_model_load_state();
             self.selected_model_id = select_existing_model(selected_model_id, &self.models);
             self.config.selected_model_id = self.selected_model_id.clone();
         }
@@ -82,6 +96,7 @@ impl AppCore {
     }
 
     pub fn rescan_models(&mut self) -> Result<Vec<ModelChoice>> {
+        self.cancel_model_load_state();
         self.models = match self.config.model_root.as_deref() {
             Some(root) => discover_models(root)?,
             None => Vec::new(),
@@ -119,7 +134,10 @@ impl AppCore {
     }
 
     pub fn cancel_model_load_state(&mut self) {
-        self.mark_load_finished_without_swap();
+        if let Some(active_load) = self.active_load.take() {
+            active_load.cancel.store(true, Ordering::SeqCst);
+        }
+        self.load_state = LoadUiState::Idle;
     }
 
     pub fn selected_choice(&self) -> Result<ModelChoice> {
@@ -134,22 +152,62 @@ impl AppCore {
             .ok_or_else(|| anyhow::anyhow!("selected model is no longer available"))
     }
 
-    pub fn mark_load_started(&mut self) {
+    pub fn mark_load_started(&mut self) -> Result<(u64, Arc<AtomicBool>)> {
+        if self.active_load.is_some() || self.load_state == LoadUiState::Loading {
+            bail!("model load already in progress");
+        }
+
+        let load_id = self.next_load_id;
+        self.next_load_id = self.next_load_id.saturating_add(1);
+        let cancel = Arc::new(AtomicBool::new(false));
+        self.active_load = Some(ActiveModelLoad {
+            id: load_id,
+            cancel: cancel.clone(),
+        });
         self.load_state = LoadUiState::Loading;
+        Ok((load_id, cancel))
     }
 
     pub fn mark_load_success(
         &mut self,
+        load_id: u64,
         choice_id: String,
         engine: voxui_inference::VoxCPMEngine,
-    ) {
-        self.engine = Some(engine);
+    ) -> bool {
+        self.mark_load_success_inner(load_id, choice_id, Some(engine))
+    }
+
+    fn mark_load_success_inner(
+        &mut self,
+        load_id: u64,
+        choice_id: String,
+        engine: Option<voxui_inference::VoxCPMEngine>,
+    ) -> bool {
+        if !self.active_load_matches(load_id) {
+            return false;
+        }
+
+        self.active_load = None;
+        if let Some(engine) = engine {
+            self.engine = Some(engine);
+        }
         self.loaded_model_id = Some(choice_id);
         self.load_state = LoadUiState::Idle;
+        true
     }
 
     pub fn mark_load_finished_without_swap(&mut self) {
         self.load_state = LoadUiState::Idle;
+    }
+
+    pub fn mark_load_finished_without_swap_for_load(&mut self, load_id: u64) -> bool {
+        if !self.active_load_matches(load_id) {
+            return false;
+        }
+
+        self.active_load = None;
+        self.load_state = LoadUiState::Idle;
+        true
     }
 
     pub fn finish_model_load_for_test(&mut self, result: Result<(), String>) {
@@ -162,12 +220,30 @@ impl AppCore {
         }
     }
 
+    pub fn begin_model_load_for_test(&mut self) -> (u64, Arc<AtomicBool>) {
+        self.mark_load_started().unwrap()
+    }
+
+    pub fn complete_model_load_success_for_test(
+        &mut self,
+        load_id: u64,
+        choice_id: String,
+    ) -> bool {
+        self.mark_load_success_inner(load_id, choice_id, None)
+    }
+
     pub fn cancel_generation_item(&mut self, item_id: &str) -> bool {
         self.queue.cancel_queued(item_id)
     }
 
     pub fn set_loaded_model_for_test(&mut self, model_id: String) {
         self.loaded_model_id = Some(model_id);
+    }
+
+    fn active_load_matches(&self, load_id: u64) -> bool {
+        self.active_load
+            .as_ref()
+            .is_some_and(|active_load| active_load.id == load_id)
     }
 }
 

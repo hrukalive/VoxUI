@@ -46,35 +46,51 @@ pub fn load_model(
     state: State<'_, SharedAppCore>,
     choice_id: String,
 ) -> Result<crate::types::LoadStartResult, String> {
-    let choice = with_core(state.clone(), |core| {
+    let (choice, load_id, cancel) = with_core(state.clone(), |core| {
         let choice = core.selected_choice().map_err(|err| anyhow::anyhow!(err.to_string()))?;
         if choice.id != choice_id {
             return Err(anyhow::anyhow!(
                 "requested choice does not match selected model"
             ));
         }
-        core.mark_load_started();
-        Ok(choice)
+        let (load_id, cancel) = core.mark_load_started()?;
+        Ok((choice, load_id, cancel))
     })?;
 
     let shared = state.inner().clone();
     task::spawn_blocking(move || {
-        let result = load_engine_for_choice(&window, &choice);
+        let result = load_engine_for_choice(&window, &choice, &cancel);
         let done = match result {
             Ok(engine) => {
-                if let Ok(mut core) = shared.lock() {
-                    core.mark_load_success(choice.id.clone(), engine);
-                }
-                crate::types::ModelLoadDoneEvent {
-                    status: "success".to_string(),
-                    selected_model_id: Some(choice.id.clone()),
-                    loaded_model_id: Some(choice.id.clone()),
-                    error: None,
+                let loaded_model_id = if let Ok(mut core) = shared.lock() {
+                    if !core.mark_load_success(load_id, choice.id.clone(), engine) {
+                        return;
+                    }
+                    core.snapshot().loaded_model_id
+                } else {
+                    None
+                };
+                if loaded_model_id.is_none() {
+                    crate::types::ModelLoadDoneEvent {
+                        status: "error".to_string(),
+                        selected_model_id: Some(choice.id.clone()),
+                        loaded_model_id: None,
+                        error: Some("app state lock poisoned".to_string()),
+                    }
+                } else {
+                    crate::types::ModelLoadDoneEvent {
+                        status: "success".to_string(),
+                        selected_model_id: Some(choice.id.clone()),
+                        loaded_model_id,
+                        error: None,
+                    }
                 }
             }
             Err(error) => {
                 if let Ok(mut core) = shared.lock() {
-                    core.mark_load_finished_without_swap();
+                    if !core.mark_load_finished_without_swap_for_load(load_id) {
+                        return;
+                    }
                     let loaded = core.snapshot().loaded_model_id;
                     let _ = window.emit(
                         "model_load_done",
@@ -149,6 +165,7 @@ pub fn stop_audio(window: Window) -> Result<CommandResult, String> {
 fn load_engine_for_choice(
     window: &Window,
     choice: &crate::types::ModelChoice,
+    cancel: &AtomicBool,
 ) -> Result<VoxCPMEngine, String> {
     let total_bytes = choice.model_bytes + choice.lora_bytes;
     window
@@ -165,7 +182,6 @@ fn load_engine_for_choice(
         )
         .map_err(|err| err.to_string())?;
 
-    let cancel = AtomicBool::new(false);
     let mut engine = VoxCPMEngine::load_with_progress(
         &choice.model_dir,
         Device::Cpu,
@@ -182,7 +198,7 @@ fn load_engine_for_choice(
                 },
             );
         },
-        Some(&cancel),
+        Some(cancel),
     )
     .map_err(|err| err.to_string())?;
 
