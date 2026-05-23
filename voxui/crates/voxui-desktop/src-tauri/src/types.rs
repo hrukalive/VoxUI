@@ -2,6 +2,8 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+use crate::generation_queue::HistoryItem;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LanguageMode {
@@ -79,6 +81,13 @@ impl Default for AppConfig {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LoadUiState {
+    Idle,
+    Loading,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ModelChoice {
     pub id: String,
@@ -106,4 +115,14 @@ pub struct RequestSnapshot {
     pub model_id: String,
     pub backend: BackendKind,
     pub generation: GenerationSettings,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AppSnapshot {
+    pub config: AppConfig,
+    pub models: Vec<ModelChoice>,
+    pub selected_model_id: Option<String>,
+    pub loaded_model_id: Option<String>,
+    pub load_state: LoadUiState,
+    pub history: Vec<HistoryItem>,
 }
