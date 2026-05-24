@@ -12,7 +12,6 @@ clap = { version = "4", features = ["derive"] }
 rustyline = "14"
 anyhow.workspace = true
 candle-core.workspace = true
-itertools = "0.13"
 ctrlc = "3"
 voxui-inference = { path = "../voxui-inference" }
 voxui-audio = { path = "../voxui-audio" }
