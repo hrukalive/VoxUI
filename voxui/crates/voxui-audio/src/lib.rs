@@ -285,11 +285,21 @@ impl StreamingPlayer {
         }
     }
 
-    /// Block until all enqueued audio has been consumed by the output device.
-    pub fn flush(&self) {
+    /// Block until all enqueued audio has been consumed by the output device,
+    /// or until the optional cancel flag is set. Returns true if cancelled.
+    pub fn flush_until(&self, cancel: Option<&std::sync::atomic::AtomicBool>) -> bool {
         while self.producer.occupied_len() > 0 {
+            if cancel.is_some_and(|c| c.load(std::sync::atomic::Ordering::SeqCst)) {
+                return true;
+            }
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
+        false
+    }
+
+    /// Block until all enqueued audio has been consumed by the output device.
+    pub fn flush(&self) {
+        self.flush_until(None);
     }
 }
 

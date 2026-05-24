@@ -103,6 +103,9 @@ impl Runner {
             });
 
             for samples in rx {
+                if cancel.is_some_and(|c| c.load(Ordering::SeqCst)) {
+                    break;
+                }
                 player.push(&samples);
             }
 
@@ -110,7 +113,7 @@ impl Runner {
         });
 
         if let Err(e) = result {
-            if cancel.map(|c| c.load(Ordering::SeqCst)).unwrap_or(false) {
+            if cancel.is_some_and(|c| c.load(Ordering::SeqCst)) {
                 eprintln!();
                 return Ok(());
             }
@@ -118,10 +121,10 @@ impl Runner {
             return Err(e).context("synthesis failed");
         }
 
-        player.flush();
+        let cancelled = player.flush_until(cancel);
         eprintln!();
 
-        if cancel.map(|c| c.load(Ordering::SeqCst)).unwrap_or(false) {
+        if cancelled || cancel.is_some_and(|c| c.load(Ordering::SeqCst)) {
             return Ok(());
         }
 
@@ -161,7 +164,7 @@ impl Runner {
 
         eprintln!();
 
-        if cancel.map(|c| c.load(Ordering::SeqCst)).unwrap_or(false) {
+        if cancel.is_some_and(|c| c.load(Ordering::SeqCst)) {
             return Ok(());
         }
 
