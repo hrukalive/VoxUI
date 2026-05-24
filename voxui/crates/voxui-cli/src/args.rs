@@ -22,11 +22,11 @@ impl Args {
     /// Validate that model directory exists and contains required files,
     /// and that the optional LoRA file exists.
     pub fn validate(&self) -> Result<()> {
+        if !self.model.exists() {
+            bail!("model directory not found: {}", self.model.display());
+        }
         if !self.model.is_dir() {
-            bail!(
-                "model directory not found: {}",
-                self.model.display()
-            );
+            bail!("model path is not a directory: {}", self.model.display());
         }
 
         let required = ["model.gguf", "config.json", "tokenizer.json"];
@@ -48,7 +48,7 @@ impl Args {
             if !lora.exists() {
                 bail!("LoRA file not found: {}", lora.display());
             }
-            if lora.extension().and_then(|e| e.to_str()) != Some("gguf") {
+            if !lora.extension().and_then(|e| e.to_str()).is_some_and(|ext| ext.eq_ignore_ascii_case("gguf")) {
                 bail!("LoRA file must have .gguf extension: {}", lora.display());
             }
         }
