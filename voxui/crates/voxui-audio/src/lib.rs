@@ -214,6 +214,9 @@ impl StreamingPlayer {
             .ok_or_else(|| anyhow!("no default output device"))?;
         let default_config = device.default_output_config()?;
         let channels = default_config.channels();
+        if channels == 0 {
+            return Err(anyhow!("output device reports 0 channels"));
+        }
         let device_rate = default_config.sample_rate().0;
 
         let buffer_capacity =
@@ -242,9 +245,9 @@ impl StreamingPlayer {
                 let available = consumer.occupied_len();
                 let want = data.len() / ch;
                 let to_read = want.min(available);
-                let mut buf = vec![0.0f32; to_read];
-                consumer.pop_slice(&mut buf);
-                let mut sample_iter = buf.into_iter();
+                let mut buf = [0.0f32; 4096];
+                let actual = consumer.pop_slice(&mut buf[..to_read]);
+                let mut sample_iter = buf[..actual].iter().copied();
                 for frame in data.chunks_mut(ch) {
                     let val = sample_iter.next().unwrap_or(0.0);
                     for sample in frame.iter_mut() {
