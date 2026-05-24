@@ -70,9 +70,9 @@ pub fn SettingsModal(
                                         });
                                     }
                                 >
-                                    <option value="system">{labels.system}</option>
-                                    <option value="chinese">{labels.chinese}</option>
-                                    <option value="english">{labels.english}</option>
+                                    <option value="system" selected=move || config().language == LanguageMode::System>{labels.system}</option>
+                                    <option value="chinese" selected=move || config().language == LanguageMode::Chinese>{labels.chinese}</option>
+                                    <option value="english" selected=move || config().language == LanguageMode::English>{labels.english}</option>
                                 </select>
                             </label>
                         </section>
@@ -91,8 +91,8 @@ pub fn SettingsModal(
                                         });
                                     }
                                 >
-                                    <option value="cpu">{labels.cpu}</option>
-                                    <option value="cuda">{labels.cuda}</option>
+                                    <option value="cpu" selected=move || config().backend == BackendKind::Cpu>{labels.cpu}</option>
+                                    <option value="cuda" selected=move || config().backend == BackendKind::Cuda>{labels.cuda}</option>
                                 </select>
                             </label>
                         </section>
@@ -114,14 +114,22 @@ pub fn SettingsModal(
                                             });
                                         }
                                     >
-                                        <option value="">{"Default"}</option>
+                                        <option value="" selected=move || config().audio_host.is_none()>{"Default"}</option>
                                         <For
                                             each=move || audio_hosts_with_current(audio_state(), config().audio_host)
                                             key=|host| host.name.clone()
                                             children=move |host| {
                                                 let name = host.name;
-                                                let label = name.clone();
-                                                view! { <option value={name}>{label}</option> }
+                                                let value = name.clone();
+                                                let selected_name = name.clone();
+                                                view! {
+                                                    <option
+                                                        value={value}
+                                                        selected=move || config().audio_host.as_deref() == Some(selected_name.as_str())
+                                                    >
+                                                        {name}
+                                                    </option>
+                                                }
                                             }
                                         />
                                     </select>
@@ -139,14 +147,22 @@ pub fn SettingsModal(
                                             });
                                         }
                                     >
-                                        <option value="">{"Default"}</option>
+                                        <option value="" selected=move || config().audio_device.is_none()>{"Default"}</option>
                                         <For
                                             each=move || audio_devices_for_selected_host(audio_state(), &config())
                                             key=|device| format!("{}:{}", device.host_name, device.name)
                                             children=move |device| {
                                                 let name = device.name;
-                                                let label = name.clone();
-                                                view! { <option value={name}>{label}</option> }
+                                                let value = name.clone();
+                                                let selected_name = name.clone();
+                                                view! {
+                                                    <option
+                                                        value={value}
+                                                        selected=move || config().audio_device.as_deref() == Some(selected_name.as_str())
+                                                    >
+                                                        {name}
+                                                    </option>
+                                                }
                                             }
                                         />
                                     </select>

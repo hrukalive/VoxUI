@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc};
 
@@ -11,6 +12,11 @@ use voxui_inference::{SynthesisRequest, VoxCPMEngine};
 
 struct ActiveModelLoad {
     id: u64,
+    cancel: Arc<AtomicBool>,
+}
+
+struct ActiveGeneration {
+    item_id: String,
     cancel: Arc<AtomicBool>,
 }
 
@@ -28,8 +34,10 @@ pub struct AppCore {
     engine: Option<voxui_inference::VoxCPMEngine>,
     next_load_id: u64,
     active_load: Option<ActiveModelLoad>,
+    config_path: Option<PathBuf>,
     queue: GenerationQueue,
     audio_cache: GeneratedAudioCache,
+    active_generation: Option<ActiveGeneration>,
     active_generation_item_id: Option<String>,
     active_playback: Option<ActivePlayback>,
 }
@@ -37,8 +45,9 @@ pub struct AppCore {
 pub struct GenerationRun {
     pub item_id: String,
     pub request: SynthesisRequest,
-    pub engine: VoxCPMEngine,
+    pub engine: Option<VoxCPMEngine>,
     pub sample_rate: u32,
+    pub cancel: Arc<AtomicBool>,
 }
 
 pub struct PlaybackRun {
@@ -65,8 +74,10 @@ impl AppCore {
             engine: None,
             next_load_id: 1,
             active_load: None,
+            config_path: None,
             queue: GenerationQueue::default(),
             audio_cache: GeneratedAudioCache::default(),
+            active_generation: None,
             active_generation_item_id: None,
             active_playback: None,
         })
@@ -121,7 +132,12 @@ impl AppCore {
             self.config.generation = generation;
         }
 
+        self.persist_config()?;
         Ok(self.snapshot())
+    }
+
+    pub fn set_config_path(&mut self, path: PathBuf) {
+        self.config_path = Some(path);
     }
 
     pub fn rescan_models(&mut self) -> Result<Vec<ModelChoice>> {
@@ -276,14 +292,15 @@ impl AppCore {
         let request = self
             .synthesis_request(item_id)
             .map_err(|error| error.to_string())?;
-        let engine = self
-            .engine
-            .take()
-            .ok_or_else(|| "no model engine loaded for generation".to_string())?;
-        let sample_rate = engine.sample_rate();
+        let engine = self.engine.take();
+        let sample_rate = engine
+            .as_ref()
+            .map(VoxCPMEngine::sample_rate)
+            .unwrap_or(16_000);
+        let cancel = Arc::new(AtomicBool::new(false));
 
-        if let Err(error) = self.begin_generation_state(item_id) {
-            self.engine = Some(engine);
+        if let Err(error) = self.begin_generation_state(item_id, cancel.clone()) {
+            self.engine = engine;
             return Err(error);
         }
 
@@ -292,14 +309,30 @@ impl AppCore {
             request,
             engine,
             sample_rate,
+            cancel,
         })
     }
 
     pub fn begin_generation_for_test(&mut self, item_id: &str) -> Result<(), String> {
-        self.begin_generation_state(item_id)
+        self.begin_generation_state(item_id, Arc::new(AtomicBool::new(false)))
+            .map(|_| ())
     }
 
-    fn begin_generation_state(&mut self, item_id: &str) -> Result<(), String> {
+    pub fn begin_next_generation_run(&mut self) -> Result<Option<GenerationRun>, String> {
+        if self.active_generation_item_id.is_some() {
+            return Ok(None);
+        }
+        let Some(item_id) = self.queue.next_queued_id().map(str::to_string) else {
+            return Ok(None);
+        };
+        self.begin_generation_run(&item_id).map(Some)
+    }
+
+    fn begin_generation_state(
+        &mut self,
+        item_id: &str,
+        cancel: Arc<AtomicBool>,
+    ) -> Result<(), String> {
         let item = self
             .queue
             .items()
@@ -317,6 +350,10 @@ impl AppCore {
         if !self.queue.mark_generating(item_id) {
             return Err(format!("unknown history item: {item_id}"));
         }
+        self.active_generation = Some(ActiveGeneration {
+            item_id: item_id.to_string(),
+            cancel,
+        });
         self.active_generation_item_id = Some(item_id.to_string());
         Ok(())
     }
@@ -337,10 +374,10 @@ impl AppCore {
         duration_seconds: f32,
     ) {
         let item_id = run.item_id;
-        self.engine = Some(run.engine);
-        if self.active_generation_item_id.as_deref() == Some(item_id.as_str()) {
-            self.active_generation_item_id = None;
+        if let Some(engine) = run.engine {
+            self.engine = Some(engine);
         }
+        self.clear_active_generation(&item_id);
         self.audio_cache.insert(
             item_id.clone(),
             GeneratedAudio {
@@ -354,12 +391,23 @@ impl AppCore {
 
     pub fn finish_generation_failure(&mut self, run: GenerationRun, error: String) -> String {
         let item_id = run.item_id;
-        self.engine = Some(run.engine);
-        if self.active_generation_item_id.as_deref() == Some(item_id.as_str()) {
-            self.active_generation_item_id = None;
+        if let Some(engine) = run.engine {
+            self.engine = Some(engine);
         }
+        self.clear_active_generation(&item_id);
         self.queue.mark_failed(&item_id, error.clone());
         error
+    }
+
+    pub fn finish_generation_canceled(&mut self, run: GenerationRun) {
+        let item_id = run.item_id;
+        if let Some(engine) = run.engine {
+            self.engine = Some(engine);
+        }
+        self.clear_active_generation(&item_id);
+        if !self.queue.mark_canceled(&item_id) {
+            let _ = self.queue.mark_canceled(&item_id);
+        }
     }
 
     pub fn execute_generation_run<F>(
@@ -369,10 +417,11 @@ impl AppCore {
     where
         F: Fn(usize, usize),
     {
-        match run
-            .engine
-            .generate_cancellable(run.request.clone(), progress, None)
-        {
+        let Some(engine) = run.engine.as_mut() else {
+            return Err((run, "no model engine loaded for generation".to_string()));
+        };
+
+        match engine.generate_cancellable(run.request.clone(), progress, Some(&run.cancel)) {
             Ok(samples) => {
                 let duration_seconds = samples.len() as f32 / run.sample_rate as f32;
                 Ok((run, samples, duration_seconds))
@@ -514,7 +563,24 @@ impl AppCore {
     }
 
     pub fn cancel_generation_item(&mut self, item_id: &str) -> bool {
-        self.queue.cancel_queued(item_id)
+        if self.queue.cancel_queued(item_id) {
+            return true;
+        }
+
+        if self
+            .active_generation
+            .as_ref()
+            .is_some_and(|active| active.item_id == item_id)
+        {
+            if let Some(active_generation) = self.active_generation.as_ref() {
+                active_generation
+                    .cancel
+                    .store(true, Ordering::SeqCst);
+            }
+            return self.queue.mark_canceled(item_id);
+        }
+
+        false
     }
 
     pub fn set_loaded_model_for_test(&mut self, model_id: String) {
@@ -541,6 +607,26 @@ impl AppCore {
         self.active_load
             .as_ref()
             .is_some_and(|active_load| active_load.id == load_id)
+    }
+
+    fn clear_active_generation(&mut self, item_id: &str) {
+        if self
+            .active_generation
+            .as_ref()
+            .is_some_and(|active| active.item_id == item_id)
+        {
+            self.active_generation = None;
+        }
+        if self.active_generation_item_id.as_deref() == Some(item_id) {
+            self.active_generation_item_id = None;
+        }
+    }
+
+    fn persist_config(&self) -> Result<()> {
+        if let Some(path) = self.config_path.as_ref() {
+            crate::config::save_config(path, &self.config)?;
+        }
+        Ok(())
     }
 }
 

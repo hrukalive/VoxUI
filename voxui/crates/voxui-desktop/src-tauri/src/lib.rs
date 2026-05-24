@@ -1,4 +1,5 @@
 use std::sync::{Arc, Mutex};
+use std::path::PathBuf;
 
 use app_core::AppCore;
 use types::AppConfig;
@@ -14,8 +15,10 @@ pub mod types;
 
 pub fn run() {
     let _ = tracing_subscriber::fmt().try_init();
-    let core = AppCore::from_config(AppConfig::default())
-        .expect("default app config should initialize desktop app core");
+    let (config, config_path) = startup_config();
+    let mut core =
+        AppCore::from_config(config).expect("persisted app config should initialize desktop app core");
+    core.set_config_path(config_path);
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
@@ -39,4 +42,23 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("failed to run AhanSays desktop app");
+}
+
+fn startup_config() -> (AppConfig, PathBuf) {
+    let config_dir = dirs::config_dir()
+        .unwrap_or_else(|| std::env::temp_dir())
+        .join("AhanSays");
+    let config_path = crate::config::default_config_path(&config_dir);
+    let config = match crate::config::load_config(&config_path) {
+        Ok(config) => config,
+        Err(error) => {
+            tracing::warn!(
+                "failed to load desktop config from {}: {error}",
+                config_path.display()
+            );
+            AppConfig::default()
+        }
+    };
+
+    (config, config_path)
 }

@@ -79,6 +79,22 @@ fn regeneration_attempt_keeps_existing_audio_flag_until_success() {
 }
 
 #[test]
+fn canceling_regeneration_with_existing_audio_returns_item_to_ready() {
+    let config = configured_model("model-a");
+    let mut queue = GenerationQueue::default();
+    let id = queue.enqueue("text".to_string(), "loaded-model-a", &config);
+    queue.mark_ready(&id);
+
+    assert!(queue.start_regeneration(&id, "loaded-model-a", &config));
+    assert!(queue.mark_canceled(&id));
+
+    let item = &queue.items()[0];
+    assert_eq!(item.status, HistoryStatus::Ready);
+    assert!(item.has_audio);
+    assert_eq!(item.error, None);
+}
+
+#[test]
 fn playback_marks_ready_audio_as_playing_and_stops_it() {
     let config = configured_model("model-a");
     let mut queue = GenerationQueue::default();

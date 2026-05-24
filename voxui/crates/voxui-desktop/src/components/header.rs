@@ -26,6 +26,7 @@ pub fn Header(
             <select
                 class="model-select"
                 aria-label={labels.model}
+                prop:value=selected_model_id.clone()
                 on:change=move |event| on_model_select(event_target_value(&event))
             >
                 <option value="">{labels.model}</option>

@@ -1,4 +1,4 @@
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -193,7 +193,7 @@ pub fn enqueue_generation(
     text: String,
 ) -> Result<HistoryItem, String> {
     let item = with_core(state.clone(), |core| core.enqueue_generation(text))?;
-    spawn_generation(window, state.inner().clone(), item.id.clone());
+    kick_generation_queue(&window, state.inner().clone());
     Ok(item)
 }
 
@@ -208,7 +208,7 @@ pub fn regenerate(
         core.regenerate_item(&item_id, &config)?;
         Ok(CommandResult { ok: true })
     })?;
-    spawn_generation(window, state.inner().clone(), item_id);
+    kick_generation_queue(&window, state.inner().clone());
     Ok(CommandResult { ok: true })
 }
 
@@ -320,6 +320,19 @@ fn load_engine_for_choice(
     Ok(engine)
 }
 
+fn kick_generation_queue(window: &Window, shared: SharedAppCore) {
+    let next_run = match shared.lock() {
+        Ok(mut core) => core.begin_next_generation_run(),
+        Err(_) => return,
+    };
+
+    match next_run {
+        Ok(Some(run)) => spawn_generation(window.clone(), shared, run),
+        Ok(None) => {}
+        Err(error) => tracing::warn!("failed to start queued generation: {error}"),
+    }
+}
+
 fn device_for_backend(backend: BackendKind) -> Result<Device, String> {
     match backend {
         BackendKind::Cpu => Ok(Device::Cpu),
@@ -345,31 +358,10 @@ fn browse_wav_file(app: AppHandle) -> Result<Option<String>, String> {
         .map(|path| path.to_string()))
 }
 
-fn spawn_generation(window: Window, shared: SharedAppCore, item_id: String) {
-    let event_item_id = item_id.clone();
+fn spawn_generation(window: Window, shared: SharedAppCore, run: crate::app_core::GenerationRun) {
+    let event_item_id = run.item_id.clone();
     let worker_window = window.clone();
     if let Err(error) = spawn_background("voxui-generation", move || {
-        let run = match shared.lock() {
-            Ok(mut core) => core.begin_generation_run(&item_id),
-            Err(_) => Err("app state lock poisoned".to_string()),
-        };
-        let run = match run {
-            Ok(run) => run,
-            Err(error) => {
-                let _ = worker_window.emit(
-                    "generation_done",
-                    GenerationDoneEvent {
-                        item_id,
-                        status: "skipped".to_string(),
-                        error: Some(error),
-                        sample_rate: None,
-                        duration_seconds: None,
-                    },
-                );
-                return;
-            }
-        };
-
         let progress_window = worker_window.clone();
         let progress_shared = shared.clone();
         let progress_item_id = run.item_id.clone();
@@ -387,37 +379,73 @@ fn spawn_generation(window: Window, shared: SharedAppCore, item_id: String) {
             );
         });
 
-        let done = match result {
+        let (done, playback_run) = match result {
             Ok((run, samples, duration_seconds)) => {
                 let item_id = run.item_id.clone();
                 let sample_rate = run.sample_rate;
-                if let Ok(mut core) = shared.lock() {
+                let was_cancelled = run.cancel.load(Ordering::SeqCst);
+                let playback_run = if was_cancelled {
+                    if let Ok(mut core) = shared.lock() {
+                        core.finish_generation_canceled(run);
+                    }
+                    None
+                } else if let Ok(mut core) = shared.lock() {
                     core.finish_generation_success(run, samples, duration_seconds);
-                }
-                GenerationDoneEvent {
-                    item_id,
-                    status: "ready".to_string(),
-                    error: None,
-                    sample_rate: Some(sample_rate),
-                    duration_seconds: Some(duration_seconds),
-                }
+                    core.begin_playback(&item_id).ok()
+                } else {
+                    None
+                };
+                (
+                    GenerationDoneEvent {
+                        item_id,
+                        status: if was_cancelled {
+                            "canceled".to_string()
+                        } else {
+                            "ready".to_string()
+                        },
+                        error: None,
+                        sample_rate: (!was_cancelled).then_some(sample_rate),
+                        duration_seconds: (!was_cancelled).then_some(duration_seconds),
+                    },
+                    playback_run,
+                )
             }
             Err((run, error)) => {
                 let item_id = run.item_id.clone();
+                let is_cancelled = run.cancel.load(Ordering::SeqCst)
+                    || error.to_lowercase().contains("cancel");
                 let error = match shared.lock() {
-                    Ok(mut core) => core.finish_generation_failure(run, error),
-                    Err(_) => error,
+                    Ok(mut core) => {
+                        if is_cancelled {
+                            core.finish_generation_canceled(run);
+                            None
+                        } else {
+                            Some(core.finish_generation_failure(run, error))
+                        }
+                    }
+                    Err(_) => Some(error),
                 };
-                GenerationDoneEvent {
-                    item_id,
-                    status: "failed".to_string(),
-                    error: Some(error),
-                    sample_rate: None,
-                    duration_seconds: None,
-                }
+                (
+                    GenerationDoneEvent {
+                        item_id,
+                        status: if is_cancelled {
+                            "canceled".to_string()
+                        } else {
+                            "failed".to_string()
+                        },
+                        error,
+                        sample_rate: None,
+                        duration_seconds: None,
+                    },
+                    None,
+                )
             }
         };
         let _ = worker_window.emit("generation_done", done);
+        if let Some(playback_run) = playback_run {
+            spawn_playback(worker_window.clone(), shared.clone(), playback_run);
+        }
+        kick_generation_queue(&worker_window, shared.clone());
     }) {
         let _ = window.emit(
             "generation_done",

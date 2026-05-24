@@ -140,7 +140,13 @@ impl GenerationQueue {
         let Some(item) = self.item_mut(id) else {
             return false;
         };
-        item.status = HistoryStatus::Canceled;
+        item.status = if item.has_audio {
+            HistoryStatus::Ready
+        } else {
+            HistoryStatus::Canceled
+        };
+        item.progress_current = 0;
+        item.progress_total = 0;
         item.error = None;
         true
     }

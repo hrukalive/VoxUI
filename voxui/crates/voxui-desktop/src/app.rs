@@ -18,7 +18,7 @@ pub fn App() -> impl IntoView {
     let (settings_open, set_settings_open) = signal(false);
     let (load_open, set_load_open) = signal(false);
     let (load_percent, set_load_percent) = signal(0.0_f32);
-    let (snapshot, set_snapshot) = signal(None::<AppSnapshot>);
+    let (snapshot, set_snapshot) = signal(Some(fallback_snapshot()));
     let (audio_state, set_audio_state) = signal(AudioState::default());
 
     // Root component is mounted once; Tauri event listeners intentionally live for the app lifetime.
@@ -211,6 +211,11 @@ pub fn App() -> impl IntoView {
                         open=move || settings_open.get()
                         on_close=move || set_settings_open.set(false)
                         on_config_patch=move |patch| {
+                            set_snapshot.update(|snapshot| {
+                                if let Some(snapshot) = snapshot.as_mut() {
+                                    apply_optimistic_patch(snapshot, &patch);
+                                }
+                            });
                             spawn_local(async move {
                                 if let Ok(next_snapshot) = crate::tauri_api::set_config_patch(patch).await {
                                     set_snapshot.set(Some(next_snapshot));
@@ -317,5 +322,39 @@ fn fallback_snapshot() -> AppSnapshot {
         loaded_model_id: None,
         load_state: LoadUiState::Idle,
         history: Vec::new(),
+    }
+}
+
+fn apply_optimistic_patch(snapshot: &mut AppSnapshot, patch: &ConfigPatch) {
+    if let Some(model_root) = patch.model_root.as_ref() {
+        snapshot.config.model_root = model_root.clone();
+    }
+    if let Some(selected_model_id) = patch.selected_model_id.as_ref() {
+        snapshot.selected_model_id = selected_model_id.clone();
+        snapshot.config.selected_model_id = selected_model_id.clone();
+    }
+    if let Some(language) = patch.language {
+        snapshot.config.language = language;
+    }
+    if let Some(backend) = patch.backend {
+        snapshot.config.backend = backend;
+    }
+    if let Some(audio_host) = patch.audio_host.as_ref() {
+        if snapshot.config.audio_host != *audio_host {
+            snapshot.config.audio_device = None;
+        }
+        snapshot.config.audio_host = audio_host.clone();
+    }
+    if let Some(audio_device) = patch.audio_device.as_ref() {
+        snapshot.config.audio_device = audio_device.clone();
+    }
+    if let Some(volume) = patch.volume {
+        snapshot.config.volume = volume.clamp(0.0, 1.0);
+    }
+    if let Some(max_input_chars) = patch.max_input_chars {
+        snapshot.config.max_input_chars = max_input_chars.max(1);
+    }
+    if let Some(generation) = patch.generation.as_ref() {
+        snapshot.config.generation = generation.clone();
     }
 }

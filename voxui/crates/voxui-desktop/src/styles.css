@@ -12,18 +12,23 @@ body {
   margin: 0;
   min-width: 760px;
   min-height: 520px;
+  height: 100vh;
+  overflow: hidden;
   background: #101419;
 }
 
 .app-shell {
-  min-height: 100vh;
+  height: 100vh;
+  min-height: 520px;
   display: grid;
   grid-template-rows: 56px 1fr 116px;
   background: #101419;
+  overflow: hidden;
 }
 
 .app-header {
   display: flex;
+  min-height: 0;
   align-items: center;
   gap: 12px;
   padding: 0 18px;
@@ -157,6 +162,7 @@ body {
 
 .composer-panel {
   display: grid;
+  min-height: 0;
   grid-template-columns: 1fr auto;
   gap: 12px;
   padding: 14px 18px;

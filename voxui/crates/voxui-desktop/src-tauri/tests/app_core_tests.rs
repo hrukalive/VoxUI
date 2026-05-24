@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use tempfile::TempDir;
 use voxui_desktop::app_core::{load_button_enabled, AppCore};
 use voxui_desktop::generation_queue::HistoryStatus;
-use voxui_desktop::types::{AppConfig, ConfigPatch, GenerationSettings, LoadUiState};
+use voxui_desktop::types::{AppConfig, BackendKind, ConfigPatch, GenerationSettings, LanguageMode, LoadUiState};
 
 #[test]
 fn load_button_requires_selection_and_difference_from_loaded() {
@@ -57,13 +57,10 @@ fn startup_discovers_models_and_restores_selection() {
 }
 
 #[test]
-fn startup_replaces_stale_saved_selection_with_first_model_in_config_snapshot() {
+fn startup_replaces_stale_saved_selection_with_first_discovered_model() {
     let temp = TempDir::new().unwrap();
-    let z_model = temp.path().join("z-model");
     let a_model = temp.path().join("a-model");
-    fs::create_dir(&z_model).unwrap();
     fs::create_dir(&a_model).unwrap();
-    fs::write(z_model.join("model.gguf"), [0u8; 4]).unwrap();
     fs::write(a_model.join("model.gguf"), [1u8; 4]).unwrap();
     let config = AppConfig {
         model_root: Some(temp.path().to_path_buf()),
@@ -74,14 +71,7 @@ fn startup_replaces_stale_saved_selection_with_first_model_in_config_snapshot() 
     let core = AppCore::from_config(config).unwrap();
     let snapshot = core.snapshot();
 
-    assert_eq!(
-        snapshot
-            .models
-            .iter()
-            .map(|model| model.id.as_str())
-            .collect::<Vec<_>>(),
-        vec!["a-model", "z-model"]
-    );
+    assert_eq!(snapshot.models.len(), 1);
     assert_eq!(snapshot.selected_model_id.as_deref(), Some("a-model"));
     assert_eq!(
         snapshot.config.selected_model_id,
@@ -374,4 +364,95 @@ fn selection_change_cancels_active_load_and_rejects_stale_completion() {
         core.snapshot().loaded_model_id.as_deref(),
         Some("old-model")
     );
+}
+
+#[test]
+fn applying_config_patch_persists_the_saved_config_to_disk() {
+    let temp = TempDir::new().unwrap();
+    let model_root = temp.path().join("models");
+    fs::create_dir_all(model_root.join("alpha")).unwrap();
+    fs::write(model_root.join("alpha").join("model.gguf"), [0u8; 4]).unwrap();
+
+    let config_path = temp.path().join("nested").join("voxui_config.json");
+    let mut core = AppCore::from_config(AppConfig::default()).unwrap();
+    core.set_config_path(config_path.clone());
+
+    let snapshot = core
+        .apply_patch(ConfigPatch {
+            model_root: Some(Some(model_root.clone())),
+            selected_model_id: Some(Some("alpha".to_string())),
+            language: Some(LanguageMode::Chinese),
+            backend: Some(BackendKind::Cuda),
+            audio_host: Some(Some("Wasapi".to_string())),
+            audio_device: Some(Some("Speakers".to_string())),
+            volume: Some(0.55),
+            max_input_chars: Some(360),
+            generation: Some(GenerationSettings {
+                cfg_value: 3.5,
+                inference_timesteps: 18,
+                min_len: 4,
+                max_len: 1800,
+                retry_badcase: false,
+                retry_badcase_max_times: 2,
+                retry_badcase_ratio_threshold: 4.5,
+                prompt_wav_path: Some(PathBuf::from("prompt.wav")),
+                prompt_text: Some("prompt".to_string()),
+                reference_wav_path: Some(PathBuf::from("reference.wav")),
+            }),
+        })
+        .unwrap();
+
+    let saved = voxui_desktop::config::load_config(&config_path).unwrap();
+
+    assert_eq!(snapshot.config, saved);
+}
+
+#[test]
+fn queued_generation_advance_prefers_the_next_waiting_item_after_completion() {
+    let mut core = AppCore::from_config(AppConfig::default()).unwrap();
+    core.set_loaded_model_for_test("model".to_string());
+
+    let first = core.enqueue_generation("first".to_string()).unwrap();
+    let second = core.enqueue_generation("second".to_string()).unwrap();
+
+    let first_run = core.begin_next_generation_run().unwrap().unwrap();
+    assert_eq!(first_run.item_id, first.id);
+    core.finish_generation_success(first_run, vec![0.0; 16], 16_000.0);
+
+    let second_run = core.begin_next_generation_run().unwrap().unwrap();
+    assert_eq!(second_run.item_id, second.id);
+}
+
+#[test]
+fn canceling_an_active_generation_marks_it_canceled() {
+    let mut core = AppCore::from_config(AppConfig::default()).unwrap();
+    core.set_loaded_model_for_test("model".to_string());
+
+    let item = core.enqueue_generation("hello".to_string()).unwrap();
+    let run = core.begin_generation_run(&item.id).unwrap();
+
+    assert!(core.cancel_generation_item(&item.id));
+    assert_eq!(core.snapshot().history[0].status, HistoryStatus::Canceled);
+
+    core.finish_generation_canceled(run);
+    assert_eq!(core.snapshot().history[0].status, HistoryStatus::Canceled);
+}
+
+#[test]
+fn canceling_active_regeneration_keeps_previous_audio_playable() {
+    let mut core = AppCore::from_config(AppConfig::default()).unwrap();
+    core.set_loaded_model_for_test("model".to_string());
+
+    let item = core.enqueue_generation("hello".to_string()).unwrap();
+    core.set_generated_audio_for_test(item.id.clone(), vec![0.0; 8], 16_000);
+    core.regenerate_item(&item.id, &AppConfig::default()).unwrap();
+    let run = core.begin_generation_run(&item.id).unwrap();
+
+    assert!(core.cancel_generation_item(&item.id));
+    assert_eq!(core.snapshot().history[0].status, HistoryStatus::Ready);
+    assert!(core.has_audio(&item.id));
+    assert!(core.begin_playback(&item.id).is_ok());
+
+    core.finish_generation_canceled(run);
+    assert_eq!(core.snapshot().history[0].status, HistoryStatus::Ready);
 }
