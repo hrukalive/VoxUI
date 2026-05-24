@@ -5,7 +5,7 @@ use crate::components::header::Header;
 use crate::components::history::HistoryList;
 use crate::components::input_box::InputBox;
 use crate::components::load_progress_modal::LoadProgressModal;
-use crate::components::settings_modal::SettingsModal;
+use crate::components::settings_modal::{SettingsModal, SettingsPage};
 use crate::i18n::{labels, UiLanguage};
 use crate::tauri_api::{
     AppConfig, AppSnapshot, AudioState, BackendKind, ConfigPatch, GenerationDoneEvent,
@@ -16,6 +16,7 @@ use crate::tauri_api::{
 #[component]
 pub fn App() -> impl IntoView {
     let (settings_open, set_settings_open) = signal(false);
+    let (settings_page, set_settings_page) = signal(SettingsPage::Models);
     let (load_open, set_load_open) = signal(false);
     let (load_percent, set_load_percent) = signal(0.0_f32);
     let (snapshot, set_snapshot) = signal(Some(fallback_snapshot()));
@@ -202,78 +203,80 @@ pub fn App() -> impl IntoView {
                     />
                 }
             }}
+            <SettingsModal
+                labels=current_labels
+                config=move || current_snapshot().config
+                audio_state=move || audio_state.get()
+                open=move || settings_open.get()
+                active_page=move || settings_page.get()
+                on_close=move || set_settings_open.set(false)
+                on_page_select=move |page| set_settings_page.set(page)
+                on_config_patch=move |patch| {
+                    set_snapshot.update(|snapshot| {
+                        if let Some(snapshot) = snapshot.as_mut() {
+                            apply_optimistic_patch(snapshot, &patch);
+                        }
+                    });
+                    spawn_local(async move {
+                        if let Ok(next_snapshot) = crate::tauri_api::set_config_patch(patch).await {
+                            set_snapshot.set(Some(next_snapshot));
+                        }
+                    });
+                }
+                on_browse_model_dir=move || {
+                    spawn_local(async move {
+                        if let Ok(Some(path)) = crate::tauri_api::browse_model_dir().await {
+                            if let Ok(next_snapshot) = crate::tauri_api::set_config_patch(ConfigPatch {
+                                model_root: Some(Some(path)),
+                                ..ConfigPatch::default()
+                            })
+                            .await
+                            {
+                                set_snapshot.set(Some(next_snapshot));
+                            }
+                        }
+                    });
+                }
+                on_browse_prompt_wav=move || {
+                    spawn_local(async move {
+                        if let Ok(Some(path)) = crate::tauri_api::browse_prompt_wav().await {
+                            let mut generation = current_snapshot().config.generation;
+                            generation.prompt_wav_path = Some(path);
+                            if let Ok(next_snapshot) = crate::tauri_api::set_config_patch(ConfigPatch {
+                                generation: Some(generation),
+                                ..ConfigPatch::default()
+                            })
+                            .await
+                            {
+                                set_snapshot.set(Some(next_snapshot));
+                            }
+                        }
+                    });
+                }
+                on_browse_reference_wav=move || {
+                    spawn_local(async move {
+                        if let Ok(Some(path)) = crate::tauri_api::browse_reference_wav().await {
+                            let mut generation = current_snapshot().config.generation;
+                            generation.reference_wav_path = Some(path);
+                            if let Ok(next_snapshot) = crate::tauri_api::set_config_patch(ConfigPatch {
+                                generation: Some(generation),
+                                ..ConfigPatch::default()
+                            })
+                            .await
+                            {
+                                set_snapshot.set(Some(next_snapshot));
+                            }
+                        }
+                    });
+                }
+                on_test_audio=move || {
+                    spawn_local(async move {
+                        let _ = crate::tauri_api::test_audio().await;
+                    });
+                }
+            />
             {move || {
                 view! {
-                    <SettingsModal
-                        labels=current_labels()
-                        config=move || current_snapshot().config
-                        audio_state=move || audio_state.get()
-                        open=move || settings_open.get()
-                        on_close=move || set_settings_open.set(false)
-                        on_config_patch=move |patch| {
-                            set_snapshot.update(|snapshot| {
-                                if let Some(snapshot) = snapshot.as_mut() {
-                                    apply_optimistic_patch(snapshot, &patch);
-                                }
-                            });
-                            spawn_local(async move {
-                                if let Ok(next_snapshot) = crate::tauri_api::set_config_patch(patch).await {
-                                    set_snapshot.set(Some(next_snapshot));
-                                }
-                            });
-                        }
-                        on_browse_model_dir=move || {
-                            spawn_local(async move {
-                                if let Ok(Some(path)) = crate::tauri_api::browse_model_dir().await {
-                                    if let Ok(next_snapshot) = crate::tauri_api::set_config_patch(ConfigPatch {
-                                        model_root: Some(Some(path)),
-                                        ..ConfigPatch::default()
-                                    })
-                                    .await
-                                    {
-                                        set_snapshot.set(Some(next_snapshot));
-                                    }
-                                }
-                            });
-                        }
-                        on_browse_prompt_wav=move || {
-                            spawn_local(async move {
-                                if let Ok(Some(path)) = crate::tauri_api::browse_prompt_wav().await {
-                                    let mut generation = current_snapshot().config.generation;
-                                    generation.prompt_wav_path = Some(path);
-                                    if let Ok(next_snapshot) = crate::tauri_api::set_config_patch(ConfigPatch {
-                                        generation: Some(generation),
-                                        ..ConfigPatch::default()
-                                    })
-                                    .await
-                                    {
-                                        set_snapshot.set(Some(next_snapshot));
-                                    }
-                                }
-                            });
-                        }
-                        on_browse_reference_wav=move || {
-                            spawn_local(async move {
-                                if let Ok(Some(path)) = crate::tauri_api::browse_reference_wav().await {
-                                    let mut generation = current_snapshot().config.generation;
-                                    generation.reference_wav_path = Some(path);
-                                    if let Ok(next_snapshot) = crate::tauri_api::set_config_patch(ConfigPatch {
-                                        generation: Some(generation),
-                                        ..ConfigPatch::default()
-                                    })
-                                    .await
-                                    {
-                                        set_snapshot.set(Some(next_snapshot));
-                                    }
-                                }
-                            });
-                        }
-                        on_test_audio=move || {
-                            spawn_local(async move {
-                                let _ = crate::tauri_api::test_audio().await;
-                            });
-                        }
-                    />
                     <LoadProgressModal
                         labels=current_labels()
                         open=move || load_open.get() && matches!(current_snapshot().load_state, LoadUiState::Loading)
