@@ -89,6 +89,7 @@ impl Runner {
         }
 
         player.flush();
+        eprintln!();
 
         // Let cancellation show as cancelled, not done
         if cancel.map(|c| c.load(Ordering::SeqCst)).unwrap_or(false) {
@@ -105,7 +106,7 @@ impl Runner {
         let lora = self
             .lora_path
             .as_ref()
-            .map(|p| p.file_name().unwrap().to_string_lossy().to_string())
+            .map(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "unknown".to_string()))
             .unwrap_or_else(|| "none".to_string());
         println!("Model: {arch}  |  Device: {device}  |  LoRA: {lora}");
     }
