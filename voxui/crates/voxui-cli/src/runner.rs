@@ -67,9 +67,9 @@ impl Runner {
                     .saturating_mul(patch_count)
                     .checked_div(max_patches.max(1))
                     .unwrap_or(0);
-                let bar: String = std::iter::repeat('=').take(filled)
-                    .chain(std::iter::repeat('>').take(if patch_count < max_patches { 1 } else { 0 }))
-                    .chain(std::iter::repeat(' ').take(bar_width.saturating_sub(filled).saturating_sub(1)))
+                let bar: String = std::iter::repeat_n('=', filled)
+                    .chain(std::iter::repeat_n('>', if patch_count < max_patches { 1 } else { 0 }))
+                    .chain(std::iter::repeat_n(' ', bar_width.saturating_sub(filled).saturating_sub(1)))
                     .collect();
                 eprint!(
                     "\r  Synthesizing... [{bar}] {patch_count}/{max_patches} patches",

@@ -196,6 +196,7 @@ impl Drop for AudioPlayer {
 
 /// Streaming audio player that resamples and pushes audio chunks to the default
 /// output device in real time via a lock-free ring buffer.
+#[allow(dead_code)]
 pub struct StreamingPlayer {
     stream: cpal::Stream,
     producer: ringbuf::HeapProd<f32>,
