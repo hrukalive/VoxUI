@@ -48,8 +48,9 @@ fn main() -> Result<()> {
                 if line.is_empty() || line == "/quit" || line == "/exit" {
                     break;
                 }
-                rl.add_history_entry(&line)
-                    .context("failed to save history")?;
+                if let Err(e) = rl.add_history_entry(&line) {
+                    eprintln!("  Warning: failed to save history: {e}");
+                }
 
                 match runner.synthesize_and_play(&line, Some(&cancel)) {
                     Ok(()) => {
