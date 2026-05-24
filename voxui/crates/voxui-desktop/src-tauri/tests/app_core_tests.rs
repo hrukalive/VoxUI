@@ -83,7 +83,10 @@ fn startup_replaces_stale_saved_selection_with_first_model_in_config_snapshot() 
         vec!["a-model", "z-model"]
     );
     assert_eq!(snapshot.selected_model_id.as_deref(), Some("a-model"));
-    assert_eq!(snapshot.config.selected_model_id, snapshot.selected_model_id);
+    assert_eq!(
+        snapshot.config.selected_model_id,
+        snapshot.selected_model_id
+    );
 }
 
 #[test]
@@ -112,6 +115,7 @@ fn changing_audio_host_clears_saved_audio_device() {
     assert_eq!(snapshot.config.audio_host.as_deref(), Some("Asio"));
     assert_eq!(snapshot.config.audio_device, None);
 }
+
 #[test]
 fn enqueue_generation_rejects_when_no_model_is_loaded() {
     let mut core = AppCore::from_config(AppConfig::default()).unwrap();
@@ -155,7 +159,9 @@ fn request_snapshot_converts_to_synthesis_request() {
     })
     .unwrap();
     core.set_loaded_model_for_test("model".to_string());
-    let item = core.enqueue_generation(" hello world ".to_string()).unwrap();
+    let item = core
+        .enqueue_generation(" hello world ".to_string())
+        .unwrap();
 
     let request = core.synthesis_request_for_test(&item.id).unwrap();
 
@@ -190,6 +196,22 @@ fn run_generation_now_does_not_revive_canceled_item() {
     assert_eq!(snapshot.history[0].status, HistoryStatus::Canceled);
     assert_eq!(snapshot.history[0].error, None);
     assert!(!snapshot.history[0].has_audio);
+}
+
+#[test]
+fn playback_state_requires_cached_audio_and_can_stop() {
+    let mut core = AppCore::from_config(AppConfig::default()).unwrap();
+    core.set_loaded_model_for_test("model".to_string());
+    let item = core.enqueue_generation("hello".to_string()).unwrap();
+
+    assert!(core.begin_playback(&item.id).is_err());
+
+    core.set_generated_audio_for_test(item.id.clone(), vec![0.0; 8], 16_000);
+    let _run = core.begin_playback(&item.id).unwrap();
+    assert_eq!(core.snapshot().history[0].status, HistoryStatus::Playing);
+
+    assert_eq!(core.stop_playback().as_deref(), Some(item.id.as_str()));
+    assert_eq!(core.snapshot().history[0].status, HistoryStatus::Ready);
 }
 
 #[test]
@@ -249,7 +271,10 @@ fn failed_load_preserves_previous_loaded_model_id() {
 
     core.finish_model_load_for_test(Err("load failed".to_string()));
 
-    assert_eq!(core.snapshot().loaded_model_id.as_deref(), Some("old-model"));
+    assert_eq!(
+        core.snapshot().loaded_model_id.as_deref(),
+        Some("old-model")
+    );
 }
 
 #[test]
@@ -283,7 +308,10 @@ fn canceling_active_load_prevents_later_stale_success_from_replacing_loaded_mode
     assert!(cancel.load(std::sync::atomic::Ordering::SeqCst));
     assert!(!swapped);
     assert_eq!(core.snapshot().load_state, LoadUiState::Idle);
-    assert_eq!(core.snapshot().loaded_model_id.as_deref(), Some("old-model"));
+    assert_eq!(
+        core.snapshot().loaded_model_id.as_deref(),
+        Some("old-model")
+    );
 }
 
 #[test]
@@ -294,14 +322,8 @@ fn stale_completion_does_not_overwrite_newer_completed_load() {
     core.cancel_model_load_state();
     let (current_load_id, _) = core.begin_model_load_for_test();
 
-    assert!(core.complete_model_load_success_for_test(
-        current_load_id,
-        "current-model".to_string()
-    ));
-    assert!(!core.complete_model_load_success_for_test(
-        stale_load_id,
-        "stale-model".to_string()
-    ));
+    assert!(core.complete_model_load_success_for_test(current_load_id, "current-model".to_string()));
+    assert!(!core.complete_model_load_success_for_test(stale_load_id, "stale-model".to_string()));
     assert_eq!(
         core.snapshot().loaded_model_id.as_deref(),
         Some("current-model")
@@ -344,6 +366,12 @@ fn selection_change_cancels_active_load_and_rejects_stale_completion() {
     assert!(cancel.load(std::sync::atomic::Ordering::SeqCst));
     assert!(!swapped);
     assert_eq!(core.snapshot().load_state, LoadUiState::Idle);
-    assert_eq!(core.snapshot().selected_model_id.as_deref(), Some("b-model"));
-    assert_eq!(core.snapshot().loaded_model_id.as_deref(), Some("old-model"));
+    assert_eq!(
+        core.snapshot().selected_model_id.as_deref(),
+        Some("b-model")
+    );
+    assert_eq!(
+        core.snapshot().loaded_model_id.as_deref(),
+        Some("old-model")
+    );
 }

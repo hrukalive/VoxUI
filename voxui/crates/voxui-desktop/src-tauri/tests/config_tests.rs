@@ -22,6 +22,18 @@ fn unique_temp_dir(test_name: &str) -> PathBuf {
 }
 
 #[test]
+fn tauri_config_exposes_global_tauri_api() {
+    let config_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tauri.conf.json");
+    let config_text = fs::read_to_string(config_path).unwrap();
+    let config: serde_json::Value = serde_json::from_str(&config_text).unwrap();
+
+    assert_eq!(
+        config["app"]["withGlobalTauri"],
+        serde_json::Value::Bool(true)
+    );
+}
+
+#[test]
 fn config_defaults_to_system_language_and_cpu_backend() {
     let config = AppConfig::default();
 
@@ -92,8 +104,8 @@ fn empty_config_json_deserializes_to_defaults() {
 
 #[test]
 fn partial_generation_json_preserves_values_and_defaults_missing_fields() {
-    let decoded: AppConfig = serde_json::from_str(r#"{ "generation": { "cfg_value": 3.5 } }"#)
-        .unwrap();
+    let decoded: AppConfig =
+        serde_json::from_str(r#"{ "generation": { "cfg_value": 3.5 } }"#).unwrap();
 
     assert_eq!(decoded.generation.cfg_value, 3.5);
     assert_eq!(decoded.generation.inference_timesteps, 10);
@@ -122,10 +134,7 @@ fn load_config_returns_defaults_when_file_is_missing() {
 #[test]
 fn save_config_creates_parent_directory_and_load_config_reads_written_json() {
     let root = unique_temp_dir("save_load");
-    let path = root
-        .join("nested")
-        .join("config")
-        .join("voxui_config.json");
+    let path = root.join("nested").join("config").join("voxui_config.json");
     let config = AppConfig {
         model_root: Some(PathBuf::from("D:/Sandbox_Share/VoxUI/models")),
         selected_model_id: Some("voxcpm2-fp16|lora_a1.gguf".to_string()),

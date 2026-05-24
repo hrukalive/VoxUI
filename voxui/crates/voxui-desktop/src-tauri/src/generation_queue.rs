@@ -105,6 +105,28 @@ impl GenerationQueue {
         true
     }
 
+    pub fn mark_playing(&mut self, id: &str) -> bool {
+        let Some(item) = self.item_mut(id) else {
+            return false;
+        };
+        if item.status != HistoryStatus::Ready || !item.has_audio {
+            return false;
+        }
+        item.status = HistoryStatus::Playing;
+        true
+    }
+
+    pub fn mark_all_stopped(&mut self) -> Option<String> {
+        let mut stopped_item_id = None;
+        for item in &mut self.items {
+            if item.status == HistoryStatus::Playing {
+                item.status = HistoryStatus::Ready;
+                stopped_item_id = Some(item.id.clone());
+            }
+        }
+        stopped_item_id
+    }
+
     pub fn mark_failed(&mut self, id: &str, error: String) -> bool {
         let Some(item) = self.item_mut(id) else {
             return false;

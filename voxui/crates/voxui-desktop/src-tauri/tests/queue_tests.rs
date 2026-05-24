@@ -77,3 +77,27 @@ fn regeneration_attempt_keeps_existing_audio_flag_until_success() {
     assert_eq!(item.snapshot.backend, BackendKind::Cpu);
     assert_eq!(item.snapshot.generation.cfg_value, 4.0);
 }
+
+#[test]
+fn playback_marks_ready_audio_as_playing_and_stops_it() {
+    let config = configured_model("model-a");
+    let mut queue = GenerationQueue::default();
+    let ready_id = queue.enqueue("ready text".to_string(), "model-a", &config);
+    let queued_id = queue.enqueue("queued text".to_string(), "model-a", &config);
+
+    assert!(!queue.mark_playing(&ready_id));
+
+    queue.mark_ready(&ready_id);
+    assert!(queue.mark_playing(&ready_id));
+    assert!(!queue.mark_playing(&queued_id));
+
+    let items = queue.items();
+    assert_eq!(items[0].status, HistoryStatus::Playing);
+    assert_eq!(items[1].status, HistoryStatus::Queued);
+
+    assert_eq!(queue.mark_all_stopped(), Some(ready_id.clone()));
+
+    let items = queue.items();
+    assert_eq!(items[0].status, HistoryStatus::Ready);
+    assert_eq!(items[1].status, HistoryStatus::Queued);
+}

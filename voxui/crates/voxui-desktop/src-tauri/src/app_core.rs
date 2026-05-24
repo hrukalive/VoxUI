@@ -1,5 +1,5 @@
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{mpsc, Arc};
 
 use anyhow::{bail, Context, Result};
 
@@ -14,6 +14,11 @@ struct ActiveModelLoad {
     cancel: Arc<AtomicBool>,
 }
 
+struct ActivePlayback {
+    item_id: String,
+    stop: mpsc::Sender<()>,
+}
+
 pub struct AppCore {
     config: AppConfig,
     models: Vec<ModelChoice>,
@@ -26,6 +31,7 @@ pub struct AppCore {
     queue: GenerationQueue,
     audio_cache: GeneratedAudioCache,
     active_generation_item_id: Option<String>,
+    active_playback: Option<ActivePlayback>,
 }
 
 pub struct GenerationRun {
@@ -33,6 +39,12 @@ pub struct GenerationRun {
     pub request: SynthesisRequest,
     pub engine: VoxCPMEngine,
     pub sample_rate: u32,
+}
+
+pub struct PlaybackRun {
+    pub item_id: String,
+    pub audio: GeneratedAudio,
+    pub stop: mpsc::Receiver<()>,
 }
 
 impl AppCore {
@@ -56,6 +68,7 @@ impl AppCore {
             queue: GenerationQueue::default(),
             audio_cache: GeneratedAudioCache::default(),
             active_generation_item_id: None,
+            active_playback: None,
         })
     }
 
@@ -176,6 +189,52 @@ impl AppCore {
             .unwrap_or(false)
     }
 
+    pub fn begin_playback(&mut self, item_id: &str) -> Result<PlaybackRun> {
+        let audio = self
+            .audio_cache
+            .get(item_id)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("unknown item or no generated audio: {item_id}"))?;
+        if let Some(active_playback) = self.active_playback.take() {
+            let _ = active_playback.stop.send(());
+        }
+        self.queue.mark_all_stopped();
+        if !self.queue.mark_playing(item_id) {
+            bail!("history item is not ready for playback: {item_id}");
+        }
+
+        let (stop_sender, stop_receiver) = mpsc::channel();
+        self.active_playback = Some(ActivePlayback {
+            item_id: item_id.to_string(),
+            stop: stop_sender,
+        });
+
+        Ok(PlaybackRun {
+            item_id: item_id.to_string(),
+            audio,
+            stop: stop_receiver,
+        })
+    }
+
+    pub fn stop_playback(&mut self) -> Option<String> {
+        if let Some(active_playback) = self.active_playback.take() {
+            let _ = active_playback.stop.send(());
+        }
+        self.queue.mark_all_stopped()
+    }
+
+    pub fn finish_playback(&mut self, item_id: &str) -> Option<String> {
+        if self
+            .active_playback
+            .as_ref()
+            .is_some_and(|active_playback| active_playback.item_id == item_id)
+        {
+            self.active_playback = None;
+            return self.queue.mark_all_stopped();
+        }
+        None
+    }
+
     pub fn run_generation_now<F>(
         &mut self,
         item_id: &str,
@@ -262,7 +321,12 @@ impl AppCore {
         Ok(())
     }
 
-    pub fn mark_generation_progress(&mut self, item_id: &str, current: usize, total: usize) -> bool {
+    pub fn mark_generation_progress(
+        &mut self,
+        item_id: &str,
+        current: usize,
+        total: usize,
+    ) -> bool {
         self.queue.mark_progress(item_id, current, total)
     }
 
@@ -455,6 +519,22 @@ impl AppCore {
 
     pub fn set_loaded_model_for_test(&mut self, model_id: String) {
         self.loaded_model_id = Some(model_id);
+    }
+
+    pub fn set_generated_audio_for_test(
+        &mut self,
+        item_id: String,
+        samples: Vec<f32>,
+        sample_rate: u32,
+    ) {
+        self.audio_cache.insert(
+            item_id.clone(),
+            GeneratedAudio {
+                samples,
+                sample_rate,
+            },
+        );
+        self.queue.mark_ready(&item_id);
     }
 
     fn active_load_matches(&self, load_id: u64) -> bool {

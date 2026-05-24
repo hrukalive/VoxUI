@@ -1,13 +1,29 @@
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 
-#[wasm_bindgen]
+#[wasm_bindgen(inline_js = r#"
+export async function tauriInvoke(cmd, args) {
+  const invoke = globalThis.__TAURI__?.core?.invoke;
+  if (typeof invoke !== "function") {
+    throw new Error("Tauri core invoke API is unavailable");
+  }
+  return await invoke(cmd, args);
+}
+
+export async function tauriListen(event, handler) {
+  const listen = globalThis.__TAURI__?.event?.listen;
+  if (typeof listen !== "function") {
+    throw new Error("Tauri event listen API is unavailable");
+  }
+  return await listen(event, handler);
+}
+"#)]
 extern "C" {
-    #[wasm_bindgen(catch, js_namespace = ["window", "__TAURI__", "core"])]
+    #[wasm_bindgen(catch, js_name = tauriInvoke)]
     async fn invoke(cmd: &str, args: JsValue) -> Result<JsValue, JsValue>;
 
-    #[wasm_bindgen(js_namespace = ["window", "__TAURI__", "event"])]
-    async fn listen(event: &str, handler: &Closure<dyn Fn(JsValue)>) -> JsValue;
+    #[wasm_bindgen(catch, js_name = tauriListen)]
+    async fn listen(event: &str, handler: &Closure<dyn Fn(JsValue)>) -> Result<JsValue, JsValue>;
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -38,6 +54,69 @@ pub struct AudioState {
     pub hosts: Vec<AudioHost>,
     pub devices: Vec<AudioDevice>,
     pub default_host: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CommandResult {
+    pub ok: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LoadStartResult {
+    pub started: bool,
+    pub choice_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ModelLoadProgressEvent {
+    pub phase: String,
+    pub loaded_bytes: u64,
+    pub total_bytes: u64,
+    pub component: Option<String>,
+    pub component_index: usize,
+    pub component_total: usize,
+}
+
+impl ModelLoadProgressEvent {
+    pub fn percent(&self) -> f32 {
+        if self.component_total > 0 {
+            ((self.component_index as f64 / self.component_total as f64) * 100.0) as f32
+        } else if self.total_bytes > 0 {
+            ((self.loaded_bytes as f64 / self.total_bytes as f64) * 100.0) as f32
+        } else {
+            0.0
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ModelLoadDoneEvent {
+    pub status: String,
+    pub selected_model_id: Option<String>,
+    pub loaded_model_id: Option<String>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GenerationProgressEvent {
+    pub item_id: String,
+    pub current: usize,
+    pub total: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GenerationDoneEvent {
+    pub item_id: String,
+    pub status: String,
+    pub error: Option<String>,
+    pub sample_rate: Option<u32>,
+    pub duration_seconds: Option<f32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PlaybackStateEvent {
+    pub item_id: Option<String>,
+    pub state: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -204,10 +283,37 @@ pub async fn enqueue_generation(text: String) -> Result<HistoryItem, String> {
     serde_wasm_bindgen::from_value(value).map_err(|err| err.to_string())
 }
 
+pub async fn load_model(choice_id: String) -> Result<LoadStartResult, String> {
+    let args = serde_wasm_bindgen::to_value(&serde_json::json!({ "choiceId": choice_id }))
+        .map_err(|err| err.to_string())?;
+    let value = invoke("load_model", args)
+        .await
+        .map_err(stringify_js_error)?;
+
+    serde_wasm_bindgen::from_value(value).map_err(|err| err.to_string())
+}
+
+pub async fn cancel_model_load() -> Result<CommandResult, String> {
+    command_result("cancel_model_load", JsValue::NULL).await
+}
+
+pub async fn cancel_generation(item_id: String) -> Result<CommandResult, String> {
+    let args =
+        serde_wasm_bindgen::to_value(&ItemArgs { item_id }).map_err(|err| err.to_string())?;
+    command_result("cancel_generation", args).await
+}
+
 pub async fn play_audio(item_id: String) -> Result<(), String> {
     let args =
         serde_wasm_bindgen::to_value(&ItemArgs { item_id }).map_err(|err| err.to_string())?;
     invoke("play_audio", args)
+        .await
+        .map_err(stringify_js_error)
+        .map(|_| ())
+}
+
+pub async fn stop_audio() -> Result<(), String> {
+    invoke("stop_audio", JsValue::NULL)
         .await
         .map_err(stringify_js_error)
         .map(|_| ())
@@ -234,7 +340,9 @@ pub async fn listen_app_event(
     handler: impl Fn(JsValue) + 'static,
 ) -> Result<(), String> {
     let closure = Closure::wrap(Box::new(handler) as Box<dyn Fn(JsValue)>);
-    let value = listen(event, &closure).await;
+    let value = listen(event, &closure)
+        .await
+        .map_err(stringify_js_error)?;
 
     if value.is_undefined() || value.is_function() {
         closure.forget();
@@ -244,10 +352,28 @@ pub async fn listen_app_event(
     }
 }
 
+pub fn decode_app_event<T>(value: JsValue) -> Result<T, String>
+where
+    T: for<'de> Deserialize<'de>,
+{
+    let payload = js_sys::Reflect::get(&value, &JsValue::from_str("payload"))
+        .ok()
+        .filter(|payload| !payload.is_undefined())
+        .unwrap_or(value);
+
+    serde_wasm_bindgen::from_value(payload).map_err(|err| err.to_string())
+}
+
 async fn browse_path(command: &str) -> Result<Option<String>, String> {
     let value = invoke(command, JsValue::NULL)
         .await
         .map_err(stringify_js_error)?;
+
+    serde_wasm_bindgen::from_value(value).map_err(|err| err.to_string())
+}
+
+async fn command_result(command: &str, args: JsValue) -> Result<CommandResult, String> {
+    let value = invoke(command, args).await.map_err(stringify_js_error)?;
 
     serde_wasm_bindgen::from_value(value).map_err(|err| err.to_string())
 }

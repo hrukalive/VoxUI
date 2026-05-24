@@ -1,18 +1,19 @@
 use std::sync::atomic::AtomicBool;
+use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
+use std::thread;
 
 use candle_core::Device;
 use tauri::{AppHandle, Emitter, State, Window};
 use tauri_plugin_dialog::DialogExt;
-use tokio::task;
 use voxui_audio::{AudioPlayer, AudioSystem};
 use voxui_inference::VoxCPMEngine;
 
 use crate::app_core::AppCore;
 use crate::generation_queue::HistoryItem;
 use crate::types::{
-    AppSnapshot, AudioStateDto, CommandResult, ConfigPatch, GenerationDoneEvent,
-    GenerationProgressEvent, ModelChoice, PlaybackStateEvent,
+    AppSnapshot, AudioStateDto, BackendKind, CommandResult, ConfigPatch,
+    GenerationDoneEvent, GenerationProgressEvent, ModelChoice, PlaybackStateEvent,
 };
 
 pub type SharedAppCore = Arc<Mutex<AppCore>>;
@@ -102,20 +103,22 @@ pub fn load_model(
     state: State<'_, SharedAppCore>,
     choice_id: String,
 ) -> Result<crate::types::LoadStartResult, String> {
-    let (choice, load_id, cancel) = with_core(state.clone(), |core| {
-        let choice = core.selected_choice().map_err(|err| anyhow::anyhow!(err.to_string()))?;
+    let (choice, backend, load_id, cancel) = with_core(state.clone(), |core| {
+        let choice = core
+            .selected_choice()
+            .map_err(|err| anyhow::anyhow!(err.to_string()))?;
         if choice.id != choice_id {
             return Err(anyhow::anyhow!(
                 "requested choice does not match selected model"
             ));
         }
         let (load_id, cancel) = core.mark_load_started()?;
-        Ok((choice, load_id, cancel))
+        Ok((choice, core.config().backend, load_id, cancel))
     })?;
 
     let shared = state.inner().clone();
-    task::spawn_blocking(move || {
-        let result = load_engine_for_choice(&window, &choice, &cancel);
+    let spawn_result = spawn_background("voxui-model-load", move || {
+        let result = load_engine_for_choice(&window, &choice, backend, &cancel);
         let done = match result {
             Ok(engine) => {
                 let loaded_model_id = if let Ok(mut core) = shared.lock() {
@@ -169,6 +172,13 @@ pub fn load_model(
         };
         let _ = window.emit("model_load_done", done);
     });
+    if let Err(error) = spawn_result {
+        let _ = with_core(state, |core| {
+            core.mark_load_finished_without_swap_for_load(load_id);
+            Ok(())
+        });
+        return Err(error);
+    }
 
     Ok(crate::types::LoadStartResult {
         started: true,
@@ -228,12 +238,8 @@ pub fn play_audio(
     state: State<'_, SharedAppCore>,
     item_id: String,
 ) -> Result<CommandResult, String> {
-    with_core(state, |core| {
-        if !core.has_audio(&item_id) {
-            return Err(anyhow::anyhow!("unknown item or no generated audio: {item_id}"));
-        }
-        Ok(())
-    })?;
+    let run = with_core(state.clone(), |core| core.begin_playback(&item_id))?;
+    let item_id = run.item_id.clone();
     window
         .emit(
             "playback_state",
@@ -243,16 +249,21 @@ pub fn play_audio(
             },
         )
         .map_err(|err| err.to_string())?;
+    spawn_playback(window, state.inner().clone(), run);
     Ok(CommandResult { ok: true })
 }
 
 #[tauri::command]
-pub fn stop_audio(window: Window) -> Result<CommandResult, String> {
+pub fn stop_audio(
+    window: Window,
+    state: State<'_, SharedAppCore>,
+) -> Result<CommandResult, String> {
+    let item_id = with_core(state, |core| Ok(core.stop_playback()))?;
     window
         .emit(
             "playback_state",
             PlaybackStateEvent {
-                item_id: None,
+                item_id,
                 state: "stopped".to_string(),
             },
         )
@@ -263,6 +274,7 @@ pub fn stop_audio(window: Window) -> Result<CommandResult, String> {
 fn load_engine_for_choice(
     window: &Window,
     choice: &crate::types::ModelChoice,
+    backend: BackendKind,
     cancel: &AtomicBool,
 ) -> Result<VoxCPMEngine, String> {
     let total_bytes = choice.model_bytes + choice.lora_bytes;
@@ -280,9 +292,10 @@ fn load_engine_for_choice(
         )
         .map_err(|err| err.to_string())?;
 
+    let device = device_for_backend(backend)?;
     let mut engine = VoxCPMEngine::load_with_progress(
         &choice.model_dir,
-        Device::Cpu,
+        device,
         |current, total| {
             let _ = window.emit(
                 "model_load_progress",
@@ -307,6 +320,22 @@ fn load_engine_for_choice(
     Ok(engine)
 }
 
+fn device_for_backend(backend: BackendKind) -> Result<Device, String> {
+    match backend {
+        BackendKind::Cpu => Ok(Device::Cpu),
+        BackendKind::Cuda => {
+            #[cfg(feature = "cuda")]
+            {
+                Device::new_cuda(0).map_err(|error| error.to_string())
+            }
+            #[cfg(not(feature = "cuda"))]
+            {
+                Err("CUDA backend requested but voxui-desktop was built without CUDA support".to_string())
+            }
+        }
+    }
+}
+
 fn browse_wav_file(app: AppHandle) -> Result<Option<String>, String> {
     Ok(app
         .dialog()
@@ -317,7 +346,9 @@ fn browse_wav_file(app: AppHandle) -> Result<Option<String>, String> {
 }
 
 fn spawn_generation(window: Window, shared: SharedAppCore, item_id: String) {
-    task::spawn_blocking(move || {
+    let event_item_id = item_id.clone();
+    let worker_window = window.clone();
+    if let Err(error) = spawn_background("voxui-generation", move || {
         let run = match shared.lock() {
             Ok(mut core) => core.begin_generation_run(&item_id),
             Err(_) => Err("app state lock poisoned".to_string()),
@@ -325,7 +356,7 @@ fn spawn_generation(window: Window, shared: SharedAppCore, item_id: String) {
         let run = match run {
             Ok(run) => run,
             Err(error) => {
-                let _ = window.emit(
+                let _ = worker_window.emit(
                     "generation_done",
                     GenerationDoneEvent {
                         item_id,
@@ -339,7 +370,7 @@ fn spawn_generation(window: Window, shared: SharedAppCore, item_id: String) {
             }
         };
 
-        let progress_window = window.clone();
+        let progress_window = worker_window.clone();
         let progress_shared = shared.clone();
         let progress_item_id = run.item_id.clone();
         let result = AppCore::execute_generation_run(run, |current, total| {
@@ -386,6 +417,138 @@ fn spawn_generation(window: Window, shared: SharedAppCore, item_id: String) {
                 }
             }
         };
-        let _ = window.emit("generation_done", done);
-    });
+        let _ = worker_window.emit("generation_done", done);
+    }) {
+        let _ = window.emit(
+            "generation_done",
+            GenerationDoneEvent {
+                item_id: event_item_id,
+                status: "skipped".to_string(),
+                error: Some(error),
+                sample_rate: None,
+                duration_seconds: None,
+            },
+        );
+    }
+}
+
+fn spawn_playback(
+    window: Window,
+    shared: SharedAppCore,
+    run: crate::app_core::PlaybackRun,
+) {
+    let event_item_id = run.item_id.clone();
+    let worker_window = window.clone();
+    let worker_shared = shared.clone();
+    if let Err(error) = spawn_background("voxui-playback", move || {
+        let config = match worker_shared.lock() {
+            Ok(core) => core.snapshot().config,
+            Err(_) => {
+                let _ = worker_window.emit(
+                    "playback_state",
+                    PlaybackStateEvent {
+                        item_id: Some(run.item_id),
+                        state: "error".to_string(),
+                    },
+                );
+                return;
+            }
+        };
+        let system = AudioSystem::new();
+        let host = config
+            .audio_host
+            .clone()
+            .unwrap_or_else(|| system.default_host_name());
+        let device = crate::audio::list_devices(&system, &host)
+            .and_then(|devices| {
+                crate::audio::resolve_output_device_name(
+                    config.audio_device.clone(),
+                    &devices,
+                    system.default_device_name(&host),
+                )
+            })
+            .map_err(|err| err.to_string());
+
+        let stop_result = match device {
+            Ok(device) => {
+                match AudioPlayer::new(&host, &device, run.audio.sample_rate)
+                    .and_then(|mut player| {
+                        let done = player.play(run.audio.samples)?;
+                        wait_for_playback(done, run.stop, &mut player);
+                        Ok(())
+                    }) {
+                    Ok(()) => "stopped".to_string(),
+                    Err(error) => format!("error:{error}"),
+                }
+            }
+            Err(error) => format!("error:{error}"),
+        };
+
+        let item_id = match worker_shared.lock() {
+            Ok(mut core) => core.finish_playback(&run.item_id),
+            Err(_) => None,
+        };
+        let _ = worker_window.emit(
+            "playback_state",
+            PlaybackStateEvent {
+                item_id,
+                state: stop_result,
+            },
+        );
+    }) {
+        let item_id = match shared.lock() {
+            Ok(mut core) => core.finish_playback(&event_item_id),
+            Err(_) => None,
+        };
+        let _ = window.emit(
+            "playback_state",
+            PlaybackStateEvent {
+                item_id,
+                state: format!("error:{error}"),
+            },
+        );
+    }
+}
+
+fn wait_for_playback(
+    done: mpsc::Receiver<()>,
+    stop: mpsc::Receiver<()>,
+    player: &mut AudioPlayer,
+) {
+    loop {
+        if stop.try_recv().is_ok() {
+            player.stop();
+            break;
+        }
+        match done.recv_timeout(std::time::Duration::from_millis(50)) {
+            Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+        }
+    }
+}
+
+fn spawn_background(name: &'static str, task: impl FnOnce() + Send + 'static) -> Result<(), String> {
+    thread::Builder::new()
+        .name(name.to_string())
+        .spawn(task)
+        .map(|_| ())
+        .map_err(|error| format!("spawn background task {name}: {error}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    #[test]
+    fn background_tasks_do_not_require_tokio_runtime() {
+        let (sender, receiver) = mpsc::channel();
+
+        super::spawn_background("voxui-test-background", move || {
+            sender.send(42).unwrap();
+        })
+        .unwrap();
+
+        assert_eq!(receiver.recv_timeout(Duration::from_secs(2)).unwrap(), 42);
+    }
 }
