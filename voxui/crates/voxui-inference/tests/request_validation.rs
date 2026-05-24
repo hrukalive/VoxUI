@@ -1,6 +1,22 @@
 use std::path::PathBuf;
 
-use voxui_inference::{ModelVariant, SynthesisRequest};
+use voxui_inference::{ModelVariant, SynthesisChunk, SynthesisRequest};
+
+#[test]
+fn synthesis_chunk_is_public_api() {
+    let chunk = SynthesisChunk {
+        samples: vec![0.0, 0.25],
+        sample_rate: 48_000,
+        patch_index: 0,
+        max_patches: 8,
+        generated_patch_count: 1,
+        is_final: false,
+    };
+
+    assert_eq!(chunk.samples.len(), 2);
+    assert_eq!(chunk.sample_rate, 48_000);
+    assert!(!chunk.is_final);
+}
 
 #[test]
 fn request_rejects_empty_text_after_whitespace_normalization() {

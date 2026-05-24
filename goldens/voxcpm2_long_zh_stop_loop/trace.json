@@ -1,0 +1,233 @@
+{
+  "schema_version": 1,
+  "variant": "2.0",
+  "architecture": "voxcpm2",
+  "request": {
+    "text": "我说什么来着，我不知道你是什么脾气啊，我肯定要邦邦敲一下。",
+    "prompt_wav_path": null,
+    "prompt_text": null,
+    "reference_wav_path": null,
+    "cfg_value": 2.0,
+    "inference_timesteps": 10,
+    "min_len": 2,
+    "max_len": 2000,
+    "normalize": false,
+    "retry_badcase": false
+  },
+  "metadata": {
+    "seed": 1234,
+    "source_model_dir": "D:\\Sandbox_Share\\VoxUI\\VoxCPM\\models\\VoxCPM2",
+    "runtime_dtype": "float32"
+  },
+  "lists": {
+    "token_ids": [
+      59320,
+      59422,
+      59522,
+      59747,
+      59551,
+      59455,
+      59620,
+      65,
+      59422,
+      59397,
+      59618,
+      59575,
+      59496,
+      59390,
+      59747,
+      59551,
+      61558,
+      59754,
+      60240,
+      65,
+      59422,
+      60630,
+      59421,
+      59430,
+      61192,
+      61192,
+      61868,
+      59382,
+      59454,
+      66,
+      101
+    ]
+  },
+  "tensors": [
+    {
+      "name": "text_mask",
+      "file": "text_mask.f32",
+      "dtype": "f32",
+      "shape": [
+        1,
+        31
+      ]
+    },
+    {
+      "name": "audio_mask",
+      "file": "audio_mask.f32",
+      "dtype": "f32",
+      "shape": [
+        1,
+        31
+      ]
+    },
+    {
+      "name": "prefill_audio_feat_b_t_p_d",
+      "file": "prefill_audio_feat_b_t_p_d.f32",
+      "dtype": "f32",
+      "shape": [
+        1,
+        31,
+        4,
+        64
+      ]
+    },
+    {
+      "name": "local_encoder_output",
+      "file": "local_encoder_output.f32",
+      "dtype": "f32",
+      "shape": [
+        1,
+        31,
+        1024
+      ]
+    },
+    {
+      "name": "base_lm_prefill_hidden",
+      "file": "base_lm_prefill_hidden.f32",
+      "dtype": "f32",
+      "shape": [
+        1,
+        31,
+        2048
+      ]
+    },
+    {
+      "name": "first_fsq_hidden",
+      "file": "first_fsq_hidden.f32",
+      "dtype": "f32",
+      "shape": [
+        1,
+        31,
+        2048
+      ]
+    },
+    {
+      "name": "residual_lm_prefill_hidden",
+      "file": "residual_lm_prefill_hidden.f32",
+      "dtype": "f32",
+      "shape": [
+        1,
+        31,
+        2048
+      ]
+    },
+    {
+      "name": "first_dit_noise",
+      "file": "first_dit_noise.f32",
+      "dtype": "f32",
+      "shape": [
+        1,
+        64,
+        4
+      ]
+    },
+    {
+      "name": "first_dit_cond",
+      "file": "first_dit_cond.f32",
+      "dtype": "f32",
+      "shape": [
+        1,
+        64,
+        4
+      ]
+    },
+    {
+      "name": "first_dit_mu",
+      "file": "first_dit_mu.f32",
+      "dtype": "f32",
+      "shape": [
+        1,
+        2048
+      ]
+    },
+    {
+      "name": "first_dit_patch",
+      "file": "first_dit_patch.f32",
+      "dtype": "f32",
+      "shape": [
+        1,
+        64,
+        4
+      ]
+    },
+    {
+      "name": "stop_logits",
+      "file": "stop_logits.f32",
+      "dtype": "f32",
+      "shape": [
+        1,
+        2
+      ]
+    },
+    {
+      "name": "generated_latent",
+      "file": "generated_latent.f32",
+      "dtype": "f32",
+      "shape": [
+        1,
+        64,
+        136
+      ]
+    },
+    {
+      "name": "generated_audio_feat",
+      "file": "generated_audio_feat.f32",
+      "dtype": "f32",
+      "shape": [
+        34,
+        4,
+        64
+      ]
+    },
+    {
+      "name": "audio_vae_decoded_raw",
+      "file": "audio_vae_decoded_raw.f32",
+      "dtype": "f32",
+      "shape": [
+        1,
+        1,
+        261120
+      ]
+    },
+    {
+      "name": "dit_noises",
+      "file": "dit_noises.f32",
+      "dtype": "f32",
+      "shape": [
+        34,
+        64,
+        4
+      ]
+    },
+    {
+      "name": "stop_logits_sequence",
+      "file": "stop_logits_sequence.f32",
+      "dtype": "f32",
+      "shape": [
+        34,
+        2
+      ]
+    },
+    {
+      "name": "decoded_wav_head",
+      "file": "decoded_wav_head.f32",
+      "dtype": "f32",
+      "shape": [
+        4096
+      ]
+    }
+  ]
+}

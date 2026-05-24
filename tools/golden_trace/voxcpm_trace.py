@@ -66,6 +66,8 @@ class TraceCapture:
         self.model = pipeline.tts_model
         self.values: dict[str, np.ndarray] = {}
         self.lists: dict[str, list[int]] = {}
+        self._dit_noises: list[np.ndarray] = []
+        self._stop_logits_sequence: list[np.ndarray] = []
         self._orig_inference = None
         self._orig_encode_wav = None
         self._orig_vae_encode = None
@@ -83,6 +85,10 @@ class TraceCapture:
 
     def records(self, writer: TraceWriter) -> list[TensorRecord]:
         self.restore()
+        if self._dit_noises:
+            self.values["dit_noises"] = np.concatenate(self._dit_noises, axis=0)
+        if self._stop_logits_sequence:
+            self.values["stop_logits_sequence"] = np.concatenate(self._stop_logits_sequence, axis=0)
         for name, values in self.lists.items():
             writer.write_u32_list(name, values)
         return [writer.write_tensor(name, value) for name, value in self.values.items()]
@@ -176,6 +182,7 @@ class TraceCapture:
         def wrapped_randn(*args, **kwargs):
             result = self._orig_randn(*args, **kwargs)
             self._store_tensor_once("first_dit_noise", result)
+            self._dit_noises.append(to_numpy(result))
             return result
 
         torch.randn = wrapped_randn
@@ -225,6 +232,7 @@ class TraceCapture:
 
     def _stop_head_hook(self, _module, _inputs, output) -> None:
         self._store_tensor_once("stop_logits", output)
+        self._stop_logits_sequence.append(to_numpy(output))
 
 
 def main() -> None:
@@ -240,6 +248,11 @@ def main() -> None:
     parser.add_argument("--reference-wav-path", type=Path)
     parser.add_argument("--seed", type=int, default=1234)
     parser.add_argument("--runtime-dtype", choices=["float32", "bfloat16", "config"], default="float32")
+    parser.add_argument("--cfg-value", type=float, default=2.0)
+    parser.add_argument("--inference-timesteps", type=int, default=4)
+    parser.add_argument("--min-len", type=int, default=1)
+    parser.add_argument("--max-len", type=int, default=3)
+    parser.add_argument("--retry-badcase", action="store_true")
     args = parser.parse_args()
 
     set_seed(args.seed)
@@ -264,13 +277,13 @@ def main() -> None:
         prompt_wav_path=str(args.prompt_wav_path) if args.prompt_wav_path else None,
         prompt_text=args.prompt_text,
         reference_wav_path=str(args.reference_wav_path) if args.reference_wav_path else None,
-        cfg_value=2.0,
-        inference_timesteps=4,
-        min_len=1,
-        max_len=3,
+        cfg_value=args.cfg_value,
+        inference_timesteps=args.inference_timesteps,
+        min_len=args.min_len,
+        max_len=args.max_len,
         normalize=False,
         denoise=False,
-        retry_badcase=False,
+        retry_badcase=args.retry_badcase,
     )
 
     writer = TraceWriter(args.out_dir, args.case_name)
@@ -284,12 +297,12 @@ def main() -> None:
             "prompt_wav_path": str(args.prompt_wav_path) if args.prompt_wav_path else None,
             "prompt_text": args.prompt_text,
             "reference_wav_path": str(args.reference_wav_path) if args.reference_wav_path else None,
-            "cfg_value": 2.0,
-            "inference_timesteps": 4,
-            "min_len": 1,
-            "max_len": 3,
+            "cfg_value": args.cfg_value,
+            "inference_timesteps": args.inference_timesteps,
+            "min_len": args.min_len,
+            "max_len": args.max_len,
             "normalize": False,
-            "retry_badcase": False,
+            "retry_badcase": args.retry_badcase,
         },
         tensors=tensors,
         metadata={

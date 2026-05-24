@@ -43,6 +43,34 @@ fn audiovae_decode_matches_python_trace_head() {
 }
 
 #[test]
+fn audiovae_streaming_decode_matches_full_decode_for_patch_chunks() {
+    let root = repo_root();
+    let vae = load_voxcpm2_vae(&root);
+
+    let trace =
+        voxui_inference::trace::TraceCase::load(root.join("goldens/voxcpm2_zero_shot")).unwrap();
+    let latent = trace.tensor("generated_latent").unwrap();
+    let full = vae.decode(&latent).unwrap();
+
+    let mut streaming = vae.streaming_decoder();
+    let patch_size = 4;
+    let latent_len = latent.dim(2).unwrap();
+    let mut chunks = Vec::new();
+    for start in (0..latent_len).step_by(patch_size) {
+        let len = patch_size.min(latent_len - start);
+        chunks.push(
+            streaming
+                .decode_chunk(&latent.narrow(2, start, len).unwrap())
+                .unwrap(),
+        );
+    }
+    let refs = chunks.iter().collect::<Vec<_>>();
+    let streamed = candle_core::Tensor::cat(&refs, 2).unwrap();
+
+    voxui_inference::trace::assert_close(&streamed, &full, 2e-3).unwrap();
+}
+
+#[test]
 fn voxcpm05_audiovae_decode_matches_python_trace_head() {
     let root = repo_root();
     let vae = load_vae(&root, "voxcpm05-fp16", ModelVariant::VoxCpm05);

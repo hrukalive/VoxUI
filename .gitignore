@@ -15,6 +15,8 @@ target/
 # Local agent worktrees
 .worktrees
 .worktrees/
+.superpowers
+.superpowers/
 
 # Keep Cargo.lock for Tauri apps
 !Cargo.lock

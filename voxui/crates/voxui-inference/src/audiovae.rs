@@ -30,6 +30,7 @@ impl Default for AudioVAEConfig {
 }
 
 /// Precomputed weight-normed conv1d weights + bias.
+#[derive(Clone)]
 struct Conv1dParams {
     weight: Tensor, // [out, in/groups, kernel]
     bias: Tensor,   // [out]
@@ -37,6 +38,7 @@ struct Conv1dParams {
 }
 
 /// A residual unit: snake1 -> dw_conv -> snake2 -> pw_conv.
+#[derive(Clone)]
 struct ResidualUnit {
     alpha1: Tensor,
     dw_conv: Conv1dParams,
@@ -46,6 +48,7 @@ struct ResidualUnit {
 }
 
 /// A decoder block: (optional SR cond) -> snake -> transposed conv -> 3 residual units.
+#[derive(Clone)]
 struct DecoderBlock {
     scale: Option<Tensor>, // [dim] precomputed for sr_idx (V2 only)
     bias: Option<Tensor>,  // [dim] (V2 only)
@@ -56,6 +59,7 @@ struct DecoderBlock {
 }
 
 /// An encoder block: 3 residual units -> snake -> strided causal conv.
+#[derive(Clone)]
 struct EncoderBlock {
     res_units: Vec<ResidualUnit>,
     alpha: Tensor,
@@ -64,6 +68,7 @@ struct EncoderBlock {
 }
 
 /// AudioVAE encoder path producing the mean latent.
+#[derive(Clone)]
 struct CausalEncoder {
     first_conv: Conv1dParams,
     blocks: Vec<EncoderBlock>,
@@ -72,6 +77,7 @@ struct CausalEncoder {
 }
 
 /// AudioVAE decoder.
+#[derive(Clone)]
 pub struct AudioVAE {
     encoder: Option<CausalEncoder>,
     dw_conv: Conv1dParams,
@@ -79,6 +85,37 @@ pub struct AudioVAE {
     blocks: Vec<DecoderBlock>,
     final_alpha: Tensor,
     final_conv: Conv1dParams,
+}
+
+pub struct StreamingAudioVaeDecoder {
+    vae: AudioVAE,
+    states: StreamingConvStates,
+}
+
+#[derive(Default)]
+struct StreamingConvStates {
+    states: Vec<Option<Tensor>>,
+    cursor: usize,
+}
+
+impl StreamingConvStates {
+    fn begin_chunk(&mut self) {
+        self.cursor = 0;
+    }
+
+    fn clear(&mut self) {
+        self.states.clear();
+        self.cursor = 0;
+    }
+
+    fn next(&mut self) -> &mut Option<Tensor> {
+        if self.cursor == self.states.len() {
+            self.states.push(None);
+        }
+        let idx = self.cursor;
+        self.cursor += 1;
+        &mut self.states[idx]
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -159,6 +196,30 @@ fn causal_conv1d_with_padding(
     Ok(out.broadcast_add(&bias)?)
 }
 
+fn causal_conv1d_streaming(
+    x: &Tensor,
+    params: &Conv1dParams,
+    dilation: usize,
+    states: &mut StreamingConvStates,
+) -> Result<Tensor> {
+    let kernel_size = params.weight.dim(2)?;
+    let left_padding = (kernel_size - 1) * dilation;
+    if left_padding == 0 {
+        return causal_conv1d_with_padding(x, params, 0, 1, dilation);
+    }
+
+    let state = states.next();
+    let x_pad = match state.as_ref() {
+        Some(prev) => Tensor::cat(&[prev, x], 2)?,
+        None => x.pad_with_zeros(2, left_padding, 0)?,
+    };
+    update_left_context(state, x, left_padding)?;
+
+    let out = x_pad.conv1d(&params.weight, 0, 1, dilation, params.groups)?;
+    let bias = params.bias.reshape((1, (), 1))?;
+    Ok(out.broadcast_add(&bias)?)
+}
+
 /// Causal transposed conv1d (upsample).
 fn causal_conv_transpose1d(x: &Tensor, params: &Conv1dParams, stride: usize) -> Result<Tensor> {
     // Python CausalTransposeConv1d consumes padding/output_padding in the
@@ -175,6 +236,54 @@ fn causal_conv_transpose1d(x: &Tensor, params: &Conv1dParams, stride: usize) -> 
     };
     let bias = params.bias.reshape((1, (), 1))?;
     Ok(out.broadcast_add(&bias)?)
+}
+
+fn causal_conv_transpose1d_streaming(
+    x: &Tensor,
+    params: &Conv1dParams,
+    stride: usize,
+    states: &mut StreamingConvStates,
+) -> Result<Tensor> {
+    let kernel_size = params.weight.dim(2)?;
+    let ctx = (kernel_size - 1) / stride;
+    if ctx == 0 {
+        return causal_conv_transpose1d(x, params, stride);
+    }
+
+    let state = states.next();
+    let x_full = match state.as_ref() {
+        Some(prev) => Tensor::cat(&[prev, x], 2)?,
+        None => x.pad_with_zeros(2, ctx, 0)?,
+    };
+    update_left_context(state, x, ctx)?;
+
+    let out = x_full.conv_transpose1d(&params.weight, 0, 0, stride, 1, params.groups)?;
+    let bias = params.bias.reshape((1, (), 1))?;
+    let out = out.broadcast_add(&bias)?;
+    let left = ctx * stride;
+    let target_len = x.dim(2)? * stride;
+    out.narrow(2, left, target_len).map_err(Into::into)
+}
+
+fn update_left_context(state: &mut Option<Tensor>, x: &Tensor, context_len: usize) -> Result<()> {
+    if context_len == 0 {
+        return Ok(());
+    }
+
+    let x_len = x.dim(2)?;
+    let next = if x_len >= context_len {
+        x.narrow(2, x_len - context_len, context_len)?
+    } else {
+        let prev = match state.as_ref() {
+            Some(prev) => prev.clone(),
+            None => Tensor::zeros((x.dim(0)?, x.dim(1)?, context_len), x.dtype(), x.device())?,
+        };
+        let combined = Tensor::cat(&[&prev, x], 2)?;
+        let combined_len = combined.dim(2)?;
+        combined.narrow(2, combined_len - context_len, context_len)?
+    };
+    *state = Some(next.contiguous()?);
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -200,6 +309,15 @@ impl ResidualUnit {
         let residual = x.clone();
         let x = snake(x, &self.alpha1)?;
         let x = causal_conv1d(&x, &self.dw_conv, self.dilation)?;
+        let x = snake(&x, &self.alpha2)?;
+        let x = causal_conv1d(&x, &self.pw_conv, 1)?;
+        Ok(x.add(&residual)?)
+    }
+
+    fn forward_streaming(&self, x: &Tensor, states: &mut StreamingConvStates) -> Result<Tensor> {
+        let residual = x.clone();
+        let x = snake(x, &self.alpha1)?;
+        let x = causal_conv1d_streaming(&x, &self.dw_conv, self.dilation, states)?;
         let x = snake(&x, &self.alpha2)?;
         let x = causal_conv1d(&x, &self.pw_conv, 1)?;
         Ok(x.add(&residual)?)
@@ -272,6 +390,24 @@ impl DecoderBlock {
 
         for ru in &self.res_units {
             x = ru.forward(&x)?;
+        }
+        Ok(x)
+    }
+
+    fn forward_streaming(&self, x: &Tensor, states: &mut StreamingConvStates) -> Result<Tensor> {
+        let x = if let (Some(scale), Some(bias)) = (&self.scale, &self.bias) {
+            let scale = scale.reshape((1, (), 1))?;
+            let bias = bias.reshape((1, (), 1))?;
+            x.broadcast_mul(&scale)?.broadcast_add(&bias)?
+        } else {
+            x.clone()
+        };
+
+        let x = snake(&x, &self.alpha)?;
+        let mut x = causal_conv_transpose1d_streaming(&x, &self.trans_conv, self.stride, states)?;
+
+        for ru in &self.res_units {
+            x = ru.forward_streaming(&x, states)?;
         }
         Ok(x)
     }
@@ -525,6 +661,33 @@ impl AudioVAE {
         let x = snake(&x, &self.final_alpha)?;
         let x = causal_conv1d(&x, &self.final_conv, 1)?;
         Ok(x.tanh()?)
+    }
+
+    pub fn streaming_decoder(&self) -> StreamingAudioVaeDecoder {
+        StreamingAudioVaeDecoder {
+            vae: self.clone(),
+            states: StreamingConvStates::default(),
+        }
+    }
+}
+
+impl StreamingAudioVaeDecoder {
+    pub fn decode_chunk(&mut self, latent_chunk: &Tensor) -> Result<Tensor> {
+        self.states.begin_chunk();
+        let x = causal_conv1d_streaming(latent_chunk, &self.vae.dw_conv, 1, &mut self.states)?;
+        let mut x = causal_conv1d(&x, &self.vae.pw_conv, 1)?;
+
+        for block in &self.vae.blocks {
+            x = block.forward_streaming(&x, &mut self.states)?;
+        }
+
+        let x = snake(&x, &self.vae.final_alpha)?;
+        let x = causal_conv1d_streaming(&x, &self.vae.final_conv, 1, &mut self.states)?;
+        Ok(x.tanh()?)
+    }
+
+    pub fn reset(&mut self) {
+        self.states.clear();
     }
 }
 

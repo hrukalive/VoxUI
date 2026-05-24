@@ -39,6 +39,22 @@ pub struct FirstPatchDebug {
     pub stop_logits: Tensor,
 }
 
+#[derive(Debug)]
+pub struct StopLoopDebug {
+    pub stop_logits_sequence: Tensor,
+    pub generated_patch_count: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct SynthesisChunk {
+    pub samples: Vec<f32>,
+    pub sample_rate: u32,
+    pub patch_index: usize,
+    pub max_patches: usize,
+    pub generated_patch_count: usize,
+    pub is_final: bool,
+}
+
 struct LinearProjection {
     weight: LinearWeight,
     bias: Option<RuntimeTensor>,
@@ -278,6 +294,115 @@ impl VoxCPMEngine {
         self.generate_debug_first_patch_inner(request, Some(noise))
     }
 
+    pub fn generate_debug_stop_loop_with_noises(
+        &mut self,
+        request: SynthesisRequest,
+        noises: Tensor,
+    ) -> Result<StopLoopDebug> {
+        let request = request.validated(self.config.variant)?;
+        let prepared = self.build_inputs(&request)?;
+        let max_len = bounded_max_len(&request, prepared.target_text_token_count);
+        let mut state = self.prefill(&prepared)?;
+        let noise_count = noises.dim(0)?;
+        let mut stop_logits = Vec::new();
+        let mut generated_patch_count = 0usize;
+
+        for step in 0..max_len {
+            if step >= noise_count {
+                bail!(
+                    "fixed DIT noise trace ended after {noise_count} steps before Rust stop fired"
+                );
+            }
+            let noise = noises.narrow(0, step, 1)?;
+            let (_latent_patch, logits, _pred_feat) =
+                self.generate_one_patch(&mut state, &request, Some(&noise))?;
+            generated_patch_count += 1;
+            let stop_flag = stop_flag_from_logits(&logits)?;
+            stop_logits.push(logits);
+            if step > request.min_len && stop_flag {
+                break;
+            }
+        }
+
+        if stop_logits.is_empty() {
+            bail!("VoxCPM generated no stop logits");
+        }
+        let stop_refs = stop_logits.iter().collect::<Vec<_>>();
+        Ok(StopLoopDebug {
+            stop_logits_sequence: Tensor::cat(&stop_refs, 0)?,
+            generated_patch_count,
+        })
+    }
+
+    pub fn generate_debug_stop_loop_with_patches(
+        &mut self,
+        request: SynthesisRequest,
+        generated_patches: Tensor,
+    ) -> Result<StopLoopDebug> {
+        let request = request.validated(self.config.variant)?;
+        let prepared = self.build_inputs(&request)?;
+        let max_len = bounded_max_len(&request, prepared.target_text_token_count);
+        let mut state = self.prefill(&prepared)?;
+        let patch_count = generated_patches.dim(0)?;
+        let mut stop_logits = Vec::new();
+        let mut generated_patch_count = 0usize;
+
+        for step in 0..max_len {
+            if step >= patch_count {
+                bail!(
+                    "generated patch trace ended after {patch_count} steps before Rust stop fired"
+                );
+            }
+
+            let pred_feat = generated_patches.narrow(0, step, 1)?;
+            let curr_embed = self.encoder.encode_patches(&pred_feat.unsqueeze(1)?)?;
+            let curr_embed =
+                self.apply_projection(&curr_embed, &self.enc_to_lm_proj, "enc_to_lm_proj")?;
+            let logits = self.stop_logits(&state.lm_hidden)?;
+
+            generated_patch_count += 1;
+            let stop_flag = stop_flag_from_logits(&logits)?;
+            stop_logits.push(logits);
+            if step > request.min_len && stop_flag {
+                break;
+            }
+
+            let lm_out = self
+                .base_lm
+                .forward_embed_with_lora(&curr_embed, self.lora.as_ref())?;
+            let lm_hidden = lm_out.squeeze(1)?;
+            state.lm_hidden = self.fsq.forward(&lm_hidden)?;
+
+            let curr_embed_step = curr_embed.squeeze(1)?;
+            let residual_input = if self.config.variant == ModelVariant::VoxCpm2 {
+                let fusion = self
+                    .fusion_concat_proj
+                    .as_ref()
+                    .context("VoxCPM2 requires fusion_concat_proj")?;
+                self.apply_projection(
+                    &Tensor::cat(&[&state.lm_hidden, &curr_embed_step], 1)?,
+                    fusion,
+                    "fusion_concat_proj",
+                )?
+            } else {
+                (state.lm_hidden.clone() + curr_embed_step)?
+            };
+            let residual_out = self
+                .residual_lm
+                .forward_embed_with_lora(&residual_input.unsqueeze(1)?, self.lora.as_ref())?;
+            state.residual_hidden = residual_out.squeeze(1)?;
+        }
+
+        if stop_logits.is_empty() {
+            bail!("VoxCPM generated no stop logits");
+        }
+        let stop_refs = stop_logits.iter().collect::<Vec<_>>();
+        Ok(StopLoopDebug {
+            stop_logits_sequence: Tensor::cat(&stop_refs, 0)?,
+            generated_patch_count,
+        })
+    }
+
     pub fn generate<F: Fn(usize, usize)>(
         &mut self,
         request: SynthesisRequest,
@@ -324,6 +449,67 @@ impl VoxCPMEngine {
 
         let output = last_output.context("generation produced no output")?;
         self.decode_generation(output)
+    }
+
+    pub fn generate_streaming<F>(&mut self, request: SynthesisRequest, on_chunk: F) -> Result<()>
+    where
+        F: FnMut(SynthesisChunk) -> Result<()>,
+    {
+        self.generate_streaming_cancellable(request, on_chunk, None)
+    }
+
+    pub fn generate_streaming_cancellable<F>(
+        &mut self,
+        request: SynthesisRequest,
+        mut on_chunk: F,
+        cancel: Option<&AtomicBool>,
+    ) -> Result<()>
+    where
+        F: FnMut(SynthesisChunk) -> Result<()>,
+    {
+        let request = validate_streaming_request(request, self.config.variant)?;
+
+        let prepared = self.build_inputs(&request)?;
+        let max_len = bounded_max_len(&request, prepared.target_text_token_count);
+        tracing::info!(
+            "VoxCPMEngine::generate_streaming text_token_count={} bounded_max_len={} request_max_len={}",
+            prepared.target_text_token_count,
+            max_len,
+            request.max_len
+        );
+
+        let progress = |_, _| {};
+        let mut decoder = self.vae.streaming_decoder();
+        let mut emit_chunk = |engine: &VoxCPMEngine,
+                              state: &GenerationState,
+                              step: usize,
+                              max_patches: usize,
+                              is_final: bool|
+         -> Result<()> {
+            let latest_patch = state
+                .generated_patches
+                .last()
+                .context("streaming generation produced no patch")?;
+            let latent_chunk = latest_patch.transpose(1, 2)?.contiguous()?;
+            let audio = decoder.decode_chunk(&latent_chunk.to_dtype(DType::F32)?)?;
+            on_chunk(SynthesisChunk {
+                samples: audio.squeeze(0)?.squeeze(0)?.to_vec1::<f32>()?,
+                sample_rate: engine.config.sample_rate,
+                patch_index: step,
+                max_patches,
+                generated_patch_count: step + 1,
+                is_final,
+            })
+        };
+        self.run_generation_once_with_patches(
+            &prepared,
+            &request,
+            max_len,
+            &progress,
+            cancel,
+            &mut emit_chunk,
+        )?;
+        Ok(())
     }
 
     /// Compatibility wrapper for older callers. New code should use `generate`.
@@ -611,6 +797,21 @@ impl VoxCPMEngine {
         progress: &F,
         cancel: Option<&AtomicBool>,
     ) -> Result<GenerationOutput> {
+        let mut noop = |_: &VoxCPMEngine, _: &GenerationState, _: usize, _: usize, _: bool| Ok(());
+        self.run_generation_once_with_patches(
+            prepared, request, max_len, progress, cancel, &mut noop,
+        )
+    }
+
+    fn run_generation_once_with_patches<F: Fn(usize, usize)>(
+        &mut self,
+        prepared: &PreparedInputs,
+        request: &SynthesisRequest,
+        max_len: usize,
+        progress: &F,
+        cancel: Option<&AtomicBool>,
+        on_patch: &mut dyn FnMut(&VoxCPMEngine, &GenerationState, usize, usize, bool) -> Result<()>,
+    ) -> Result<GenerationOutput> {
         let mut state = self.prefill(prepared)?;
         let mut generated_patch_count = 0usize;
 
@@ -623,14 +824,10 @@ impl VoxCPMEngine {
                 self.generate_one_patch(&mut state, request, None)?;
             generated_patch_count += 1;
 
-            let stop_flag = stop_logits
-                .to_dtype(DType::F32)?
-                .to_vec2::<f32>()?
-                .first()
-                .and_then(|row| row.get(1).zip(row.first()))
-                .map(|(stop, keep)| stop > keep)
-                .unwrap_or(false);
-            if step > request.min_len && stop_flag {
+            let stop_flag = stop_flag_from_logits(&stop_logits)?;
+            let is_final = (step > request.min_len && stop_flag) || step + 1 == max_len;
+            on_patch(self, &state, step, max_len, is_final)?;
+            if is_final {
                 break;
             }
         }
@@ -839,11 +1036,7 @@ impl VoxCPMEngine {
             .iter()
             .filter(|value| **value > 0.5)
             .count();
-        let streaming_prefix_len = if self.config.variant == ModelVariant::VoxCpm2 {
-            4
-        } else {
-            3
-        };
+        let streaming_prefix_len = streaming_prefix_len(self.config.variant);
         audio_count.min(streaming_prefix_len - 1)
     }
 
@@ -916,6 +1109,35 @@ fn bounded_max_len(request: &SynthesisRequest, target_text_token_count: usize) -
     let ratio_limit =
         (target_text_token_count as f32 * request.retry_badcase_ratio_threshold + 10.0) as usize;
     request.max_len.min(ratio_limit)
+}
+
+fn validate_streaming_request(
+    request: SynthesisRequest,
+    variant: ModelVariant,
+) -> Result<SynthesisRequest> {
+    let request = request.validated(variant)?;
+    if request.retry_badcase {
+        bail!("retry_badcase=true is not supported for streaming synthesis");
+    }
+    Ok(request)
+}
+
+fn streaming_prefix_len(variant: ModelVariant) -> usize {
+    if variant == ModelVariant::VoxCpm2 {
+        4
+    } else {
+        3
+    }
+}
+
+fn stop_flag_from_logits(stop_logits: &Tensor) -> Result<bool> {
+    Ok(stop_logits
+        .to_dtype(DType::F32)?
+        .to_vec2::<f32>()?
+        .first()
+        .and_then(|row| row.get(1).zip(row.first()))
+        .map(|(stop, keep)| stop > keep)
+        .unwrap_or(false))
 }
 
 fn read_variant_from_loader(loader: &GgufModelLoader) -> Result<ModelVariant> {
@@ -1022,6 +1244,28 @@ mod tests {
         assert_eq!(decode_chunk_size, 640);
         assert_eq!(model.patch_size * audio_chunk_size, 1280);
         assert_eq!(model.patch_size * decode_chunk_size, 1280);
+    }
+
+    #[test]
+    fn streaming_prefix_len_matches_python_reference_defaults() {
+        assert_eq!(streaming_prefix_len(ModelVariant::VoxCpm05), 3);
+        assert_eq!(streaming_prefix_len(ModelVariant::VoxCpm15), 3);
+        assert_eq!(streaming_prefix_len(ModelVariant::VoxCpm2), 4);
+    }
+
+    #[test]
+    fn streaming_request_rejects_retry_badcase() {
+        let err = validate_streaming_request(
+            SynthesisRequest {
+                text: "hello".to_string(),
+                retry_badcase: true,
+                ..SynthesisRequest::default()
+            },
+            ModelVariant::VoxCpm2,
+        )
+        .unwrap_err();
+
+        assert!(err.to_string().contains("retry_badcase=true"));
     }
 }
 

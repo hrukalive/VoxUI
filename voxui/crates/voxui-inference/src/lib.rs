@@ -20,7 +20,7 @@ pub use audiovae::AudioVAE;
 pub use base_lm::{BaseLM, BaseLMConfig};
 pub use dit::DiT;
 pub use encoder::LocalEncoder;
-pub use engine::VoxCPMEngine;
+pub use engine::{SynthesisChunk, VoxCPMEngine};
 pub use lora::LoraAdapter;
 pub use manifest::{AudioVaeManifest, ModelConfig, ModelVariant, SpecialTokens};
 pub use model_loader::GgufModelLoader;
