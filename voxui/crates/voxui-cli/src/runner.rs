@@ -69,36 +69,52 @@ impl Runner {
             ..Default::default()
         };
 
+        let (tx, rx) = std::sync::mpsc::sync_channel::<Vec<f32>>(8);
+
+        let engine = &mut self.engine;
         let mut patch_count = 0usize;
         let mut max_patches = 0usize;
 
-        let result = self.engine.generate_streaming_cancellable(
-            request,
-            |chunk| {
-                patch_count = chunk.generated_patch_count;
-                max_patches = chunk.max_patches;
-                let bar_width = 20usize;
-                let filled = bar_width
-                    .saturating_mul(patch_count)
-                    .checked_div(max_patches.max(1))
-                    .unwrap_or(0);
-                let bar: String = std::iter::repeat_n('=', filled)
-                    .chain(std::iter::repeat_n('>', if patch_count < max_patches { 1 } else { 0 }))
-                    .chain(std::iter::repeat_n(' ', bar_width.saturating_sub(filled).saturating_sub(1)))
-                    .collect();
-                eprint!(
-                    "\r  Synthesizing... [{bar}] {patch_count}/{max_patches} patches",
-                );
-                player.push(&chunk.samples);
-                Ok(())
-            },
-            cancel,
-        );
+        let result: Result<()> = std::thread::scope(|s| {
+            let handle = s.spawn(|| -> Result<()> {
+                engine.generate_streaming_cancellable(
+                    request,
+                    |chunk| {
+                        patch_count = chunk.generated_patch_count;
+                        max_patches = chunk.max_patches;
+                        let bar_width = 20usize;
+                        let filled = bar_width
+                            .saturating_mul(patch_count)
+                            .checked_div(max_patches.max(1))
+                            .unwrap_or(0);
+                        let bar: String = std::iter::repeat_n('=', filled)
+                            .chain(std::iter::repeat_n('>', if patch_count < max_patches { 1 } else { 0 }))
+                            .chain(std::iter::repeat_n(' ', bar_width.saturating_sub(filled).saturating_sub(1)))
+                            .collect();
+                        eprint!(
+                            "\r  Synthesizing... [{bar}] {patch_count}/{max_patches} patches",
+                        );
+                        tx.send(chunk.samples)
+                            .map_err(|_| anyhow::anyhow!("audio channel closed"))?;
+                        Ok(())
+                    },
+                    cancel,
+                )
+            });
+
+            for samples in rx {
+                player.push(&samples);
+            }
+
+            handle.join().unwrap()
+        });
 
         if let Err(e) = result {
             if cancel.map(|c| c.load(Ordering::SeqCst)).unwrap_or(false) {
+                eprintln!();
                 return Ok(());
             }
+            eprintln!();
             return Err(e).context("synthesis failed");
         }
 
