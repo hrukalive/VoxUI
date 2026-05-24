@@ -3,6 +3,7 @@
 use anyhow::{anyhow, Result};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use r8brain_rs::{PrecisionProfile, Resampler};
+use ringbuf::{traits::{Consumer, Observer, Producer, Split}, HeapRb};
 use std::sync::{mpsc, Arc, Mutex};
 
 #[derive(Debug, Clone)]
@@ -190,6 +191,101 @@ impl AudioPlayer {
 impl Drop for AudioPlayer {
     fn drop(&mut self) {
         self.stop();
+    }
+}
+
+/// Streaming audio player that resamples and pushes audio chunks to the default
+/// output device in real time via a lock-free ring buffer.
+pub struct StreamingPlayer {
+    stream: cpal::Stream,
+    producer: ringbuf::HeapProd<f32>,
+    resampler: Resampler,
+    resample_ratio: f64,
+}
+
+impl StreamingPlayer {
+    /// Opens the default output device, creates a resampler from `source_sample_rate`
+    /// to the device native rate, and allocates a ring buffer sized for `pre_buffer_secs`
+    /// seconds of audio at the source rate.
+    pub fn new(source_sample_rate: u32, pre_buffer_secs: f32) -> Result<Self> {
+        let host = cpal::default_host();
+        let device = host
+            .default_output_device()
+            .ok_or_else(|| anyhow!("no default output device"))?;
+        let default_config = device.default_output_config()?;
+        let channels = default_config.channels();
+        let device_rate = default_config.sample_rate().0;
+
+        let buffer_capacity =
+            (source_sample_rate as f32 * pre_buffer_secs).ceil() as usize;
+        let ring = HeapRb::<f32>::new(buffer_capacity);
+        let (producer, mut consumer) = ring.split();
+
+        let resampler = Resampler::new(
+            source_sample_rate as f64,
+            device_rate as f64,
+            8192, // max input samples per process() call
+            2.0,
+            PrecisionProfile::Bits24,
+        );
+
+        let config = cpal::StreamConfig {
+            channels,
+            sample_rate: cpal::SampleRate(device_rate),
+            buffer_size: cpal::BufferSize::Default,
+        };
+
+        let stream = device.build_output_stream(
+            &config,
+            move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
+                let ch = channels as usize;
+                let available = consumer.occupied_len();
+                let want = data.len() / ch;
+                let to_read = want.min(available);
+                let mut buf = vec![0.0f32; to_read];
+                consumer.pop_slice(&mut buf);
+                let mut sample_iter = buf.into_iter();
+                for frame in data.chunks_mut(ch) {
+                    let val = sample_iter.next().unwrap_or(0.0);
+                    for sample in frame.iter_mut() {
+                        *sample = val;
+                    }
+                }
+            },
+            |err| eprintln!("audio stream error: {err}"),
+            None,
+        )?;
+
+        stream.play()?;
+
+        Ok(Self {
+            stream,
+            producer,
+            resampler,
+            resample_ratio: device_rate as f64 / source_sample_rate as f64,
+        })
+    }
+
+    /// Resample `samples` from the source rate to device rate and push into the
+    /// ring buffer. Blocks only if the ring buffer is full (backpressure).
+    pub fn push(&mut self, samples: &[f32]) {
+        let input_f64: Vec<f64> = samples.iter().map(|&s| s as f64).collect();
+        let max_out = (input_f64.len() as f64 * self.resample_ratio * 1.1).ceil() as usize;
+        let mut buf = vec![0.0f64; max_out];
+        let n = self.resampler.process(&input_f64, &mut buf);
+        for &s in &buf[..n] {
+            // Spin-wait if ring buffer is full (backpressure)
+            while self.producer.try_push(s as f32).is_err() {
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+        }
+    }
+
+    /// Block until all enqueued audio has been consumed by the output device.
+    pub fn flush(&self) {
+        while self.producer.occupied_len() > 0 {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
     }
 }
 
