@@ -1,0 +1,21 @@
+[package]
+name = "voxui-cli"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "voxui-cli"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+rustyline = "14"
+anyhow.workspace = true
+candle-core.workspace = true
+itertools = "0.13"
+ctrlc = "3"
+voxui-inference = { path = "../voxui-inference" }
+voxui-audio = { path = "../voxui-audio" }
+
+[features]
+cuda = ["voxui-inference/cuda"]

@@ -3,7 +3,7 @@ members = [
     "crates/voxui-gguf",
     "crates/voxui-inference",
     "crates/voxui-audio",
-    "crates/voxui-desktop/src-tauri",
+    "crates/voxui-cli",
 ]
 resolver = "2"
 
