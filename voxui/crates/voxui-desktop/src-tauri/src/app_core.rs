@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc};
@@ -40,6 +41,7 @@ pub struct AppCore {
     active_generation: Option<ActiveGeneration>,
     active_generation_item_id: Option<String>,
     active_playback: Option<ActivePlayback>,
+    pending_auto_playback: VecDeque<String>,
 }
 
 pub struct GenerationRun {
@@ -54,6 +56,11 @@ pub struct PlaybackRun {
     pub item_id: String,
     pub audio: GeneratedAudio,
     pub stop: mpsc::Receiver<()>,
+}
+
+pub struct PlaybackCompletion {
+    pub stopped_item_id: Option<String>,
+    pub next_run: Option<PlaybackRun>,
 }
 
 impl AppCore {
@@ -80,6 +87,7 @@ impl AppCore {
             active_generation: None,
             active_generation_item_id: None,
             active_playback: None,
+            pending_auto_playback: VecDeque::new(),
         })
     }
 
@@ -192,6 +200,16 @@ impl AppCore {
         Ok(())
     }
 
+    pub fn regenerate_item_stopping_playback(
+        &mut self,
+        item_id: &str,
+        config: &AppConfig,
+    ) -> Result<Option<String>> {
+        let stopped_item_id = self.stop_playback();
+        self.regenerate_item(item_id, config)?;
+        Ok(stopped_item_id)
+    }
+
     pub fn config(&self) -> &AppConfig {
         &self.config
     }
@@ -205,7 +223,25 @@ impl AppCore {
             .unwrap_or(false)
     }
 
+    fn ensure_playable(&self, item_id: &str) -> Result<()> {
+        if !self.audio_cache.contains(item_id) {
+            bail!("unknown item or no generated audio: {item_id}");
+        }
+        let item = self
+            .queue
+            .items()
+            .iter()
+            .find(|item| item.id == item_id)
+            .ok_or_else(|| anyhow::anyhow!("unknown history item: {item_id}"))?;
+        if item.status != HistoryStatus::Ready || !item.has_audio {
+            bail!("history item is not ready for playback: {item_id}");
+        }
+        Ok(())
+    }
+
     pub fn begin_playback(&mut self, item_id: &str) -> Result<PlaybackRun> {
+        self.pending_auto_playback
+            .retain(|pending_item_id| pending_item_id != item_id);
         let audio = self
             .audio_cache
             .get(item_id)
@@ -232,6 +268,22 @@ impl AppCore {
         })
     }
 
+    pub fn begin_or_queue_auto_playback(&mut self, item_id: &str) -> Result<Option<PlaybackRun>> {
+        self.ensure_playable(item_id)?;
+        if self.active_playback.is_some() {
+            if !self
+                .pending_auto_playback
+                .iter()
+                .any(|pending_item_id| pending_item_id == item_id)
+            {
+                self.pending_auto_playback.push_back(item_id.to_string());
+            }
+            return Ok(None);
+        }
+
+        self.begin_playback(item_id).map(Some)
+    }
+
     pub fn stop_playback(&mut self) -> Option<String> {
         if let Some(active_playback) = self.active_playback.take() {
             let _ = active_playback.stop.send(());
@@ -249,6 +301,28 @@ impl AppCore {
             return self.queue.mark_all_stopped();
         }
         None
+    }
+
+    pub fn finish_playback_and_next(&mut self, item_id: &str) -> PlaybackCompletion {
+        let stopped_item_id = self.finish_playback(item_id);
+        let mut next_run = None;
+
+        while let Some(next_item_id) = self.pending_auto_playback.pop_front() {
+            match self.begin_playback(&next_item_id) {
+                Ok(run) => {
+                    next_run = Some(run);
+                    break;
+                }
+                Err(error) => {
+                    tracing::warn!("failed to start pending playback {next_item_id}: {error}");
+                }
+            }
+        }
+
+        PlaybackCompletion {
+            stopped_item_id,
+            next_run,
+        }
     }
 
     pub fn run_generation_now<F>(

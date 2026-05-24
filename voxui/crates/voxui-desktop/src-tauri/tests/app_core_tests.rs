@@ -205,6 +205,46 @@ fn playback_state_requires_cached_audio_and_can_stop() {
 }
 
 #[test]
+fn regenerate_stops_current_playback_before_queueing_work() {
+    let mut core = AppCore::from_config(AppConfig::default()).unwrap();
+    core.set_loaded_model_for_test("model".to_string());
+    let playing = core.enqueue_generation("playing".to_string()).unwrap();
+    let target = core.enqueue_generation("target".to_string()).unwrap();
+    core.set_generated_audio_for_test(playing.id.clone(), vec![0.0; 8], 16_000);
+    core.set_generated_audio_for_test(target.id.clone(), vec![0.0; 8], 16_000);
+
+    let _run = core.begin_playback(&playing.id).unwrap();
+    let stopped = core.regenerate_item_stopping_playback(&target.id, &AppConfig::default()).unwrap();
+    let snapshot = core.snapshot();
+
+    assert_eq!(stopped.as_deref(), Some(playing.id.as_str()));
+    assert_eq!(snapshot.history[0].status, HistoryStatus::Ready);
+    assert_eq!(snapshot.history[1].status, HistoryStatus::Queued);
+}
+
+#[test]
+fn automatic_playback_waits_until_current_playback_finishes() {
+    let mut core = AppCore::from_config(AppConfig::default()).unwrap();
+    core.set_loaded_model_for_test("model".to_string());
+    let playing = core.enqueue_generation("playing".to_string()).unwrap();
+    let next = core.enqueue_generation("next".to_string()).unwrap();
+    core.set_generated_audio_for_test(playing.id.clone(), vec![0.0; 8], 16_000);
+    core.set_generated_audio_for_test(next.id.clone(), vec![1.0; 8], 16_000);
+
+    let _run = core.begin_playback(&playing.id).unwrap();
+    assert!(core.begin_or_queue_auto_playback(&next.id).unwrap().is_none());
+    assert_eq!(core.snapshot().history[0].status, HistoryStatus::Playing);
+    assert_eq!(core.snapshot().history[1].status, HistoryStatus::Ready);
+
+    let finished = core.finish_playback_and_next(&playing.id);
+
+    assert_eq!(finished.stopped_item_id.as_deref(), Some(playing.id.as_str()));
+    assert_eq!(finished.next_run.as_ref().map(|run| run.item_id.as_str()), Some(next.id.as_str()));
+    assert_eq!(core.snapshot().history[0].status, HistoryStatus::Ready);
+    assert_eq!(core.snapshot().history[1].status, HistoryStatus::Playing);
+}
+
+#[test]
 fn begin_generation_rejects_second_active_generation_without_consuming_queue() {
     let mut core = AppCore::from_config(AppConfig::default()).unwrap();
     core.set_loaded_model_for_test("model".to_string());

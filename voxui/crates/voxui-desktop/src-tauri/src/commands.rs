@@ -203,11 +203,21 @@ pub fn regenerate(
     state: State<'_, SharedAppCore>,
     item_id: String,
 ) -> Result<CommandResult, String> {
-    with_core(state.clone(), |core| {
+    let stopped_item_id = with_core(state.clone(), |core| {
         let config = core.config().clone();
-        core.regenerate_item(&item_id, &config)?;
-        Ok(CommandResult { ok: true })
+        core.regenerate_item_stopping_playback(&item_id, &config)
     })?;
+    if stopped_item_id.is_some() {
+        window
+            .emit(
+                "playback_state",
+                PlaybackStateEvent {
+                    item_id: stopped_item_id,
+                    state: "stopped".to_string(),
+                },
+            )
+            .map_err(|err| err.to_string())?;
+    }
     kick_generation_queue(&window, state.inner().clone());
     Ok(CommandResult { ok: true })
 }
@@ -391,7 +401,7 @@ fn spawn_generation(window: Window, shared: SharedAppCore, run: crate::app_core:
                     None
                 } else if let Ok(mut core) = shared.lock() {
                     core.finish_generation_success(run, samples, duration_seconds);
-                    core.begin_playback(&item_id).ok()
+                    core.begin_or_queue_auto_playback(&item_id).ok().flatten()
                 } else {
                     None
                 };
@@ -443,6 +453,13 @@ fn spawn_generation(window: Window, shared: SharedAppCore, run: crate::app_core:
         };
         let _ = worker_window.emit("generation_done", done);
         if let Some(playback_run) = playback_run {
+            let _ = worker_window.emit(
+                "playback_state",
+                PlaybackStateEvent {
+                    item_id: Some(playback_run.item_id.clone()),
+                    state: "playing".to_string(),
+                },
+            );
             spawn_playback(worker_window.clone(), shared.clone(), playback_run);
         }
         kick_generation_queue(&worker_window, shared.clone());
@@ -512,17 +529,30 @@ fn spawn_playback(
             Err(error) => format!("error:{error}"),
         };
 
-        let item_id = match worker_shared.lock() {
-            Ok(mut core) => core.finish_playback(&run.item_id),
-            Err(_) => None,
+        let completion = match worker_shared.lock() {
+            Ok(mut core) => core.finish_playback_and_next(&run.item_id),
+            Err(_) => crate::app_core::PlaybackCompletion {
+                stopped_item_id: None,
+                next_run: None,
+            },
         };
         let _ = worker_window.emit(
             "playback_state",
             PlaybackStateEvent {
-                item_id,
+                item_id: completion.stopped_item_id,
                 state: stop_result,
             },
         );
+        if let Some(next_run) = completion.next_run {
+            let _ = worker_window.emit(
+                "playback_state",
+                PlaybackStateEvent {
+                    item_id: Some(next_run.item_id.clone()),
+                    state: "playing".to_string(),
+                },
+            );
+            spawn_playback(worker_window.clone(), worker_shared.clone(), next_run);
+        }
     }) {
         let item_id = match shared.lock() {
             Ok(mut core) => core.finish_playback(&event_item_id),
