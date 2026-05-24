@@ -16,6 +16,10 @@ pub struct Args {
     /// Use CUDA device instead of CPU
     #[arg(long)]
     pub cuda: bool,
+
+    /// Stream synthesis and playback (disables badcase retry)
+    #[arg(long)]
+    pub stream: bool,
 }
 
 impl Args {
@@ -67,6 +71,7 @@ mod tests {
             model: PathBuf::from("__nonexistent_dir__"),
             lora: None,
             cuda: false,
+            stream: false,
         };
         let err = args.validate().unwrap_err();
         assert!(err.to_string().contains("not found"));
@@ -80,6 +85,7 @@ mod tests {
             model: tmp.clone(),
             lora: None,
             cuda: false,
+            stream: false,
         };
         let err = args.validate().unwrap_err();
         assert!(err.to_string().contains("missing required files"));
@@ -97,6 +103,7 @@ mod tests {
             model: tmp.clone(),
             lora: None,
             cuda: false,
+            stream: false,
         };
         assert!(args.validate().is_ok());
         let _ = std::fs::remove_dir_all(&tmp);
@@ -113,6 +120,7 @@ mod tests {
             model: tmp.clone(),
             lora: Some(PathBuf::from("__nonexistent_lora__.gguf")),
             cuda: false,
+            stream: false,
         };
         let err = args.validate().unwrap_err();
         assert!(err.to_string().contains("not found"));
@@ -132,6 +140,7 @@ mod tests {
             model: tmp.clone(),
             lora: Some(lora_path),
             cuda: false,
+            stream: false,
         };
         let err = args.validate().unwrap_err();
         assert!(err.to_string().contains(".gguf extension"));

@@ -23,6 +23,7 @@ fn main() -> Result<()> {
         Device::Cpu
     };
 
+    let stream = args.stream;
     let mut runner = Runner::load(&args.model, args.lora, device)?;
     runner.display_info();
 
@@ -52,7 +53,7 @@ fn main() -> Result<()> {
                     eprintln!("  Warning: failed to save history: {e}");
                 }
 
-                match runner.synthesize_and_play(&line, Some(&cancel)) {
+                match runner.synthesize_and_play(&line, stream, Some(&cancel)) {
                     Ok(()) => {
                         if cancel.load(Ordering::SeqCst) {
                             println!("  Cancelled.");

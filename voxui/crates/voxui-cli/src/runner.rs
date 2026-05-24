@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::{Context, Result};
 use candle_core::Device;
-use voxui_audio::StreamingPlayer;
+use voxui_audio::{AudioPlayer, AudioSystem, StreamingPlayer};
 use voxui_inference::{SynthesisRequest, VoxCPMEngine};
 
 pub struct Runner {
@@ -37,9 +37,24 @@ impl Runner {
         })
     }
 
-    /// Synthesize `text` and stream audio to the default output device.
-    /// Checks `cancel` after each chunk; returns early if set.
+    /// Synthesize `text` and play audio. In streaming mode, audio plays as chunks
+    /// arrive (retry_badcase is disabled). In batch mode, the full waveform is
+    /// generated first, then played at once.
+    /// Checks `cancel`; returns early if set.
     pub fn synthesize_and_play(
+        &mut self,
+        text: &str,
+        stream: bool,
+        cancel: Option<&AtomicBool>,
+    ) -> Result<()> {
+        if stream {
+            self.synthesize_streaming(text, cancel)
+        } else {
+            self.synthesize_batch(text, cancel)
+        }
+    }
+
+    fn synthesize_streaming(
         &mut self,
         text: &str,
         cancel: Option<&AtomicBool>,
@@ -50,6 +65,7 @@ impl Runner {
 
         let request = SynthesisRequest {
             text: text.to_string(),
+            retry_badcase: false,
             ..Default::default()
         };
 
@@ -61,7 +77,6 @@ impl Runner {
             |chunk| {
                 patch_count = chunk.generated_patch_count;
                 max_patches = chunk.max_patches;
-                // Simple progress bar: 20 chars wide
                 let bar_width = 20usize;
                 let filled = bar_width
                     .saturating_mul(patch_count)
@@ -81,7 +96,6 @@ impl Runner {
         );
 
         if let Err(e) = result {
-            // Check if it was a cancellation
             if cancel.map(|c| c.load(Ordering::SeqCst)).unwrap_or(false) {
                 return Ok(());
             }
@@ -91,10 +105,59 @@ impl Runner {
         player.flush();
         eprintln!();
 
-        // Let cancellation show as cancelled, not done
         if cancel.map(|c| c.load(Ordering::SeqCst)).unwrap_or(false) {
             return Ok(());
         }
+
+        Ok(())
+    }
+
+    fn synthesize_batch(
+        &mut self,
+        text: &str,
+        cancel: Option<&AtomicBool>,
+    ) -> Result<()> {
+        let sample_rate = self.engine.sample_rate();
+        let request = SynthesisRequest {
+            text: text.to_string(),
+            ..Default::default()
+        };
+
+        let samples = self.engine.generate_cancellable(
+            request,
+            |current, max| {
+                let bar_width = 20usize;
+                let filled = bar_width
+                    .saturating_mul(current)
+                    .checked_div(max.max(1))
+                    .unwrap_or(0);
+                let bar: String = std::iter::repeat_n('=', filled)
+                    .chain(std::iter::repeat_n('>', if current < max { 1 } else { 0 }))
+                    .chain(std::iter::repeat_n(' ', bar_width.saturating_sub(filled).saturating_sub(1)))
+                    .collect();
+                eprint!(
+                    "\r  Synthesizing... [{bar}] {current}/{max} patches",
+                );
+            },
+            cancel,
+        )
+        .context("synthesis failed")?;
+
+        eprintln!();
+
+        if cancel.map(|c| c.load(Ordering::SeqCst)).unwrap_or(false) {
+            return Ok(());
+        }
+
+        let audio = AudioSystem::new();
+        let host_name = audio.default_host_name();
+        let device_name = audio.default_device_name(&host_name)
+            .context("no default audio output device")?;
+        let mut player = AudioPlayer::new(&host_name, &device_name, sample_rate)
+            .context("failed to create audio player")?;
+        player
+            .play_blocking(samples)
+            .context("audio playback failed")?;
 
         Ok(())
     }
