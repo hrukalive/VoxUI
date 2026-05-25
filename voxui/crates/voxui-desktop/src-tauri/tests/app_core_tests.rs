@@ -4,7 +4,9 @@ use std::path::PathBuf;
 use tempfile::TempDir;
 use voxui_desktop::app_core::{load_button_enabled, AppCore};
 use voxui_desktop::generation_queue::HistoryStatus;
-use voxui_desktop::types::{AppConfig, BackendKind, ConfigPatch, GenerationSettings, LanguageMode, LoadUiState};
+use voxui_desktop::types::{
+    AppConfig, BackendKind, ConfigPatch, GenerationSettings, LanguageMode, LoadUiState,
+};
 
 #[test]
 fn load_button_requires_selection_and_difference_from_loaded() {
@@ -205,7 +207,24 @@ fn playback_state_requires_cached_audio_and_can_stop() {
 }
 
 #[test]
-fn regenerate_stops_current_playback_before_queueing_work() {
+fn regenerate_stops_playback_when_regenerating_playing_item() {
+    let mut core = AppCore::from_config(AppConfig::default()).unwrap();
+    core.set_loaded_model_for_test("model".to_string());
+    let target = core.enqueue_generation("target".to_string()).unwrap();
+    core.set_generated_audio_for_test(target.id.clone(), vec![0.0; 8], 16_000);
+
+    let _run = core.begin_playback(&target.id).unwrap();
+    let stopped = core
+        .regenerate_item_stopping_playback(&target.id, &AppConfig::default())
+        .unwrap();
+    let snapshot = core.snapshot();
+
+    assert_eq!(stopped.as_deref(), Some(target.id.as_str()));
+    assert_eq!(snapshot.history[0].status, HistoryStatus::Queued);
+}
+
+#[test]
+fn regenerate_keeps_other_item_playing() {
     let mut core = AppCore::from_config(AppConfig::default()).unwrap();
     core.set_loaded_model_for_test("model".to_string());
     let playing = core.enqueue_generation("playing".to_string()).unwrap();
@@ -214,11 +233,13 @@ fn regenerate_stops_current_playback_before_queueing_work() {
     core.set_generated_audio_for_test(target.id.clone(), vec![0.0; 8], 16_000);
 
     let _run = core.begin_playback(&playing.id).unwrap();
-    let stopped = core.regenerate_item_stopping_playback(&target.id, &AppConfig::default()).unwrap();
+    let stopped = core
+        .regenerate_item_stopping_playback(&target.id, &AppConfig::default())
+        .unwrap();
     let snapshot = core.snapshot();
 
-    assert_eq!(stopped.as_deref(), Some(playing.id.as_str()));
-    assert_eq!(snapshot.history[0].status, HistoryStatus::Ready);
+    assert_eq!(stopped, None);
+    assert_eq!(snapshot.history[0].status, HistoryStatus::Playing);
     assert_eq!(snapshot.history[1].status, HistoryStatus::Queued);
 }
 
@@ -232,14 +253,23 @@ fn automatic_playback_waits_until_current_playback_finishes() {
     core.set_generated_audio_for_test(next.id.clone(), vec![1.0; 8], 16_000);
 
     let _run = core.begin_playback(&playing.id).unwrap();
-    assert!(core.begin_or_queue_auto_playback(&next.id).unwrap().is_none());
+    assert!(core
+        .begin_or_queue_auto_playback(&next.id)
+        .unwrap()
+        .is_none());
     assert_eq!(core.snapshot().history[0].status, HistoryStatus::Playing);
     assert_eq!(core.snapshot().history[1].status, HistoryStatus::Ready);
 
     let finished = core.finish_playback_and_next(&playing.id);
 
-    assert_eq!(finished.stopped_item_id.as_deref(), Some(playing.id.as_str()));
-    assert_eq!(finished.next_run.as_ref().map(|run| run.item_id.as_str()), Some(next.id.as_str()));
+    assert_eq!(
+        finished.stopped_item_id.as_deref(),
+        Some(playing.id.as_str())
+    );
+    assert_eq!(
+        finished.next_run.as_ref().map(|run| run.item_id.as_str()),
+        Some(next.id.as_str())
+    );
     assert_eq!(core.snapshot().history[0].status, HistoryStatus::Ready);
     assert_eq!(core.snapshot().history[1].status, HistoryStatus::Playing);
 }
@@ -485,7 +515,8 @@ fn canceling_active_regeneration_keeps_previous_audio_playable() {
 
     let item = core.enqueue_generation("hello".to_string()).unwrap();
     core.set_generated_audio_for_test(item.id.clone(), vec![0.0; 8], 16_000);
-    core.regenerate_item(&item.id, &AppConfig::default()).unwrap();
+    core.regenerate_item(&item.id, &AppConfig::default())
+        .unwrap();
     let run = core.begin_generation_run(&item.id).unwrap();
 
     assert!(core.cancel_generation_item(&item.id));

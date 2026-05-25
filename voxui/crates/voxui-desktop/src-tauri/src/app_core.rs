@@ -205,7 +205,9 @@ impl AppCore {
         item_id: &str,
         config: &AppConfig,
     ) -> Result<Option<String>> {
-        let stopped_item_id = self.stop_playback();
+        let stopped_item_id = self.stop_playback_if_active(item_id);
+        self.pending_auto_playback
+            .retain(|pending_item_id| pending_item_id != item_id);
         self.regenerate_item(item_id, config)?;
         Ok(stopped_item_id)
     }
@@ -289,6 +291,18 @@ impl AppCore {
             let _ = active_playback.stop.send(());
         }
         self.queue.mark_all_stopped()
+    }
+
+    fn stop_playback_if_active(&mut self, item_id: &str) -> Option<String> {
+        if !self
+            .active_playback
+            .as_ref()
+            .is_some_and(|active_playback| active_playback.item_id == item_id)
+        {
+            return None;
+        }
+
+        self.stop_playback()
     }
 
     pub fn finish_playback(&mut self, item_id: &str) -> Option<String> {
@@ -647,9 +661,7 @@ impl AppCore {
             .is_some_and(|active| active.item_id == item_id)
         {
             if let Some(active_generation) = self.active_generation.as_ref() {
-                active_generation
-                    .cancel
-                    .store(true, Ordering::SeqCst);
+                active_generation.cancel.store(true, Ordering::SeqCst);
             }
             return self.queue.mark_canceled(item_id);
         }

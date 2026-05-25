@@ -182,27 +182,21 @@ pub fn App() -> impl IntoView {
                     />
                 }
             }}
-            {move || {
-                let snapshot = current_snapshot();
-                let labels = labels(ui_language(snapshot.config.language));
-                let max_chars = snapshot.config.max_input_chars;
-                let generate_disabled =
-                    snapshot.loaded_model_id.is_none() || matches!(snapshot.load_state, LoadUiState::Loading);
-                view! {
-                    <InputBox
-                        labels=labels
-                        max_chars=max_chars
-                        disabled=generate_disabled
-                        on_generate=move |text| {
-                            spawn_local(async move {
-                                if crate::tauri_api::enqueue_generation(text).await.is_ok() {
-                                    refresh_snapshot();
-                                }
-                            });
-                        }
-                    />
+            <InputBox
+                labels=current_labels
+                max_chars=move || current_snapshot().config.max_input_chars
+                disabled=move || {
+                    let snapshot = current_snapshot();
+                    snapshot.loaded_model_id.is_none() || matches!(snapshot.load_state, LoadUiState::Loading)
                 }
-            }}
+                on_generate=move |text| {
+                    spawn_local(async move {
+                        if crate::tauri_api::enqueue_generation(text).await.is_ok() {
+                            refresh_snapshot();
+                        }
+                    });
+                }
+            />
             <SettingsModal
                 labels=current_labels
                 config=move || current_snapshot().config
