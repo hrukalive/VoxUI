@@ -17,6 +17,8 @@ target/
 .worktrees/
 .superpowers
 .superpowers/
+.codegraph
+.codegraph/
 
 # Keep Cargo.lock for Tauri apps
 !Cargo.lock

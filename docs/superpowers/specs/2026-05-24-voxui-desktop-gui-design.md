@@ -63,7 +63,8 @@ Top navbar:
 - Right side contains the model dropdown, `Load` button, and settings button.
 - The navbar remains fixed at the top.
 - Model dropdown entries show base and LoRA variants, for example `voxcpm2-fp16` and `voxcpm2-fp16 | lora_ft2`.
-- The `Load` button is disabled when no model is selected and shows loading state while a load is active.
+- The model dropdown is disabled when no models are detected.
+- The `Load` button is disabled when no model is selected, when no models are detected, or while a load is active.
 
 Middle generation history:
 
@@ -94,7 +95,7 @@ Settings modal:
 
 ## Model Discovery
 
-The default model directory is a `models` folder next to the executable. During development, the user can configure `D:\Sandbox_Share\VoxUI\models`.
+The default model directory is the parent directory of the executable. During development, the user can configure `D:\Sandbox_Share\VoxUI\models`.
 
 A valid model folder contains `model.gguf`. Additional `*.gguf` files inside the same folder are treated as LoRA adapters, excluding `model.gguf` itself. Each valid model folder produces one base dropdown entry and one additional dropdown entry per LoRA file. For example, if `voxcpm2-fp16` contains `model.gguf`, `lora_a1.gguf`, and `lora_a2.gguf`, then the dropdown entries are:
 
@@ -262,3 +263,5 @@ The previous README desktop commands should be updated during implementation aft
 The exact WebAudio streaming implementation should start with the smallest reliable service. If scheduled `AudioBufferSourceNode` playback is smooth enough, use it. If not, move only the streaming buffer internals to `AudioWorklet` while preserving the same frontend service API.
 
 Byte-level load progress should be added only where the loader already has a natural byte-read boundary. The minimum acceptable first version is component progress from the existing `VoxCPMEngine::load_with_progress` callback.
+
+Frontend code should prefer `@tauri-apps/api` imports for Tauri access. If implementation uses the global `window.__TAURI__` object instead, `withGlobalTauri` must be enabled in Tauri configuration.
