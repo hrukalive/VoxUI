@@ -13,9 +13,9 @@ pub struct Args {
     #[arg(long, value_name = "FILE")]
     pub lora: Option<PathBuf>,
 
-    /// Use CUDA device instead of CPU
+    /// Use CPU device instead of CUDA
     #[arg(long)]
-    pub cuda: bool,
+    pub cpu: bool,
 
     /// Stream synthesis and playback (disables badcase retry)
     #[arg(long)]
@@ -70,7 +70,7 @@ mod tests {
         let args = Args {
             model: PathBuf::from("__nonexistent_dir__"),
             lora: None,
-            cuda: false,
+            cpu: true,
             stream: false,
         };
         let err = args.validate().unwrap_err();
@@ -84,7 +84,7 @@ mod tests {
         let args = Args {
             model: tmp.clone(),
             lora: None,
-            cuda: false,
+            cpu: true,
             stream: false,
         };
         let err = args.validate().unwrap_err();
@@ -102,7 +102,7 @@ mod tests {
         let args = Args {
             model: tmp.clone(),
             lora: None,
-            cuda: false,
+            cpu: true,
             stream: false,
         };
         assert!(args.validate().is_ok());
@@ -119,7 +119,7 @@ mod tests {
         let args = Args {
             model: tmp.clone(),
             lora: Some(PathBuf::from("__nonexistent_lora__.gguf")),
-            cuda: false,
+            cpu: true,
             stream: false,
         };
         let err = args.validate().unwrap_err();
@@ -139,7 +139,7 @@ mod tests {
         let args = Args {
             model: tmp.clone(),
             lora: Some(lora_path),
-            cuda: false,
+            cpu: true,
             stream: false,
         };
         let err = args.validate().unwrap_err();

@@ -17,8 +17,13 @@ fn main() -> Result<()> {
     let args = Args::parse();
     args.validate()?;
 
-    let device = if args.cuda {
-        Device::new_cuda(0).context("CUDA device not available")?
+    let device = if !args.cpu {
+        if let Ok(device) = Device::new_cuda(0).context("CUDA device not available") {
+            device
+        } else {
+            println!("CUDA device not available");
+            Device::Cpu
+        }
     } else {
         Device::Cpu
     };
