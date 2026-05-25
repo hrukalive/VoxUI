@@ -1,0 +1,439 @@
+use leptos::prelude::*;
+
+use crate::i18n::Labels;
+use crate::tauri_api::{
+    AppConfig, AudioDevice, AudioHost, AudioState, BackendKind, ConfigPatch, GenerationSettings,
+    LanguageMode,
+};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SettingsPage {
+    Models,
+    Interface,
+    Audio,
+    Generation,
+    Retry,
+    Input,
+    Prompt,
+}
+
+#[component]
+pub fn SettingsModal(
+    labels: impl Fn() -> Labels + Send + Sync + 'static + Copy,
+    config: impl Fn() -> AppConfig + Send + Sync + 'static + Copy,
+    audio_state: impl Fn() -> AudioState + Send + Sync + 'static + Copy,
+    open: impl Fn() -> bool + Send + Sync + 'static + Copy,
+    active_page: impl Fn() -> SettingsPage + Send + Sync + 'static + Copy,
+    on_close: impl Fn() + Send + Sync + 'static + Copy,
+    on_page_select: impl Fn(SettingsPage) + Send + Sync + 'static + Copy,
+    on_config_patch: impl Fn(ConfigPatch) + Send + Sync + 'static + Copy,
+    on_browse_model_dir: impl Fn() + Send + Sync + 'static + Copy,
+    on_browse_prompt_wav: impl Fn() + Send + Sync + 'static + Copy,
+    on_browse_reference_wav: impl Fn() + Send + Sync + 'static + Copy,
+    on_test_audio: impl Fn() + Send + Sync + 'static + Copy,
+) -> impl IntoView {
+    let patch_generation = move |update: Box<dyn FnOnce(&mut GenerationSettings)>| {
+        let mut generation = config().generation;
+        update(&mut generation);
+        on_config_patch(ConfigPatch {
+            generation: Some(generation),
+            ..ConfigPatch::default()
+        });
+    };
+
+    view! {
+        <Show when=open>
+            <div class="modal-backdrop" role="presentation">
+                <section class="modal settings-modal" role="dialog" aria-modal="true" aria-label=move || labels().settings>
+                    <header class="modal-header">
+                        <h2>{move || labels().settings}</h2>
+                        <button class="icon-button" aria-label=move || labels().cancel on:click=move |_| { on_close() }>
+                            {"×"}
+                        </button>
+                    </header>
+
+                    <div class="settings-layout">
+                        <nav class="settings-tabs" aria-label=move || labels().settings>
+                            <button type="button" class:active=move || active_page() == SettingsPage::Models on:click=move |_| on_page_select(SettingsPage::Models)>{move || labels().settings_models}</button>
+                            <button type="button" class:active=move || active_page() == SettingsPage::Interface on:click=move |_| on_page_select(SettingsPage::Interface)>{move || labels().settings_interface}</button>
+                            <button type="button" class:active=move || active_page() == SettingsPage::Audio on:click=move |_| on_page_select(SettingsPage::Audio)>{move || labels().settings_audio}</button>
+                            <button type="button" class:active=move || active_page() == SettingsPage::Generation on:click=move |_| on_page_select(SettingsPage::Generation)>{move || labels().settings_generation}</button>
+                            <button type="button" class:active=move || active_page() == SettingsPage::Retry on:click=move |_| on_page_select(SettingsPage::Retry)>{move || labels().settings_retry}</button>
+                            <button type="button" class:active=move || active_page() == SettingsPage::Input on:click=move |_| on_page_select(SettingsPage::Input)>{move || labels().settings_input}</button>
+                            <button type="button" class:active=move || active_page() == SettingsPage::Prompt on:click=move |_| on_page_select(SettingsPage::Prompt)>{move || labels().settings_prompt}</button>
+                        </nav>
+
+                        <div class="settings-content">
+                            <Show when=move || active_page() == SettingsPage::Models>
+                                <section class="settings-section">
+                                    <h3>{move || labels().settings_models}</h3>
+                                    <div class="settings-field settings-field-with-button">
+                                        <label for="settings-model-dir">{move || labels().model_folder}</label>
+                                        <input
+                                            id="settings-model-dir"
+                                            type="text"
+                                            prop:value=move || config().model_root.unwrap_or_default()
+                                            placeholder=move || labels().model_folder
+                                            readonly=true
+                                        />
+                                        <button class="secondary-button" type="button" on:click=move |_| { on_browse_model_dir() }>
+                                            {move || labels().browse}
+                                        </button>
+                                    </div>
+                                </section>
+                            </Show>
+
+                            <Show when=move || active_page() == SettingsPage::Interface>
+                                <section class="settings-section">
+                                    <h3>{move || labels().settings_interface}</h3>
+                                    <label class="settings-field" for="settings-language">
+                                        <span>{move || labels().language}</span>
+                                        <select
+                                            id="settings-language"
+                                            prop:value=move || language_value(config().language)
+                                            on:change=move |event| {
+                                                on_config_patch(ConfigPatch {
+                                                    language: Some(parse_language(&event_target_value(&event))),
+                                                    ..ConfigPatch::default()
+                                                });
+                                            }
+                                        >
+                                            <option value="system" selected=move || config().language == LanguageMode::System>{move || labels().system}</option>
+                                            <option value="chinese" selected=move || config().language == LanguageMode::Chinese>{move || labels().chinese}</option>
+                                            <option value="english" selected=move || config().language == LanguageMode::English>{move || labels().english}</option>
+                                        </select>
+                                    </label>
+                                </section>
+
+                                <section class="settings-section">
+                                    <h3>{move || labels().settings_inference}</h3>
+                                    <label class="settings-field" for="settings-backend">
+                                        <span>{move || labels().backend}</span>
+                                        <select
+                                            id="settings-backend"
+                                            prop:value=move || backend_value(config().backend)
+                                            on:change=move |event| {
+                                                on_config_patch(ConfigPatch {
+                                                    backend: Some(parse_backend(&event_target_value(&event))),
+                                                    ..ConfigPatch::default()
+                                                });
+                                            }
+                                        >
+                                            <option value="cpu" selected=move || config().backend == BackendKind::Cpu>{move || labels().cpu}</option>
+                                            <option value="cuda" selected=move || config().backend == BackendKind::Cuda>{move || labels().cuda}</option>
+                                        </select>
+                                    </label>
+                                </section>
+                            </Show>
+
+                            <Show when=move || active_page() == SettingsPage::Audio>
+                                <section class="settings-section">
+                                    <h3>{move || labels().settings_audio}</h3>
+                                    <div class="settings-grid">
+                                        <label class="settings-field" for="settings-audio-driver">
+                                            <span>{move || labels().audio_driver}</span>
+                                            <select
+                                                id="settings-audio-driver"
+                                                prop:value=move || config().audio_host.unwrap_or_default()
+                                                on:change=move |event| {
+                                                    let value = event_target_value(&event);
+                                                    on_config_patch(ConfigPatch {
+                                                        audio_host: Some(if value.is_empty() { None } else { Some(value) }),
+                                                        audio_device: Some(None),
+                                                        ..ConfigPatch::default()
+                                                    });
+                                                }
+                                            >
+                                                <option value="" selected=move || config().audio_host.is_none()>{move || labels().default_choice}</option>
+                                                <For
+                                                    each=move || audio_hosts_with_current(audio_state(), config().audio_host)
+                                                    key=|host| host.name.clone()
+                                                    children=move |host| {
+                                                        let name = host.name;
+                                                        let value = name.clone();
+                                                        let selected_name = name.clone();
+                                                        view! {
+                                                            <option
+                                                                value={value}
+                                                                selected=move || config().audio_host.as_deref() == Some(selected_name.as_str())
+                                                            >
+                                                                {name}
+                                                            </option>
+                                                        }
+                                                    }
+                                                />
+                                            </select>
+                                        </label>
+                                        <label class="settings-field" for="settings-output-device">
+                                            <span>{move || labels().output_device}</span>
+                                            <select
+                                                id="settings-output-device"
+                                                prop:value=move || config().audio_device.unwrap_or_default()
+                                                on:change=move |event| {
+                                                    let value = event_target_value(&event);
+                                                    on_config_patch(ConfigPatch {
+                                                        audio_device: Some(if value.is_empty() { None } else { Some(value) }),
+                                                        ..ConfigPatch::default()
+                                                    });
+                                                }
+                                            >
+                                                <option value="" selected=move || config().audio_device.is_none()>{move || labels().default_choice}</option>
+                                                <For
+                                                    each=move || audio_devices_for_selected_host(audio_state(), &config())
+                                                    key=|device| format!("{}:{}", device.host_name, device.name)
+                                                    children=move |device| {
+                                                        let name = device.name;
+                                                        let value = name.clone();
+                                                        let selected_name = name.clone();
+                                                        view! {
+                                                            <option
+                                                                value={value}
+                                                                selected=move || config().audio_device.as_deref() == Some(selected_name.as_str())
+                                                            >
+                                                                {name}
+                                                            </option>
+                                                        }
+                                                    }
+                                                />
+                                            </select>
+                                        </label>
+                                        <label class="settings-field" for="settings-volume">
+                                            <span>{move || labels().volume}</span>
+                                            <input
+                                                id="settings-volume"
+                                                type="range"
+                                                min="0"
+                                                max="100"
+                                                prop:value=move || volume_to_percent(config().volume)
+                                                on:input=move |event| {
+                                                    on_config_patch(ConfigPatch {
+                                                        volume: Some((parse_f32(&event_target_value(&event), config().volume * 100.0) / 100.0).clamp(0.0, 1.0)),
+                                                        ..ConfigPatch::default()
+                                                    });
+                                                }
+                                            />
+                                        </label>
+                                        <div class="settings-field settings-action-field">
+                                            <span>{move || labels().audio_test}</span>
+                                            <button class="secondary-button" type="button" on:click=move |_| { on_test_audio() }>
+                                                {move || labels().test}
+                                            </button>
+                                        </div>
+                                    </div>
+                                </section>
+                            </Show>
+
+                            <Show when=move || active_page() == SettingsPage::Generation>
+                                <section class="settings-section">
+                                    <h3>{move || labels().voxcpm_generation}</h3>
+                                    <div class="settings-grid">
+                                        <label class="settings-field" for="settings-cfg">
+                                            <span>{move || labels().cfg_value}</span>
+                                            <input id="settings-cfg" type="number" min="0" step="0.1" prop:value=move || config().generation.cfg_value.to_string() on:change=move |event| {
+                                                let value = parse_f32(&event_target_value(&event), config().generation.cfg_value);
+                                                patch_generation(Box::new(move |generation| generation.cfg_value = value));
+                                            } />
+                                        </label>
+                                        <label class="settings-field" for="settings-steps">
+                                            <span>{move || labels().inference_steps}</span>
+                                            <input id="settings-steps" type="number" min="1" step="1" prop:value=move || config().generation.inference_timesteps.to_string() on:change=move |event| {
+                                                let value = parse_usize(&event_target_value(&event), config().generation.inference_timesteps);
+                                                patch_generation(Box::new(move |generation| generation.inference_timesteps = value));
+                                            } />
+                                        </label>
+                                        <label class="settings-field" for="settings-min-len">
+                                            <span>{move || labels().min_length}</span>
+                                            <input id="settings-min-len" type="number" min="0" step="1" prop:value=move || config().generation.min_len.to_string() on:change=move |event| {
+                                                let value = parse_usize(&event_target_value(&event), config().generation.min_len);
+                                                patch_generation(Box::new(move |generation| generation.min_len = value));
+                                            } />
+                                        </label>
+                                        <label class="settings-field" for="settings-max-len">
+                                            <span>{move || labels().max_length}</span>
+                                            <input id="settings-max-len" type="number" min="1" step="1" prop:value=move || config().generation.max_len.to_string() on:change=move |event| {
+                                                let value = parse_usize(&event_target_value(&event), config().generation.max_len);
+                                                patch_generation(Box::new(move |generation| generation.max_len = value));
+                                            } />
+                                        </label>
+                                    </div>
+                                </section>
+                            </Show>
+
+                            <Show when=move || active_page() == SettingsPage::Retry>
+                                <section class="settings-section">
+                                    <h3>{move || labels().settings_retry}</h3>
+                                    <div class="settings-grid">
+                                        <label class="settings-checkbox" for="settings-retry-badcase">
+                                            <input id="settings-retry-badcase" type="checkbox" prop:checked=move || config().generation.retry_badcase on:change=move |event| {
+                                                let checked = event_target_checked(&event);
+                                                patch_generation(Box::new(move |generation| generation.retry_badcase = checked));
+                                            } />
+                                            <span>{move || labels().retry_badcase}</span>
+                                        </label>
+                                        <label class="settings-field" for="settings-retry-max">
+                                            <span>{move || labels().retry_max_times}</span>
+                                            <input id="settings-retry-max" type="number" min="0" step="1" prop:value=move || config().generation.retry_badcase_max_times.to_string() on:change=move |event| {
+                                                let value = parse_usize(&event_target_value(&event), config().generation.retry_badcase_max_times);
+                                                patch_generation(Box::new(move |generation| generation.retry_badcase_max_times = value));
+                                            } />
+                                        </label>
+                                        <label class="settings-field" for="settings-ratio-threshold">
+                                            <span>{move || labels().retry_ratio_threshold}</span>
+                                            <input id="settings-ratio-threshold" type="number" min="0" step="0.1" prop:value=move || config().generation.retry_badcase_ratio_threshold.to_string() on:change=move |event| {
+                                                let value = parse_f32(&event_target_value(&event), config().generation.retry_badcase_ratio_threshold);
+                                                patch_generation(Box::new(move |generation| generation.retry_badcase_ratio_threshold = value));
+                                            } />
+                                        </label>
+                                    </div>
+                                </section>
+                            </Show>
+
+                            <Show when=move || active_page() == SettingsPage::Input>
+                                <section class="settings-section">
+                                    <h3>{move || labels().settings_input}</h3>
+                                    <label class="settings-field" for="settings-max-input">
+                                        <span>{move || labels().max_input_characters}</span>
+                                        <input
+                                            id="settings-max-input"
+                                            type="number"
+                                            min="1"
+                                            step="1"
+                                            prop:value=move || config().max_input_chars.to_string()
+                                            on:change=move |event| {
+                                                on_config_patch(ConfigPatch {
+                                                    max_input_chars: Some(parse_usize(&event_target_value(&event), config().max_input_chars)),
+                                                    ..ConfigPatch::default()
+                                                });
+                                            }
+                                        />
+                                    </label>
+                                </section>
+                            </Show>
+
+                            <Show when=move || active_page() == SettingsPage::Prompt>
+                                <section class="settings-section">
+                                    <h3>{move || labels().advanced_prompt_reference}</h3>
+                                    <div class="settings-field settings-field-with-button">
+                                        <label for="settings-prompt-wav">{move || labels().prompt_wav}</label>
+                                        <input id="settings-prompt-wav" type="text" prop:value=move || config().generation.prompt_wav_path.unwrap_or_default() placeholder=move || labels().prompt_wav readonly=true />
+                                        <button class="secondary-button" type="button" on:click=move |_| { on_browse_prompt_wav() }>
+                                            {move || labels().browse}
+                                        </button>
+                                    </div>
+                                    <label class="settings-field" for="settings-prompt-text">
+                                        <span>{move || labels().prompt_text}</span>
+                                        <textarea
+                                            id="settings-prompt-text"
+                                            rows="3"
+                                            prop:value=move || config().generation.prompt_text.unwrap_or_default()
+                                            on:change=move |event| {
+                                                let value = event_target_value(&event);
+                                                patch_generation(Box::new(move |generation| {
+                                                    generation.prompt_text = if value.is_empty() { None } else { Some(value.clone()) };
+                                                }));
+                                            }
+                                        ></textarea>
+                                    </label>
+                                    <div class="settings-field settings-field-with-button">
+                                        <label for="settings-reference-wav">{move || labels().reference_wav}</label>
+                                        <input id="settings-reference-wav" type="text" prop:value=move || config().generation.reference_wav_path.unwrap_or_default() placeholder=move || labels().reference_wav readonly=true />
+                                        <button class="secondary-button" type="button" on:click=move |_| { on_browse_reference_wav() }>
+                                            {move || labels().browse}
+                                        </button>
+                                    </div>
+                                </section>
+                            </Show>
+                        </div>
+                    </div>
+                </section>
+            </div>
+        </Show>
+    }
+}
+
+fn audio_hosts_with_current(mut state: AudioState, current_host: Option<String>) -> Vec<AudioHost> {
+    if let Some(current_host) = current_host {
+        if !state.hosts.iter().any(|host| host.name == current_host) {
+            state.hosts.push(AudioHost { name: current_host });
+        }
+    }
+
+    state.hosts
+}
+
+fn audio_devices_for_selected_host(mut state: AudioState, config: &AppConfig) -> Vec<AudioDevice> {
+    let selected_host = config
+        .audio_host
+        .as_deref()
+        .or(state.default_host.as_deref());
+    let Some(selected_host) = selected_host else {
+        return config
+            .audio_device
+            .clone()
+            .map(|name| AudioDevice {
+                name,
+                host_name: String::new(),
+            })
+            .into_iter()
+            .collect();
+    };
+
+    let mut devices = state
+        .devices
+        .drain(..)
+        .filter(|device| device.host_name == selected_host)
+        .collect::<Vec<_>>();
+
+    if let Some(current_device) = config.audio_device.as_ref() {
+        if !devices.iter().any(|device| device.name == *current_device) {
+            devices.push(AudioDevice {
+                name: current_device.clone(),
+                host_name: selected_host.to_string(),
+            });
+        }
+    }
+
+    devices
+}
+
+fn language_value(language: LanguageMode) -> &'static str {
+    match language {
+        LanguageMode::System => "system",
+        LanguageMode::Chinese => "chinese",
+        LanguageMode::English => "english",
+    }
+}
+
+fn parse_language(value: &str) -> LanguageMode {
+    match value {
+        "chinese" => LanguageMode::Chinese,
+        "english" => LanguageMode::English,
+        _ => LanguageMode::System,
+    }
+}
+
+fn backend_value(backend: BackendKind) -> &'static str {
+    match backend {
+        BackendKind::Cpu => "cpu",
+        BackendKind::Cuda => "cuda",
+    }
+}
+
+fn parse_backend(value: &str) -> BackendKind {
+    match value {
+        "cuda" => BackendKind::Cuda,
+        _ => BackendKind::Cpu,
+    }
+}
+
+fn volume_to_percent(volume: f32) -> String {
+    ((volume.clamp(0.0, 1.0) * 100.0).round() as usize).to_string()
+}
+
+fn parse_f32(value: &str, fallback: f32) -> f32 {
+    value.parse().unwrap_or(fallback)
+}
+
+fn parse_usize(value: &str, fallback: usize) -> usize {
+    value.parse().unwrap_or(fallback)
+}

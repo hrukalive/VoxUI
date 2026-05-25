@@ -4,7 +4,10 @@ use anyhow::{anyhow, Result};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use r8brain_rs::{PrecisionProfile, Resampler};
 use ringbuf::{traits::{Consumer, Observer, Producer, Split}, HeapRb};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
+
+const PLAYBACK_CLEAR_AND_DRAIN_MS: usize = 50;
 
 #[derive(Debug, Clone)]
 pub struct HostInfo {
@@ -79,7 +82,7 @@ impl AudioSystem {
 pub struct AudioPlayer {
     device: cpal::Device,
     sample_rate: u32,
-    stop_flag: Arc<Mutex<bool>>,
+    stop_flag: Option<Arc<AtomicBool>>,
     stream: Option<cpal::Stream>,
 }
 
@@ -97,17 +100,16 @@ impl AudioPlayer {
         Ok(Self {
             device,
             sample_rate,
-            stop_flag: Arc::new(Mutex::new(false)),
+            stop_flag: None,
             stream: None,
         })
     }
 
     pub fn play(&mut self, samples: Vec<f32>) -> Result<mpsc::Receiver<()>> {
-        let (tx, rx) = mpsc::channel();
-        let stop = self.stop_flag.clone();
+        self.stop();
 
-        // Reset stop flag
-        *stop.lock().unwrap() = false;
+        let (tx, rx) = mpsc::channel();
+        let stop = Arc::new(AtomicBool::new(false));
 
         // Query device native sample rate
         let default_config = self.device.default_output_config()?;
@@ -121,6 +123,7 @@ impl AudioPlayer {
         } else {
             (samples, self.sample_rate)
         };
+        let playback_samples = prepare_playback_samples(playback_samples, playback_rate);
 
         let config = cpal::StreamConfig {
             channels,
@@ -141,7 +144,7 @@ impl AudioPlayer {
             move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
                 let samples = buf.lock().unwrap();
                 let mut current = p.lock().unwrap();
-                let stopped = *s.lock().unwrap();
+                let stopped = s.load(Ordering::SeqCst);
                 let ch = channels as usize;
 
                 // Write mono samples to all channels
@@ -170,6 +173,7 @@ impl AudioPlayer {
         stream.play()?;
 
         // Store stream so it lives as long as the player (or until next play/stop)
+        self.stop_flag = Some(stop);
         self.stream = Some(stream);
 
         Ok(rx)
@@ -183,7 +187,9 @@ impl AudioPlayer {
     }
 
     pub fn stop(&mut self) {
-        *self.stop_flag.lock().unwrap() = true;
+        if let Some(stop_flag) = self.stop_flag.take() {
+            stop_flag.store(true, Ordering::SeqCst);
+        }
         self.stream = None; // dropping Stream stops playback
     }
 }
@@ -303,6 +309,19 @@ impl StreamingPlayer {
     }
 }
 
+fn prepare_playback_samples(samples: Vec<f32>, sample_rate: u32) -> Vec<f32> {
+    if samples.is_empty() {
+        return samples;
+    }
+
+    let silence_len = ((sample_rate as usize * PLAYBACK_CLEAR_AND_DRAIN_MS) / 1_000).max(1);
+    let mut prepared = Vec::with_capacity(samples.len() + silence_len * 2);
+    prepared.resize(silence_len, 0.0);
+    prepared.extend(samples);
+    prepared.resize(prepared.len() + silence_len, 0.0);
+    prepared
+}
+
 /// Resample audio from `src_rate` to `dst_rate` using r8brain.
 fn resample(samples: &[f32], src_rate: u32, dst_rate: u32) -> Result<Vec<f32>> {
     if src_rate == dst_rate {
@@ -329,4 +348,28 @@ fn resample(samples: &[f32], src_rate: u32, dst_rate: u32) -> Result<Vec<f32>> {
         }
     }
     Ok(output)
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn playback_buffer_starts_and_ends_with_silence() {
+        let samples = vec![0.25, -0.5, 0.75];
+        let prepared = super::prepare_playback_samples(samples.clone(), 1_000);
+
+        assert!(prepared.len() > samples.len());
+        assert_eq!(&prepared[..50], vec![0.0; 50].as_slice());
+        assert_eq!(
+            &prepared[50..50 + samples.len()],
+            samples.as_slice()
+        );
+        assert_eq!(&prepared[50 + samples.len()..], vec![0.0; 50].as_slice());
+    }
+
+    #[test]
+    fn playback_buffer_uses_at_least_one_silence_sample_for_low_rates() {
+        let prepared = super::prepare_playback_samples(vec![1.0], 1);
+
+        assert_eq!(prepared, vec![0.0, 1.0, 0.0]);
+    }
 }
