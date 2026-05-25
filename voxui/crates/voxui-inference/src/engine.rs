@@ -55,6 +55,22 @@ pub struct SynthesisChunk {
     pub is_final: bool,
 }
 
+#[derive(Debug)]
+pub struct StopTraceStep {
+    pub stop_logits: Tensor,
+    pub stop_decision: u32,
+    pub lm_hidden_stats: [f32; 4],
+    pub residual_hidden_stats: [f32; 4],
+    pub pred_feat_stats: [f32; 4],
+}
+
+#[derive(Debug)]
+pub struct StopTraceDebug {
+    pub steps: Vec<StopTraceStep>,
+    pub generated_audio_feat: Tensor,
+    pub generated_step_count: usize,
+}
+
 struct LinearProjection {
     weight: LinearWeight,
     bias: Option<RuntimeTensor>,
@@ -400,6 +416,56 @@ impl VoxCPMEngine {
         Ok(StopLoopDebug {
             stop_logits_sequence: Tensor::cat(&stop_refs, 0)?,
             generated_patch_count,
+        })
+    }
+
+    pub fn generate_debug_stop_trace_with_noise(
+        &mut self,
+        request: SynthesisRequest,
+        first_noise: Tensor,
+    ) -> Result<StopTraceDebug> {
+        let request = request.validated(self.config.variant)?;
+        let prepared = self.build_inputs(&request)?;
+        let max_len = bounded_max_len(&request, prepared.target_text_token_count);
+        let mut state = self.prefill(&prepared)?;
+        let mut steps = Vec::new();
+
+        for step in 0..max_len {
+            let fixed_noise = if step == 0 { Some(&first_noise) } else { None };
+            let lm_hidden_stats = tensor_stats4(&state.lm_hidden)?;
+            let residual_hidden_stats = tensor_stats4(&state.residual_hidden)?;
+            let (_latent_patch, stop_logits, pred_feat) =
+                self.generate_one_patch(&mut state, &request, fixed_noise)?;
+            let logits = stop_logits.to_dtype(DType::F32)?.to_vec2::<f32>()?;
+            let stop_decision = logits
+                .first()
+                .and_then(|row| row.get(1).zip(row.first()))
+                .map(|(stop, keep)| u32::from(stop > keep))
+                .unwrap_or(0);
+            steps.push(StopTraceStep {
+                stop_logits,
+                stop_decision,
+                lm_hidden_stats,
+                residual_hidden_stats,
+                pred_feat_stats: tensor_stats4(&pred_feat)?,
+            });
+            if step > request.min_len && stop_decision == 1 {
+                break;
+            }
+        }
+
+        let generated_patches = state
+            .generated_patches
+            .get(state.context_len..)
+            .context("stop trace context length exceeds generated patch count")?;
+        Ok(StopTraceDebug {
+            steps,
+            generated_audio_feat: generated_patches_to_audio_feat(
+                generated_patches,
+                self.config.latent_dim,
+                self.config.patch_size,
+            )?,
+            generated_step_count: generated_patches.len(),
         })
     }
 
@@ -1140,6 +1206,30 @@ fn stop_flag_from_logits(stop_logits: &Tensor) -> Result<bool> {
         .unwrap_or(false))
 }
 
+fn tensor_stats4(tensor: &Tensor) -> Result<[f32; 4]> {
+    let values = tensor
+        .to_dtype(DType::F32)?
+        .flatten_all()?
+        .to_vec1::<f32>()?;
+    if values.is_empty() {
+        return Ok([0.0, 0.0, 0.0, 0.0]);
+    }
+    let len = values.len() as f32;
+    let mean = values.iter().copied().sum::<f32>() / len;
+    let variance = values
+        .iter()
+        .map(|value| {
+            let delta = *value - mean;
+            delta * delta
+        })
+        .sum::<f32>()
+        / len;
+    let std = variance.sqrt();
+    let min = values.iter().copied().fold(f32::INFINITY, f32::min);
+    let max = values.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+    Ok([mean, std, min, max])
+}
+
 fn read_variant_from_loader(loader: &GgufModelLoader) -> Result<ModelVariant> {
     let value = loader
         .metadata()
@@ -1280,4 +1370,25 @@ fn patches_to_latent(patches: &[Tensor], latent_dim: usize, patch_size: usize) -
         .transpose(0, 1)?
         .reshape((1, latent_dim, patch_count * patch_size))
         .map_err(Into::into)
+}
+
+fn generated_patches_to_audio_feat(
+    patches: &[Tensor],
+    latent_dim: usize,
+    patch_size: usize,
+) -> Result<Tensor> {
+    if patches.is_empty() {
+        bail!("no generated patches to trace");
+    }
+    for patch in patches {
+        let dims = patch.dims3()?;
+        if dims != (1, patch_size, latent_dim) {
+            bail!(
+                "generated patch shape must be [1, patch_size, latent_dim], got {:?}",
+                dims
+            );
+        }
+    }
+    let refs = patches.iter().collect::<Vec<_>>();
+    Tensor::cat(&refs, 0).map_err(Into::into)
 }

@@ -10,8 +10,28 @@ use serde::Deserialize;
 #[derive(Debug, Deserialize)]
 struct TraceManifest {
     #[serde(default)]
+    request: TraceRequest,
+    #[serde(default)]
+    metadata: serde_json::Value,
+    #[serde(default)]
     lists: HashMap<String, Vec<u32>>,
     tensors: Vec<TensorRecord>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct TraceRequest {
+    #[serde(default)]
+    pub text: String,
+    #[serde(default)]
+    pub cfg_value: f32,
+    #[serde(default)]
+    pub inference_timesteps: usize,
+    #[serde(default)]
+    pub min_len: usize,
+    #[serde(default)]
+    pub max_len: usize,
+    #[serde(default)]
+    pub retry_badcase: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -36,6 +56,19 @@ impl TraceCase {
         let manifest = serde_json::from_str(&text)
             .with_context(|| format!("parse {}", manifest_path.display()))?;
         Ok(Self { root, manifest })
+    }
+
+    pub fn request(&self) -> &TraceRequest {
+        &self.manifest.request
+    }
+
+    pub fn metadata_usize(&self, name: &str) -> Result<usize> {
+        self.manifest
+            .metadata
+            .get(name)
+            .and_then(|value| value.as_u64())
+            .map(|value| value as usize)
+            .ok_or_else(|| anyhow::anyhow!("trace metadata `{name}` not found as usize"))
     }
 
     pub fn tensor(&self, name: &str) -> Result<Tensor> {
@@ -113,4 +146,30 @@ fn assert_close_slices(actual: &[f32], expected: &[f32], tolerance: f32) -> Resu
         bail!("max abs diff {max_abs} at flat index {max_idx} exceeds tolerance {tolerance}");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn trace_manifest_defaults_request_and_reads_usize_metadata() -> Result<()> {
+        let manifest: TraceManifest = serde_json::from_str(
+            r#"{
+                "metadata": { "audio_length": 42 },
+                "tensors": []
+            }"#,
+        )?;
+        let trace = TraceCase {
+            root: PathBuf::new(),
+            manifest,
+        };
+
+        assert_eq!(trace.request().text, "");
+        assert_eq!(trace.request().cfg_value, 0.0);
+        assert_eq!(trace.metadata_usize("audio_length")?, 42);
+        assert!(trace.metadata_usize("missing").is_err());
+
+        Ok(())
+    }
 }
