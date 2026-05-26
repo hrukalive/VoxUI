@@ -20,6 +20,10 @@ pub struct Args {
     /// Stream synthesis and playback (disables badcase retry)
     #[arg(long)]
     pub stream: bool,
+
+    /// Number of generated patches to decode and emit per streaming chunk
+    #[arg(long, default_value_t = 1, value_name = "N")]
+    pub stream_consolidate_n: usize,
 }
 
 impl Args {
@@ -52,9 +56,17 @@ impl Args {
             if !lora.exists() {
                 bail!("LoRA file not found: {}", lora.display());
             }
-            if !lora.extension().and_then(|e| e.to_str()).is_some_and(|ext| ext.eq_ignore_ascii_case("gguf")) {
+            if !lora
+                .extension()
+                .and_then(|e| e.to_str())
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("gguf"))
+            {
                 bail!("LoRA file must have .gguf extension: {}", lora.display());
             }
+        }
+
+        if self.stream_consolidate_n == 0 {
+            bail!("stream-consolidate-n must be greater than zero");
         }
 
         Ok(())
@@ -72,6 +84,7 @@ mod tests {
             lora: None,
             cpu: true,
             stream: false,
+            stream_consolidate_n: 1,
         };
         let err = args.validate().unwrap_err();
         assert!(err.to_string().contains("not found"));
@@ -86,6 +99,7 @@ mod tests {
             lora: None,
             cpu: true,
             stream: false,
+            stream_consolidate_n: 1,
         };
         let err = args.validate().unwrap_err();
         assert!(err.to_string().contains("missing required files"));
@@ -104,6 +118,7 @@ mod tests {
             lora: None,
             cpu: true,
             stream: false,
+            stream_consolidate_n: 1,
         };
         assert!(args.validate().is_ok());
         let _ = std::fs::remove_dir_all(&tmp);
@@ -121,6 +136,7 @@ mod tests {
             lora: Some(PathBuf::from("__nonexistent_lora__.gguf")),
             cpu: true,
             stream: false,
+            stream_consolidate_n: 1,
         };
         let err = args.validate().unwrap_err();
         assert!(err.to_string().contains("not found"));
@@ -141,9 +157,32 @@ mod tests {
             lora: Some(lora_path),
             cpu: true,
             stream: false,
+            stream_consolidate_n: 1,
         };
         let err = args.validate().unwrap_err();
         assert!(err.to_string().contains(".gguf extension"));
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn validate_rejects_zero_stream_consolidate_n() {
+        let tmp = std::env::temp_dir().join("voxui_cli_test_stream_consolidate_zero");
+        let _ = std::fs::create_dir_all(&tmp);
+        std::fs::write(tmp.join("model.gguf"), b"").unwrap();
+        std::fs::write(tmp.join("config.json"), b"").unwrap();
+        std::fs::write(tmp.join("tokenizer.json"), b"").unwrap();
+
+        let args = Args {
+            model: tmp.clone(),
+            lora: None,
+            cpu: true,
+            stream: true,
+            stream_consolidate_n: 0,
+        };
+
+        let err = args.validate().unwrap_err();
+        assert!(err.to_string().contains("stream-consolidate-n"));
+
         let _ = std::fs::remove_dir_all(&tmp);
     }
 }

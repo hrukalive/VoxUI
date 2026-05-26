@@ -20,6 +20,7 @@ pub struct SynthesisRequest {
     pub retry_badcase: bool,
     pub retry_badcase_max_times: usize,
     pub retry_badcase_ratio_threshold: f32,
+    pub consolidate_n: usize,
 }
 
 impl Default for SynthesisRequest {
@@ -37,6 +38,7 @@ impl Default for SynthesisRequest {
             retry_badcase: true,
             retry_badcase_max_times: 3,
             retry_badcase_ratio_threshold: 6.0,
+            consolidate_n: 1,
         }
     }
 }
@@ -68,7 +70,9 @@ impl SynthesisRequest {
             bail!("Reference audio requires VoxCPM2");
         }
         if self.normalize {
-            bail!("normalize=true is not supported until the Rust VoxCPM normalizer is implemented");
+            bail!(
+                "normalize=true is not supported until the Rust VoxCPM normalizer is implemented"
+            );
         }
         if self.min_len > self.max_len {
             bail!("min_len must be <= max_len");
@@ -81,6 +85,9 @@ impl SynthesisRequest {
         }
         if self.retry_badcase_ratio_threshold <= 0.0 {
             bail!("retry_badcase_ratio_threshold must be greater than zero");
+        }
+        if self.consolidate_n == 0 {
+            bail!("consolidate_n must be greater than zero");
         }
         Ok(self)
     }

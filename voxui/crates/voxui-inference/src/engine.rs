@@ -545,7 +545,9 @@ impl VoxCPMEngine {
         );
 
         let progress = |_, _| {};
+        let consolidate_n = request.consolidate_n;
         let mut decoder = self.vae.streaming_decoder();
+        let mut pending_patches = Vec::with_capacity(consolidate_n);
         let mut emit_chunk = |engine: &VoxCPMEngine,
                               state: &GenerationState,
                               step: usize,
@@ -556,8 +558,20 @@ impl VoxCPMEngine {
                 .generated_patches
                 .last()
                 .context("streaming generation produced no patch")?;
-            let latent_chunk = latest_patch.transpose(1, 2)?.contiguous()?;
+            pending_patches.push(latest_patch.clone());
+
+            if pending_patches.len() < consolidate_n && !is_final {
+                return Ok(());
+            }
+
+            let latent_chunk = patches_to_latent(
+                &pending_patches,
+                engine.config.latent_dim,
+                engine.config.patch_size,
+            )?;
             let audio = decoder.decode_chunk(&latent_chunk.to_dtype(DType::F32)?)?;
+            pending_patches.clear();
+
             on_chunk(SynthesisChunk {
                 samples: audio.squeeze(0)?.squeeze(0)?.to_vec1::<f32>()?,
                 sample_rate: engine.config.sample_rate,
@@ -1341,6 +1355,37 @@ mod tests {
         assert_eq!(streaming_prefix_len(ModelVariant::VoxCpm05), 3);
         assert_eq!(streaming_prefix_len(ModelVariant::VoxCpm15), 3);
         assert_eq!(streaming_prefix_len(ModelVariant::VoxCpm2), 4);
+    }
+
+    #[test]
+    fn patches_to_latent_preserves_patch_time_order_for_streaming_consolidation() {
+        let device = Device::Cpu;
+        let patch_size = 2;
+        let latent_dim = 3;
+        let patch0 = Tensor::from_vec(
+            vec![1f32, 2., 3., 4., 5., 6.],
+            (1, patch_size, latent_dim),
+            &device,
+        )
+        .unwrap();
+        let patch1 = Tensor::from_vec(
+            vec![7f32, 8., 9., 10., 11., 12.],
+            (1, patch_size, latent_dim),
+            &device,
+        )
+        .unwrap();
+
+        let latent = patches_to_latent(&[patch0, patch1], latent_dim, patch_size).unwrap();
+
+        assert_eq!(latent.dims3().unwrap(), (1, latent_dim, patch_size * 2));
+        assert_eq!(
+            latent.to_vec3::<f32>().unwrap(),
+            vec![vec![
+                vec![1., 4., 7., 10.],
+                vec![2., 5., 8., 11.],
+                vec![3., 6., 9., 12.],
+            ]]
+        );
     }
 
     #[test]

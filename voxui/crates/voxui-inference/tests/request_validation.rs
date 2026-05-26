@@ -77,3 +77,21 @@ fn request_rejects_normalize_until_rust_normalizer_is_implemented() {
     .unwrap_err();
     assert!(err.to_string().contains("normalize=true"));
 }
+
+#[test]
+fn request_default_consolidate_n_is_one() {
+    assert_eq!(SynthesisRequest::default().consolidate_n, 1);
+}
+
+#[test]
+fn request_rejects_zero_consolidate_n() {
+    let err = SynthesisRequest {
+        text: "hello".to_string(),
+        consolidate_n: 0,
+        ..SynthesisRequest::default()
+    }
+    .validated(ModelVariant::VoxCpm2)
+    .unwrap_err();
+
+    assert!(err.to_string().contains("consolidate_n"));
+}

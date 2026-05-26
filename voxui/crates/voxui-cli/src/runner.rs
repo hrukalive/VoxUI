@@ -15,15 +15,10 @@ pub struct Runner {
 
 impl Runner {
     /// Load the model from `model_dir` on the given device. Applies LoRA if provided.
-    pub fn load(
-        model_dir: &Path,
-        lora_path: Option<PathBuf>,
-        device: Device,
-    ) -> Result<Self> {
+    pub fn load(model_dir: &Path, lora_path: Option<PathBuf>, device: Device) -> Result<Self> {
         let device_kind = if device.is_cuda() { "CUDA" } else { "CPU" };
 
-        let mut engine = VoxCPMEngine::load(model_dir, device)
-            .context("failed to load model")?;
+        let mut engine = VoxCPMEngine::load(model_dir, device).context("failed to load model")?;
 
         if let Some(ref lp) = lora_path {
             engine
@@ -46,10 +41,11 @@ impl Runner {
         &mut self,
         text: &str,
         stream: bool,
+        stream_consolidate_n: usize,
         cancel: Option<&AtomicBool>,
     ) -> Result<()> {
         if stream {
-            self.synthesize_streaming(text, cancel)
+            self.synthesize_streaming(text, stream_consolidate_n, cancel)
         } else {
             self.synthesize_batch(text, cancel)
         }
@@ -58,6 +54,7 @@ impl Runner {
     fn synthesize_streaming(
         &mut self,
         text: &str,
+        stream_consolidate_n: usize,
         cancel: Option<&AtomicBool>,
     ) -> Result<()> {
         let sample_rate = self.engine.sample_rate();
@@ -65,6 +62,7 @@ impl Runner {
         let request = SynthesisRequest {
             text: text.to_string(),
             retry_badcase: false,
+            consolidate_n: stream_consolidate_n,
             ..Default::default()
         };
 
@@ -84,12 +82,16 @@ impl Runner {
                     .checked_div(max_patches.max(1))
                     .unwrap_or(0);
                 let bar: String = std::iter::repeat_n('=', filled)
-                    .chain(std::iter::repeat_n('>', if patch_count < max_patches { 1 } else { 0 }))
-                    .chain(std::iter::repeat_n(' ', bar_width.saturating_sub(filled).saturating_sub(1)))
+                    .chain(std::iter::repeat_n(
+                        '>',
+                        if patch_count < max_patches { 1 } else { 0 },
+                    ))
+                    .chain(std::iter::repeat_n(
+                        ' ',
+                        bar_width.saturating_sub(filled).saturating_sub(1),
+                    ))
                     .collect();
-                eprint!(
-                    "\r  Synthesizing... [{bar}] {patch_count}/{max_patches} patches",
-                );
+                eprint!("\r  Synthesizing... [{bar}] {patch_count}/{max_patches} patches",);
                 samples.extend_from_slice(&chunk.samples);
                 Ok(())
             },
@@ -115,7 +117,8 @@ impl Runner {
 
         let audio = AudioSystem::new();
         let host_name = audio.default_host_name();
-        let device_name = audio.default_device_name(&host_name)
+        let device_name = audio
+            .default_device_name(&host_name)
             .context("no default audio output device")?;
         let mut player = AudioPlayer::new(&host_name, &device_name, sample_rate)
             .context("failed to create audio player")?;
@@ -126,11 +129,7 @@ impl Runner {
         Ok(())
     }
 
-    fn synthesize_batch(
-        &mut self,
-        text: &str,
-        cancel: Option<&AtomicBool>,
-    ) -> Result<()> {
+    fn synthesize_batch(&mut self, text: &str, cancel: Option<&AtomicBool>) -> Result<()> {
         let sample_rate = self.engine.sample_rate();
         let request = SynthesisRequest {
             text: text.to_string(),
@@ -148,11 +147,12 @@ impl Runner {
                     .unwrap_or(0);
                 let bar: String = std::iter::repeat_n('=', filled)
                     .chain(std::iter::repeat_n('>', if current < max { 1 } else { 0 }))
-                    .chain(std::iter::repeat_n(' ', bar_width.saturating_sub(filled).saturating_sub(1)))
+                    .chain(std::iter::repeat_n(
+                        ' ',
+                        bar_width.saturating_sub(filled).saturating_sub(1),
+                    ))
                     .collect();
-                eprint!(
-                    "\r  Synthesizing... [{bar}] {current}/{max} patches",
-                );
+                eprint!("\r  Synthesizing... [{bar}] {current}/{max} patches",);
             },
             cancel,
         );
@@ -179,7 +179,8 @@ impl Runner {
 
         let audio = AudioSystem::new();
         let host_name = audio.default_host_name();
-        let device_name = audio.default_device_name(&host_name)
+        let device_name = audio
+            .default_device_name(&host_name)
             .context("no default audio output device")?;
         let mut player = AudioPlayer::new(&host_name, &device_name, sample_rate)
             .context("failed to create audio player")?;
@@ -197,7 +198,11 @@ impl Runner {
         let lora = self
             .lora_path
             .as_ref()
-            .map(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "unknown".to_string()))
+            .map(|p| {
+                p.file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "unknown".to_string())
+            })
             .unwrap_or_else(|| "none".to_string());
         println!("Model: {arch}  |  Device: {device}  |  LoRA: {lora}");
     }

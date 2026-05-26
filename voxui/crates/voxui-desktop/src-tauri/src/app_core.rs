@@ -545,6 +545,7 @@ impl AppCore {
             retry_badcase: item.snapshot.generation.retry_badcase,
             retry_badcase_max_times: item.snapshot.generation.retry_badcase_max_times,
             retry_badcase_ratio_threshold: item.snapshot.generation.retry_badcase_ratio_threshold,
+            consolidate_n: 1,
         })
     }
 

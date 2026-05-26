@@ -5,8 +5,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use clap::Parser;
 use candle_core::Device;
+use clap::Parser;
 use rustyline::error::ReadlineError;
 use rustyline::DefaultEditor;
 
@@ -29,6 +29,7 @@ fn main() -> Result<()> {
     };
 
     let stream = args.stream;
+    let stream_consolidate_n = args.stream_consolidate_n;
     let mut runner = Runner::load(&args.model, args.lora, device)?;
     runner.display_info();
 
@@ -58,7 +59,8 @@ fn main() -> Result<()> {
                     eprintln!("  Warning: failed to save history: {e}");
                 }
 
-                match runner.synthesize_and_play(&line, stream, Some(&cancel)) {
+                match runner.synthesize_and_play(&line, stream, stream_consolidate_n, Some(&cancel))
+                {
                     Ok(()) => {
                         if cancel.load(Ordering::SeqCst) {
                             println!("  Cancelled.");
