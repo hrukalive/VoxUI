@@ -1,6 +1,5 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-
 use std::time::Instant;
 
 use anyhow::{Context, Result};
@@ -74,7 +73,7 @@ impl Runner {
         let mut max_patches = 0usize;
         let started = Instant::now();
 
-        self.engine.generate_streaming_cancellable(
+        let result = self.engine.generate_streaming_cancellable(
             request,
             |chunk| {
                 patch_count = chunk.generated_patch_count;
@@ -95,8 +94,16 @@ impl Runner {
                 Ok(())
             },
             cancel,
-        )
-        .context("synthesis failed")?;
+        );
+
+        if let Err(e) = result {
+            if cancel.is_some_and(|c| c.load(Ordering::SeqCst)) {
+                eprintln!();
+                return Ok(());
+            }
+            eprintln!();
+            return Err(e).context("synthesis failed");
+        }
 
         let elapsed = started.elapsed().as_secs_f64();
         eprintln!();
