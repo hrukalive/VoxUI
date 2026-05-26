@@ -1,5 +1,6 @@
 use leptos::prelude::*;
 
+use crate::components::controls::{CustomSelect, NumberCounter, SelectOption};
 use crate::i18n::Labels;
 use crate::tauri_api::{
     AppConfig, AudioDevice, AudioHost, AudioState, BackendKind, ConfigPatch, GenerationSettings,
@@ -77,32 +78,30 @@ pub fn SettingsModal(
                                         </div>
                                         <label class="settings-field" for="settings-language">
                                             <span>{move || labels().language}</span>
-                                            <select
-                                                id="settings-language"
-                                                prop:value=move || language_value(config().language)
-                                                on:change=move |event| {
+                                            <CustomSelect
+                                                class="settings-select-control"
+                                                aria_label=labels().language
+                                                value=move || language_value(config().language).to_string()
+                                                options=move || language_options(labels())
+                                                disabled=move || false
+                                                on_change=move |value| {
                                                     on_config_patch(ConfigPatch {
-                                                        language: Some(parse_language(&event_target_value(&event))),
+                                                        language: Some(parse_language(&value)),
                                                         ..ConfigPatch::default()
                                                     });
                                                 }
-                                            >
-                                                <option value="system" selected=move || config().language == LanguageMode::System>{move || labels().system}</option>
-                                                <option value="chinese" selected=move || config().language == LanguageMode::Chinese>{move || labels().chinese}</option>
-                                                <option value="english" selected=move || config().language == LanguageMode::English>{move || labels().english}</option>
-                                            </select>
+                                            />
                                         </label>
                                         <label class="settings-field" for="settings-max-input">
                                             <span>{move || labels().max_input_characters}</span>
-                                            <input
-                                                id="settings-max-input"
-                                                type="number"
+                                            <NumberCounter
+                                                aria_label=labels().max_input_characters
+                                                value=move || config().max_input_chars.to_string()
+                                                disabled=move || false
                                                 min="1"
-                                                step="1"
-                                                prop:value=move || config().max_input_chars.to_string()
-                                                on:change=move |event| {
+                                                on_change=move |value| {
                                                     on_config_patch(ConfigPatch {
-                                                        max_input_chars: Some(parse_usize(&event_target_value(&event), config().max_input_chars)),
+                                                        max_input_chars: Some(parse_usize(&value, config().max_input_chars)),
                                                         ..ConfigPatch::default()
                                                     });
                                                 }
@@ -118,19 +117,19 @@ pub fn SettingsModal(
                                     <div class="settings-grid">
                                         <label class="settings-field settings-span-2" for="settings-backend">
                                             <span>{move || labels().backend}</span>
-                                            <select
-                                                id="settings-backend"
-                                                prop:value=move || backend_value(config().backend)
-                                                on:change=move |event| {
+                                            <CustomSelect
+                                                class="settings-select-control"
+                                                aria_label=labels().backend
+                                                value=move || backend_value(config().backend).to_string()
+                                                options=move || backend_options(labels())
+                                                disabled=move || false
+                                                on_change=move |value| {
                                                     on_config_patch(ConfigPatch {
-                                                        backend: Some(parse_backend(&event_target_value(&event))),
+                                                        backend: Some(parse_backend(&value)),
                                                         ..ConfigPatch::default()
                                                     });
                                                 }
-                                            >
-                                                <option value="cpu" selected=move || config().backend == BackendKind::Cpu>{move || labels().cpu}</option>
-                                                <option value="cuda" selected=move || config().backend == BackendKind::Cuda>{move || labels().cuda}</option>
-                                            </select>
+                                            />
                                         </label>
                                         <label class="settings-checkbox settings-switch" for="settings-streaming">
                                             <input id="settings-streaming" type="checkbox" prop:checked=move || config().generation.streaming on:change=move |event| {
@@ -141,44 +140,42 @@ pub fn SettingsModal(
                                         </label>
                                         <label class="settings-field" for="settings-stream-consolidate">
                                             <span>{move || labels().stream_consolidate_n}</span>
-                                            <input
-                                                id="settings-stream-consolidate"
-                                                type="number"
-                                                min="1"
-                                                step="1"
+                                            <NumberCounter
+                                                aria_label=labels().stream_consolidate_n
+                                                value=move || config().generation.stream_consolidate_n.to_string()
                                                 disabled=move || !config().generation.streaming
-                                                prop:value=move || config().generation.stream_consolidate_n.to_string()
-                                                on:change=move |event| {
-                                                    let value = parse_usize(&event_target_value(&event), config().generation.stream_consolidate_n).max(1);
+                                                min="1"
+                                                on_change=move |next_value| {
+                                                    let value = parse_usize(&next_value, config().generation.stream_consolidate_n).max(1);
                                                     patch_generation(Box::new(move |generation| generation.stream_consolidate_n = value));
                                                 }
                                             />
                                         </label>
                                         <label class="settings-field" for="settings-cfg">
                                             <span>{move || labels().cfg_value}</span>
-                                            <input id="settings-cfg" type="number" min="0" step="0.1" prop:value=move || config().generation.cfg_value.to_string() on:change=move |event| {
-                                                let value = parse_f32(&event_target_value(&event), config().generation.cfg_value);
+                                            <NumberCounter aria_label=labels().cfg_value value=move || config().generation.cfg_value.to_string() disabled=move || false min="0" step="0.1" on_change=move |next_value| {
+                                                let value = parse_f32(&next_value, config().generation.cfg_value);
                                                 patch_generation(Box::new(move |generation| generation.cfg_value = value));
                                             } />
                                         </label>
                                         <label class="settings-field" for="settings-steps">
                                             <span>{move || labels().inference_steps}</span>
-                                            <input id="settings-steps" type="number" min="1" step="1" prop:value=move || config().generation.inference_timesteps.to_string() on:change=move |event| {
-                                                let value = parse_usize(&event_target_value(&event), config().generation.inference_timesteps);
+                                            <NumberCounter aria_label=labels().inference_steps value=move || config().generation.inference_timesteps.to_string() disabled=move || false min="1" on_change=move |next_value| {
+                                                let value = parse_usize(&next_value, config().generation.inference_timesteps);
                                                 patch_generation(Box::new(move |generation| generation.inference_timesteps = value));
                                             } />
                                         </label>
                                         <label class="settings-field" for="settings-min-len">
                                             <span>{move || labels().min_length}</span>
-                                            <input id="settings-min-len" type="number" min="0" step="1" prop:value=move || config().generation.min_len.to_string() on:change=move |event| {
-                                                let value = parse_usize(&event_target_value(&event), config().generation.min_len);
+                                            <NumberCounter aria_label=labels().min_length value=move || config().generation.min_len.to_string() disabled=move || false min="0" on_change=move |next_value| {
+                                                let value = parse_usize(&next_value, config().generation.min_len);
                                                 patch_generation(Box::new(move |generation| generation.min_len = value));
                                             } />
                                         </label>
                                         <label class="settings-field" for="settings-max-len">
                                             <span>{move || labels().max_length}</span>
-                                            <input id="settings-max-len" type="number" min="1" step="1" prop:value=move || config().generation.max_len.to_string() on:change=move |event| {
-                                                let value = parse_usize(&event_target_value(&event), config().generation.max_len);
+                                            <NumberCounter aria_label=labels().max_length value=move || config().generation.max_len.to_string() disabled=move || false min="1" on_change=move |next_value| {
+                                                let value = parse_usize(&next_value, config().generation.max_len);
                                                 patch_generation(Box::new(move |generation| generation.max_len = value));
                                             } />
                                         </label>
@@ -196,29 +193,26 @@ pub fn SettingsModal(
                                         </label>
                                         <label class="settings-field" for="settings-retry-max">
                                             <span>{move || labels().retry_max_times}</span>
-                                            <input
-                                                id="settings-retry-max"
-                                                type="number"
-                                                min="0"
-                                                step="1"
+                                            <NumberCounter
+                                                aria_label=labels().retry_max_times
+                                                value=move || config().generation.retry_badcase_max_times.to_string()
                                                 disabled=move || !config().generation.retry_badcase || config().generation.streaming
-                                                prop:value=move || config().generation.retry_badcase_max_times.to_string()
-                                                on:change=move |event| {
-                                                let value = parse_usize(&event_target_value(&event), config().generation.retry_badcase_max_times);
+                                                min="0"
+                                                on_change=move |next_value| {
+                                                let value = parse_usize(&next_value, config().generation.retry_badcase_max_times);
                                                 patch_generation(Box::new(move |generation| generation.retry_badcase_max_times = value));
                                             } />
                                         </label>
                                         <label class="settings-field" for="settings-ratio-threshold">
                                             <span>{move || labels().retry_ratio_threshold}</span>
-                                            <input
-                                                id="settings-ratio-threshold"
-                                                type="number"
+                                            <NumberCounter
+                                                aria_label=labels().retry_ratio_threshold
+                                                value=move || config().generation.retry_badcase_ratio_threshold.to_string()
+                                                disabled=move || !config().generation.retry_badcase || config().generation.streaming
                                                 min="0"
                                                 step="0.1"
-                                                disabled=move || !config().generation.retry_badcase || config().generation.streaming
-                                                prop:value=move || config().generation.retry_badcase_ratio_threshold.to_string()
-                                                on:change=move |event| {
-                                                let value = parse_f32(&event_target_value(&event), config().generation.retry_badcase_ratio_threshold);
+                                                on_change=move |next_value| {
+                                                let value = parse_f32(&next_value, config().generation.retry_badcase_ratio_threshold);
                                                 patch_generation(Box::new(move |generation| generation.retry_badcase_ratio_threshold = value));
                                             } />
                                         </label>
@@ -260,70 +254,36 @@ pub fn SettingsModal(
                                     <div class="settings-grid">
                                         <label class="settings-field settings-span-2" for="settings-audio-driver">
                                             <span>{move || labels().audio_driver}</span>
-                                            <select
-                                                id="settings-audio-driver"
-                                                prop:value=move || config().audio_host.unwrap_or_default()
-                                                on:change=move |event| {
-                                                    let value = event_target_value(&event);
+                                            <CustomSelect
+                                                class="settings-select-control"
+                                                aria_label=labels().audio_driver
+                                                value=move || config().audio_host.unwrap_or_default()
+                                                options=move || audio_host_options(audio_state(), config().audio_host, labels())
+                                                disabled=move || false
+                                                on_change=move |value| {
                                                     on_config_patch(ConfigPatch {
                                                         audio_host: Some(if value.is_empty() { None } else { Some(value) }),
                                                         audio_device: Some(None),
                                                         ..ConfigPatch::default()
                                                     });
                                                 }
-                                            >
-                                                <option value="" selected=move || config().audio_host.is_none()>{move || labels().default_choice}</option>
-                                                <For
-                                                    each=move || audio_hosts_with_current(audio_state(), config().audio_host)
-                                                    key=|host| host.name.clone()
-                                                    children=move |host| {
-                                                        let name = host.name;
-                                                        let value = name.clone();
-                                                        let selected_name = name.clone();
-                                                        view! {
-                                                            <option
-                                                                value={value}
-                                                                selected=move || config().audio_host.as_deref() == Some(selected_name.as_str())
-                                                            >
-                                                                {name}
-                                                            </option>
-                                                        }
-                                                    }
-                                                />
-                                            </select>
+                                            />
                                         </label>
                                         <label class="settings-field settings-span-2" for="settings-output-device">
                                             <span>{move || labels().output_device}</span>
-                                            <select
-                                                id="settings-output-device"
-                                                prop:value=move || config().audio_device.unwrap_or_default()
-                                                on:change=move |event| {
-                                                    let value = event_target_value(&event);
+                                            <CustomSelect
+                                                class="settings-select-control"
+                                                aria_label=labels().output_device
+                                                value=move || config().audio_device.unwrap_or_default()
+                                                options=move || audio_device_options(audio_state(), &config(), labels())
+                                                disabled=move || false
+                                                on_change=move |value| {
                                                     on_config_patch(ConfigPatch {
                                                         audio_device: Some(if value.is_empty() { None } else { Some(value) }),
                                                         ..ConfigPatch::default()
                                                     });
                                                 }
-                                            >
-                                                <option value="" selected=move || config().audio_device.is_none()>{move || labels().default_choice}</option>
-                                                <For
-                                                    each=move || audio_devices_for_selected_host(audio_state(), &config())
-                                                    key=|device| format!("{}:{}", device.host_name, device.name)
-                                                    children=move |device| {
-                                                        let name = device.name;
-                                                        let value = name.clone();
-                                                        let selected_name = name.clone();
-                                                        view! {
-                                                            <option
-                                                                value={value}
-                                                                selected=move || config().audio_device.as_deref() == Some(selected_name.as_str())
-                                                            >
-                                                                {name}
-                                                            </option>
-                                                        }
-                                                    }
-                                                />
-                                            </select>
+                                            />
                                         </label>
                                         <div class="settings-field settings-volume-test-field settings-span-2">
                                             <span>{move || format!("{}: {}%", labels().volume, volume_to_percent(config().volume))}</span>
@@ -407,6 +367,49 @@ fn audio_devices_for_selected_host(mut state: AudioState, config: &AppConfig) ->
     }
 
     devices
+}
+
+fn language_options(labels: Labels) -> Vec<SelectOption> {
+    vec![
+        SelectOption::new("system", labels.system),
+        SelectOption::new("chinese", labels.chinese),
+        SelectOption::new("english", labels.english),
+    ]
+}
+
+fn backend_options(labels: Labels) -> Vec<SelectOption> {
+    vec![
+        SelectOption::new("cpu", labels.cpu),
+        SelectOption::new("cuda", labels.cuda),
+    ]
+}
+
+fn audio_host_options(
+    state: AudioState,
+    current_host: Option<String>,
+    labels: Labels,
+) -> Vec<SelectOption> {
+    std::iter::once(SelectOption::new("", labels.default_choice))
+        .chain(
+            audio_hosts_with_current(state, current_host)
+                .into_iter()
+                .map(|host| SelectOption::new(host.name.clone(), host.name)),
+        )
+        .collect()
+}
+
+fn audio_device_options(
+    state: AudioState,
+    config: &AppConfig,
+    labels: Labels,
+) -> Vec<SelectOption> {
+    std::iter::once(SelectOption::new("", labels.default_choice))
+        .chain(
+            audio_devices_for_selected_host(state, config)
+                .into_iter()
+                .map(|device| SelectOption::new(device.name.clone(), device.name)),
+        )
+        .collect()
 }
 
 fn language_value(language: LanguageMode) -> &'static str {

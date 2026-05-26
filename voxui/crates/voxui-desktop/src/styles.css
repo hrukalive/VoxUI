@@ -6,6 +6,8 @@
 
 * {
   box-sizing: border-box;
+  scrollbar-color: #626b7b #252a33;
+  scrollbar-width: thin;
 }
 
 body {
@@ -15,6 +17,31 @@ body {
   height: 100vh;
   overflow: hidden;
   background: #1f232b;
+}
+
+*::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+
+*::-webkit-scrollbar-track {
+  background: #252a33;
+  border-radius: 999px;
+}
+
+*::-webkit-scrollbar-thumb {
+  min-height: 36px;
+  border: 3px solid #252a33;
+  border-radius: 999px;
+  background: #626b7b;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: #737d8f;
+}
+
+*::-webkit-scrollbar-corner {
+  background: #20242c;
 }
 
 .app-shell {
@@ -52,15 +79,117 @@ body {
   font-size: 13px;
 }
 
-.model-select {
+.model-select.custom-select {
   margin-left: auto;
-  min-width: 260px;
+  width: 280px;
+  min-width: 220px;
   height: 34px;
-  border: 1px solid #525966;
+}
+
+.custom-select {
+  position: relative;
+  min-width: 0;
+  color: #f7f8fb;
+}
+
+.custom-select-button {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 36px;
+  align-items: center;
+  width: 100%;
+  height: 34px;
+  border: 1px solid #59606d;
   border-radius: 5px;
-  background: #3a3f49;
+  background-color: #3a3f49;
+  color: #f7f8fb;
+  padding: 0 0 0 10px;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.settings-select-control .custom-select-button {
+  background-color: #444953;
+}
+
+.custom-select-button span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.custom-select-arrow {
+  display: grid;
+  width: 36px;
+  height: 20px;
+  place-items: center;
+  border-left: 1px solid #59606d;
+}
+
+.custom-select-arrow::before {
+  content: "";
+  width: 0;
+  height: 0;
+  border: 6px solid transparent;
+  border-top-color: #d9deea;
+  transform: translateY(3px);
+}
+
+.custom-select-button:hover:not(:disabled) {
+  border-color: #6a7281;
+  background-color: #4a505b;
+}
+
+.custom-select-button:focus-visible {
+  border-color: #8fafee;
+  outline: 2px solid rgb(143 175 238 / 28%);
+  outline-offset: 1px;
+}
+
+.custom-select-menu {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 3px);
+  left: 0;
+  right: 0;
+  max-height: 220px;
+  overflow: auto;
+  border: 1px solid #59606d;
+  border-radius: 5px;
+  background: #343a45;
+  box-shadow: 0 14px 32px rgb(0 0 0 / 34%);
+  padding: 4px;
+}
+
+.custom-select-option {
+  display: block;
+  width: 100%;
+  min-height: 34px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
   color: #f7f8fb;
   padding: 0 10px;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.custom-select-option.selected {
+  background: #2b70d6;
+}
+
+.custom-select-option + .custom-select-option {
+  margin-top: 2px;
+}
+
+.custom-select-option:hover {
+  background: #536071;
+}
+
+.custom-select-option.selected:hover {
+  background: #3a7ee1;
 }
 
 .primary-button,
@@ -86,6 +215,11 @@ body {
 .settings-field textarea:disabled {
   cursor: not-allowed;
   opacity: 0.48;
+}
+
+.custom-select-button:disabled,
+.number-counter-buttons button:disabled {
+  cursor: not-allowed;
 }
 
 .primary-button,
@@ -364,7 +498,7 @@ body {
   width: 100%;
   border: 1px solid #59606d;
   border-radius: 5px;
-  background: #444953;
+  background-color: #444953;
   color: #f7f8fb;
   font: inherit;
 }
@@ -373,6 +507,10 @@ body {
 .settings-field select {
   height: 34px;
   padding: 0 10px;
+}
+
+.settings-field select {
+  padding-right: 36px;
 }
 
 .settings-field textarea {
@@ -433,6 +571,70 @@ body {
 .settings-field input[type="range"] {
   padding: 0;
   accent-color: #8fafee;
+}
+
+.number-counter {
+  display: grid;
+  position: relative;
+  min-width: 0;
+}
+
+.number-counter input {
+  padding-right: 32px;
+}
+
+.number-counter-buttons {
+  position: absolute;
+  top: 4px;
+  right: 5px;
+  bottom: 4px;
+  display: grid;
+  width: 22px;
+  grid-template-rows: 1fr 1fr;
+  overflow: hidden;
+  border-left: 1px solid #59606d;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.number-counter:hover .number-counter-buttons,
+.number-counter:focus-within .number-counter-buttons {
+  opacity: 1;
+}
+
+.number-counter-buttons button {
+  display: grid;
+  place-items: center;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.number-counter-buttons button::before {
+  content: "";
+  width: 0;
+  height: 0;
+  border: 5px solid transparent;
+}
+
+.number-counter-buttons button:first-child::before {
+  border-bottom-color: #d9deea;
+  transform: translateY(-2px);
+}
+
+.number-counter-buttons button:last-child::before {
+  border-top-color: #d9deea;
+  transform: translateY(2px);
+}
+
+.number-counter-buttons button:hover {
+  background: #525967;
+}
+
+.number-counter.disabled .number-counter-buttons button {
+  cursor: not-allowed;
 }
 
 .settings-grid input,

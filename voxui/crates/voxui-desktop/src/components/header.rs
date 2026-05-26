@@ -1,5 +1,6 @@
 use leptos::prelude::*;
 
+use crate::components::controls::{CustomSelect, SelectOption};
 use crate::i18n::Labels;
 use crate::tauri_api::ModelChoice;
 
@@ -10,11 +11,25 @@ pub fn Header(
     selected_model_id: Option<String>,
     loaded_model_id: Option<String>,
     load_disabled: bool,
-    on_model_select: impl Fn(String) + 'static + Copy,
-    on_load: impl Fn() + 'static + Copy,
-    on_open_settings: impl Fn() + 'static + Copy,
+    on_model_select: impl Fn(String) + Send + Sync + 'static + Copy,
+    on_load: impl Fn() + Send + Sync + 'static + Copy,
+    on_open_settings: impl Fn() + Send + Sync + 'static + Copy,
 ) -> impl IntoView {
     let selected_model_id = selected_model_id.unwrap_or_default();
+    let model_options = {
+        let models = models.clone();
+        move || {
+            models
+                .clone()
+                .into_iter()
+                .map(|model| SelectOption::new(model.id, model.display_name))
+                .collect::<Vec<_>>()
+        }
+    };
+    let current_model_id = {
+        let selected_model_id = selected_model_id.clone();
+        move || selected_model_id.clone()
+    };
 
     view! {
         <header class="app-header">
@@ -23,25 +38,14 @@ pub fn Header(
                 <span>{labels.subtitle}</span>
             </div>
 
-            <select
+            <CustomSelect
                 class="model-select"
-                aria-label={labels.model}
-                prop:value=selected_model_id.clone()
-                on:change=move |event| on_model_select(event_target_value(&event))
-            >
-                <option value="">{labels.model}</option>
-                {models
-                    .into_iter()
-                    .map(|model| {
-                        let selected = model.id == selected_model_id;
-                        view! {
-                            <option value={model.id.clone()} selected={selected}>
-                                {model.display_name}
-                            </option>
-                        }
-                    })
-                    .collect_view()}
-            </select>
+                aria_label=labels.model
+                value=current_model_id
+                options=model_options
+                disabled=move || false
+                on_change=move |model_id| on_model_select(model_id)
+            />
 
             <button
                 class="primary-button"

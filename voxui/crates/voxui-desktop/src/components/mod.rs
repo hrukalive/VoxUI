@@ -1,3 +1,4 @@
+pub mod controls;
 pub mod header;
 pub mod history;
 pub mod input_box;
