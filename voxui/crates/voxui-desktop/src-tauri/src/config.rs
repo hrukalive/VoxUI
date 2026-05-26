@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
-pub use crate::types::{AppConfig, BackendKind, GenerationSettings, LanguageMode};
+pub use crate::types::{AppConfig, BackendKind, GenerationSettings, LanguageMode, ThemeMode};
 
 pub fn detect_language_from_locale(locale: Option<&str>) -> LanguageMode {
     match locale {

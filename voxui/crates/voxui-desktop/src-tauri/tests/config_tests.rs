@@ -4,7 +4,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use voxui_desktop::config::{
     default_config_path, detect_language_from_locale, load_config, save_config, AppConfig,
-    BackendKind, LanguageMode,
+    BackendKind, LanguageMode, ThemeMode,
 };
 
 fn unique_temp_dir(test_name: &str) -> PathBuf {
@@ -43,6 +43,7 @@ fn config_defaults_to_system_language_and_preferred_backend() {
     };
 
     assert_eq!(config.language, LanguageMode::System);
+    assert_eq!(config.theme, ThemeMode::Dark);
     assert_eq!(config.backend, expected_backend);
     assert_eq!(config.volume, 0.8);
     assert_eq!(config.max_input_chars, 280);
@@ -84,6 +85,7 @@ fn config_round_trips_as_json() {
         model_root: Some(PathBuf::from("D:/Sandbox_Share/VoxUI/models")),
         selected_model_id: Some("voxcpm2-fp16|lora_a1.gguf".to_string()),
         language: LanguageMode::Chinese,
+        theme: ThemeMode::Light,
         backend: BackendKind::Cuda,
         audio_host: Some("Wasapi".to_string()),
         audio_device: Some("Speakers".to_string()),
@@ -98,6 +100,7 @@ fn config_round_trips_as_json() {
     assert_eq!(decoded.model_root, config.model_root);
     assert_eq!(decoded.selected_model_id, config.selected_model_id);
     assert_eq!(decoded.language, LanguageMode::Chinese);
+    assert_eq!(decoded.theme, ThemeMode::Light);
     assert_eq!(decoded.backend, BackendKind::Cuda);
     assert_eq!(decoded.volume, 0.42);
     assert_eq!(decoded.max_input_chars, 320);
@@ -120,6 +123,7 @@ fn partial_generation_json_preserves_values_and_defaults_missing_fields() {
     assert!(decoded.generation.streaming);
     assert!(decoded.generation.retry_badcase);
     assert_eq!(decoded.language, LanguageMode::System);
+    assert_eq!(decoded.theme, ThemeMode::Dark);
     assert_eq!(decoded.backend, AppConfig::default().backend);
 }
 
@@ -148,6 +152,7 @@ fn save_config_creates_parent_directory_and_load_config_reads_written_json() {
         model_root: Some(PathBuf::from("D:/Sandbox_Share/VoxUI/models")),
         selected_model_id: Some("voxcpm2-fp16|lora_a1.gguf".to_string()),
         language: LanguageMode::Chinese,
+        theme: ThemeMode::Light,
         backend: BackendKind::Cuda,
         volume: 0.55,
         max_input_chars: 360,

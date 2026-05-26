@@ -10,7 +10,7 @@ use crate::i18n::{labels, UiLanguage};
 use crate::tauri_api::{
     AppConfig, AppSnapshot, AudioState, BackendKind, ConfigPatch, GenerationDoneEvent,
     GenerationProgressEvent, GenerationSettings, HistoryStatus, LanguageMode, LoadUiState,
-    ModelLoadDoneEvent, ModelLoadProgressEvent, PlaybackStateEvent,
+    ModelLoadDoneEvent, ModelLoadProgressEvent, PlaybackStateEvent, ThemeMode,
 };
 
 #[component]
@@ -94,7 +94,11 @@ pub fn App() -> impl IntoView {
     });
 
     view! {
-        <div class="app-shell">
+        <div
+            class="app-shell"
+            class:theme-light=move || current_snapshot().config.theme == ThemeMode::Light
+            class:theme-dark=move || current_snapshot().config.theme == ThemeMode::Dark
+        >
             {move || {
                 let snapshot = current_snapshot();
                 let labels = labels(ui_language(snapshot.config.language));
@@ -296,6 +300,7 @@ fn fallback_snapshot() -> AppSnapshot {
             model_root: None,
             selected_model_id: None,
             language: LanguageMode::System,
+            theme: ThemeMode::Dark,
             backend: BackendKind::Cuda,
             audio_host: None,
             audio_device: None,
@@ -334,6 +339,9 @@ fn apply_optimistic_patch(snapshot: &mut AppSnapshot, patch: &ConfigPatch) {
     }
     if let Some(language) = patch.language {
         snapshot.config.language = language;
+    }
+    if let Some(theme) = patch.theme {
+        snapshot.config.theme = theme;
     }
     if let Some(backend) = patch.backend {
         snapshot.config.backend = backend;

@@ -4,7 +4,7 @@ use crate::components::controls::{CustomSelect, NumberCounter, SelectOption};
 use crate::i18n::Labels;
 use crate::tauri_api::{
     AppConfig, AudioDevice, AudioHost, AudioState, BackendKind, ConfigPatch, GenerationSettings,
-    LanguageMode,
+    LanguageMode, ThemeMode,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -87,6 +87,22 @@ pub fn SettingsModal(
                                                 on_change=move |value| {
                                                     on_config_patch(ConfigPatch {
                                                         language: Some(parse_language(&value)),
+                                                        ..ConfigPatch::default()
+                                                    });
+                                                }
+                                            />
+                                        </label>
+                                        <label class="settings-field" for="settings-theme">
+                                            <span>{move || labels().theme}</span>
+                                            <CustomSelect
+                                                class="settings-select-control"
+                                                aria_label=labels().theme
+                                                value=move || theme_value(config().theme).to_string()
+                                                options=move || theme_options(labels())
+                                                disabled=move || false
+                                                on_change=move |value| {
+                                                    on_config_patch(ConfigPatch {
+                                                        theme: Some(parse_theme(&value)),
                                                         ..ConfigPatch::default()
                                                     });
                                                 }
@@ -377,6 +393,13 @@ fn language_options(labels: Labels) -> Vec<SelectOption> {
     ]
 }
 
+fn theme_options(labels: Labels) -> Vec<SelectOption> {
+    vec![
+        SelectOption::new("dark", labels.theme_dark),
+        SelectOption::new("light", labels.theme_light),
+    ]
+}
+
 fn backend_options(labels: Labels) -> Vec<SelectOption> {
     vec![
         SelectOption::new("cpu", labels.cpu),
@@ -410,6 +433,20 @@ fn audio_device_options(
                 .map(|device| SelectOption::new(device.name.clone(), device.name)),
         )
         .collect()
+}
+
+fn theme_value(theme: ThemeMode) -> &'static str {
+    match theme {
+        ThemeMode::Dark => "dark",
+        ThemeMode::Light => "light",
+    }
+}
+
+fn parse_theme(value: &str) -> ThemeMode {
+    match value {
+        "light" => ThemeMode::Light,
+        _ => ThemeMode::Dark,
+    }
 }
 
 fn language_value(language: LanguageMode) -> &'static str {

@@ -5,7 +5,7 @@ use tempfile::TempDir;
 use voxui_desktop::app_core::{load_button_enabled, AppCore};
 use voxui_desktop::generation_queue::HistoryStatus;
 use voxui_desktop::types::{
-    AppConfig, BackendKind, ConfigPatch, GenerationSettings, LanguageMode, LoadUiState,
+    AppConfig, BackendKind, ConfigPatch, GenerationSettings, LanguageMode, LoadUiState, ThemeMode,
 };
 
 #[test]
@@ -95,6 +95,7 @@ fn changing_audio_host_clears_saved_audio_device() {
             model_root: None,
             selected_model_id: None,
             language: None,
+            theme: None,
             backend: None,
             audio_host: Some(Some("Asio".to_string())),
             audio_device: None,
@@ -415,6 +416,7 @@ fn selection_change_cancels_active_load_and_rejects_stale_completion() {
         model_root: None,
         selected_model_id: Some(Some("b-model".to_string())),
         language: None,
+        theme: None,
         backend: None,
         audio_host: None,
         audio_device: None,
@@ -454,6 +456,7 @@ fn applying_config_patch_persists_the_saved_config_to_disk() {
             model_root: Some(Some(model_root.clone())),
             selected_model_id: Some(Some("alpha".to_string())),
             language: Some(LanguageMode::Chinese),
+            theme: Some(ThemeMode::Light),
             backend: Some(BackendKind::Cuda),
             audio_host: Some(Some("Wasapi".to_string())),
             audio_device: Some(Some("Speakers".to_string())),
@@ -479,6 +482,7 @@ fn applying_config_patch_persists_the_saved_config_to_disk() {
     let saved = voxui_desktop::config::load_config(&config_path).unwrap();
 
     assert_eq!(snapshot.config, saved);
+    assert_eq!(saved.theme, ThemeMode::Light);
 }
 
 #[test]

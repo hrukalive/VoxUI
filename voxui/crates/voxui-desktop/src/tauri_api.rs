@@ -41,6 +41,7 @@ pub struct AppConfig {
     pub model_root: Option<String>,
     pub selected_model_id: Option<String>,
     pub language: LanguageMode,
+    pub theme: ThemeMode,
     pub backend: BackendKind,
     pub audio_host: Option<String>,
     pub audio_device: Option<String>,
@@ -155,6 +156,8 @@ pub struct ConfigPatch {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub language: Option<LanguageMode>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub theme: Option<ThemeMode>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub backend: Option<BackendKind>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub audio_host: Option<Option<String>>,
@@ -211,6 +214,13 @@ pub enum LanguageMode {
 pub enum BackendKind {
     Cpu,
     Cuda,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ThemeMode {
+    Dark,
+    Light,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

@@ -120,6 +120,9 @@ impl AppCore {
         if let Some(language) = patch.language {
             self.config.language = language;
         }
+        if let Some(theme) = patch.theme {
+            self.config.theme = theme;
+        }
         if let Some(backend) = patch.backend {
             self.config.backend = backend;
         }
@@ -778,7 +781,7 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
-    use crate::types::{BackendKind, ConfigPatch, GenerationSettings, LanguageMode};
+    use crate::types::{BackendKind, ConfigPatch, GenerationSettings, LanguageMode, ThemeMode};
 
     #[test]
     fn apply_patch_rescans_model_root_and_clamps_values() {
@@ -791,6 +794,7 @@ mod tests {
                 model_root: Some(Some(temp.path().to_path_buf())),
                 selected_model_id: None,
                 language: Some(LanguageMode::English),
+                theme: Some(ThemeMode::Light),
                 backend: Some(BackendKind::Cuda),
                 audio_host: Some(Some("host-a".to_string())),
                 audio_device: Some(Some("device-a".to_string())),
@@ -807,6 +811,7 @@ mod tests {
         assert_eq!(snapshot.selected_model_id.as_deref(), Some("alpha"));
         assert_eq!(snapshot.config.selected_model_id.as_deref(), Some("alpha"));
         assert_eq!(snapshot.config.language, LanguageMode::English);
+        assert_eq!(snapshot.config.theme, ThemeMode::Light);
         assert_eq!(snapshot.config.backend, BackendKind::Cuda);
         assert_eq!(snapshot.config.audio_host.as_deref(), Some("host-a"));
         assert_eq!(snapshot.config.audio_device.as_deref(), Some("device-a"));
@@ -897,6 +902,7 @@ mod tests {
                 model_root: Some(None),
                 selected_model_id: Some(None),
                 language: None,
+                theme: None,
                 backend: None,
                 audio_host: Some(None),
                 audio_device: Some(None),
@@ -930,6 +936,7 @@ mod tests {
                 model_root: None,
                 selected_model_id: Some(Some("missing".to_string())),
                 language: None,
+                theme: None,
                 backend: None,
                 audio_host: None,
                 audio_device: None,

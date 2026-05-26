@@ -27,6 +27,13 @@ pub enum BackendKind {
     Cuda,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ThemeMode {
+    Dark,
+    Light,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct GenerationSettings {
@@ -69,6 +76,7 @@ pub struct AppConfig {
     pub model_root: Option<PathBuf>,
     pub selected_model_id: Option<String>,
     pub language: LanguageMode,
+    pub theme: ThemeMode,
     pub backend: BackendKind,
     pub audio_host: Option<String>,
     pub audio_device: Option<String>,
@@ -83,6 +91,7 @@ impl Default for AppConfig {
             model_root: None,
             selected_model_id: None,
             language: LanguageMode::System,
+            theme: ThemeMode::Dark,
             backend: default_backend(),
             audio_host: None,
             audio_device: None,
@@ -128,6 +137,8 @@ pub struct ConfigPatch {
     pub selected_model_id: Option<Option<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub language: Option<LanguageMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub theme: Option<ThemeMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub backend: Option<BackendKind>,
     #[serde(
