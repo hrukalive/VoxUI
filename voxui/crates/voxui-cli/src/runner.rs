@@ -170,7 +170,12 @@ impl Runner {
         };
 
         let elapsed = started.elapsed().as_secs_f64();
+        eprintln!();
         eprintln!("  Synthesis: {:.2}s", elapsed);
+
+        if cancel.is_some_and(|c| c.load(Ordering::SeqCst)) {
+            return Ok(());
+        }
 
         let audio = AudioSystem::new();
         let host_name = audio.default_host_name();
