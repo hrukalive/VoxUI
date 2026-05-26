@@ -1,9 +1,11 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use std::time::Instant;
+
 use anyhow::{Context, Result};
 use candle_core::Device;
-use voxui_audio::{AudioPlayer, AudioSystem, StreamingPlayer};
+use voxui_audio::{AudioPlayer, AudioSystem};
 use voxui_inference::{SynthesisRequest, VoxCPMEngine};
 
 pub struct Runner {
@@ -60,8 +62,6 @@ impl Runner {
         cancel: Option<&AtomicBool>,
     ) -> Result<()> {
         let sample_rate = self.engine.sample_rate();
-        let mut player = StreamingPlayer::new(sample_rate, 1.0)
-            .context("failed to create audio player")?;
 
         let request = SynthesisRequest {
             text: text.to_string(),
@@ -69,64 +69,52 @@ impl Runner {
             ..Default::default()
         };
 
-        let (tx, rx) = std::sync::mpsc::sync_channel::<Vec<f32>>(8);
-
-        let engine = &mut self.engine;
+        let mut samples = Vec::new();
         let mut patch_count = 0usize;
         let mut max_patches = 0usize;
+        let started = Instant::now();
 
-        let result: Result<()> = std::thread::scope(|s| {
-            let handle = s.spawn(|| -> Result<()> {
-                engine.generate_streaming_cancellable(
-                    request,
-                    |chunk| {
-                        patch_count = chunk.generated_patch_count;
-                        max_patches = chunk.max_patches;
-                        let bar_width = 20usize;
-                        let filled = bar_width
-                            .saturating_mul(patch_count)
-                            .checked_div(max_patches.max(1))
-                            .unwrap_or(0);
-                        let bar: String = std::iter::repeat_n('=', filled)
-                            .chain(std::iter::repeat_n('>', if patch_count < max_patches { 1 } else { 0 }))
-                            .chain(std::iter::repeat_n(' ', bar_width.saturating_sub(filled).saturating_sub(1)))
-                            .collect();
-                        eprint!(
-                            "\r  Synthesizing... [{bar}] {patch_count}/{max_patches} patches",
-                        );
-                        tx.send(chunk.samples)
-                            .map_err(|_| anyhow::anyhow!("audio channel closed"))?;
-                        Ok(())
-                    },
-                    cancel,
-                )
-            });
+        self.engine.generate_streaming_cancellable(
+            request,
+            |chunk| {
+                patch_count = chunk.generated_patch_count;
+                max_patches = chunk.max_patches;
+                let bar_width = 20usize;
+                let filled = bar_width
+                    .saturating_mul(patch_count)
+                    .checked_div(max_patches.max(1))
+                    .unwrap_or(0);
+                let bar: String = std::iter::repeat_n('=', filled)
+                    .chain(std::iter::repeat_n('>', if patch_count < max_patches { 1 } else { 0 }))
+                    .chain(std::iter::repeat_n(' ', bar_width.saturating_sub(filled).saturating_sub(1)))
+                    .collect();
+                eprint!(
+                    "\r  Synthesizing... [{bar}] {patch_count}/{max_patches} patches",
+                );
+                samples.extend_from_slice(&chunk.samples);
+                Ok(())
+            },
+            cancel,
+        )
+        .context("synthesis failed")?;
 
-            for samples in rx {
-                if cancel.is_some_and(|c| c.load(Ordering::SeqCst)) {
-                    break;
-                }
-                player.push(&samples);
-            }
-
-            handle.join().unwrap()
-        });
-
-        if let Err(e) = result {
-            if cancel.is_some_and(|c| c.load(Ordering::SeqCst)) {
-                eprintln!();
-                return Ok(());
-            }
-            eprintln!();
-            return Err(e).context("synthesis failed");
-        }
-
-        let cancelled = player.flush_until(cancel);
+        let elapsed = started.elapsed().as_secs_f64();
         eprintln!();
+        eprintln!("  Synthesis: {:.2}s", elapsed);
 
-        if cancelled || cancel.is_some_and(|c| c.load(Ordering::SeqCst)) {
+        if cancel.is_some_and(|c| c.load(Ordering::SeqCst)) {
             return Ok(());
         }
+
+        let audio = AudioSystem::new();
+        let host_name = audio.default_host_name();
+        let device_name = audio.default_device_name(&host_name)
+            .context("no default audio output device")?;
+        let mut player = AudioPlayer::new(&host_name, &device_name, sample_rate)
+            .context("failed to create audio player")?;
+        player
+            .play_blocking(samples)
+            .context("audio playback failed")?;
 
         Ok(())
     }
@@ -142,6 +130,7 @@ impl Runner {
             ..Default::default()
         };
 
+        let started = Instant::now();
         let samples = self.engine.generate_cancellable(
             request,
             |current, max| {
@@ -162,7 +151,9 @@ impl Runner {
         )
         .context("synthesis failed")?;
 
+        let elapsed = started.elapsed().as_secs_f64();
         eprintln!();
+        eprintln!("  Synthesis: {:.2}s", elapsed);
 
         if cancel.is_some_and(|c| c.load(Ordering::SeqCst)) {
             return Ok(());
