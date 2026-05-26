@@ -138,7 +138,7 @@ impl Runner {
         };
 
         let started = Instant::now();
-        let samples = self.engine.generate_cancellable(
+        let result = self.engine.generate_cancellable(
             request,
             |current, max| {
                 let bar_width = 20usize;
@@ -155,16 +155,22 @@ impl Runner {
                 );
             },
             cancel,
-        )
-        .context("synthesis failed")?;
+        );
+
+        let samples = match result {
+            Ok(samples) => samples,
+            Err(e) => {
+                if cancel.is_some_and(|c| c.load(Ordering::SeqCst)) {
+                    eprintln!();
+                    return Ok(());
+                }
+                eprintln!();
+                return Err(e).context("synthesis failed");
+            }
+        };
 
         let elapsed = started.elapsed().as_secs_f64();
-        eprintln!();
         eprintln!("  Synthesis: {:.2}s", elapsed);
-
-        if cancel.is_some_and(|c| c.load(Ordering::SeqCst)) {
-            return Ok(());
-        }
 
         let audio = AudioSystem::new();
         let host_name = audio.default_host_name();
