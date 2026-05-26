@@ -34,15 +34,23 @@ fn tauri_config_exposes_global_tauri_api() {
 }
 
 #[test]
-fn config_defaults_to_system_language_and_cpu_backend() {
+fn config_defaults_to_system_language_and_preferred_backend() {
     let config = AppConfig::default();
+    let expected_backend = if cfg!(feature = "cuda") {
+        BackendKind::Cuda
+    } else {
+        BackendKind::Cpu
+    };
 
     assert_eq!(config.language, LanguageMode::System);
-    assert_eq!(config.backend, BackendKind::Cpu);
+    assert_eq!(config.backend, expected_backend);
     assert_eq!(config.volume, 0.8);
     assert_eq!(config.max_input_chars, 280);
     assert_eq!(config.generation.inference_timesteps, 10);
     assert_eq!(config.generation.cfg_value, 2.0);
+    assert!(config.generation.streaming);
+    assert_eq!(config.generation.stream_consolidate_n, 10);
+    assert!(config.generation.retry_badcase);
 }
 
 #[test]
@@ -109,9 +117,10 @@ fn partial_generation_json_preserves_values_and_defaults_missing_fields() {
 
     assert_eq!(decoded.generation.cfg_value, 3.5);
     assert_eq!(decoded.generation.inference_timesteps, 10);
+    assert!(decoded.generation.streaming);
     assert!(decoded.generation.retry_badcase);
     assert_eq!(decoded.language, LanguageMode::System);
-    assert_eq!(decoded.backend, BackendKind::Cpu);
+    assert_eq!(decoded.backend, AppConfig::default().backend);
 }
 
 #[test]

@@ -136,6 +136,8 @@ pub struct GenerationSettings {
     pub inference_timesteps: usize,
     pub min_len: usize,
     pub max_len: usize,
+    pub streaming: bool,
+    pub stream_consolidate_n: usize,
     pub retry_badcase: bool,
     pub retry_badcase_max_times: usize,
     pub retry_badcase_ratio_threshold: f32,

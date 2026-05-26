@@ -34,6 +34,8 @@ pub struct GenerationSettings {
     pub inference_timesteps: usize,
     pub min_len: usize,
     pub max_len: usize,
+    pub streaming: bool,
+    pub stream_consolidate_n: usize,
     pub retry_badcase: bool,
     pub retry_badcase_max_times: usize,
     pub retry_badcase_ratio_threshold: f32,
@@ -49,6 +51,8 @@ impl Default for GenerationSettings {
             inference_timesteps: 10,
             min_len: 2,
             max_len: 2000,
+            streaming: true,
+            stream_consolidate_n: 10,
             retry_badcase: true,
             retry_badcase_max_times: 3,
             retry_badcase_ratio_threshold: 6.0,
@@ -79,13 +83,21 @@ impl Default for AppConfig {
             model_root: None,
             selected_model_id: None,
             language: LanguageMode::System,
-            backend: BackendKind::Cpu,
+            backend: default_backend(),
             audio_host: None,
             audio_device: None,
             volume: 0.8,
             max_input_chars: 280,
             generation: GenerationSettings::default(),
         }
+    }
+}
+
+fn default_backend() -> BackendKind {
+    if cfg!(feature = "cuda") {
+        BackendKind::Cuda
+    } else {
+        BackendKind::Cpu
     }
 }
 

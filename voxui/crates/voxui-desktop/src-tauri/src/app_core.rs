@@ -49,6 +49,7 @@ pub struct GenerationRun {
     pub request: SynthesisRequest,
     pub engine: Option<VoxCPMEngine>,
     pub sample_rate: u32,
+    pub streaming: bool,
     pub cancel: Arc<AtomicBool>,
 }
 
@@ -65,6 +66,7 @@ pub struct PlaybackCompletion {
 
 impl AppCore {
     pub fn from_config(mut config: AppConfig) -> Result<Self> {
+        normalize_generation_settings(&mut config.generation);
         let models = match config.model_root.as_deref() {
             Some(root) => discover_models(root)?,
             None => Vec::new(),
@@ -136,7 +138,8 @@ impl AppCore {
         if let Some(max_input_chars) = patch.max_input_chars {
             self.config.max_input_chars = max_input_chars.max(1);
         }
-        if let Some(generation) = patch.generation {
+        if let Some(mut generation) = patch.generation {
+            normalize_generation_settings(&mut generation);
             self.config.generation = generation;
         }
 
@@ -377,6 +380,7 @@ impl AppCore {
         if self.active_generation_item_id.is_some() {
             return Err("generation already in progress".to_string());
         }
+        let streaming = item.snapshot.generation.streaming;
         let request = self
             .synthesis_request(item_id)
             .map_err(|error| error.to_string())?;
@@ -397,6 +401,7 @@ impl AppCore {
             request,
             engine,
             sample_rate,
+            streaming,
             cancel,
         })
     }
@@ -509,7 +514,25 @@ impl AppCore {
             return Err((run, "no model engine loaded for generation".to_string()));
         };
 
-        match engine.generate_cancellable(run.request.clone(), progress, Some(&run.cancel)) {
+        let result = if run.streaming {
+            let mut samples = Vec::new();
+            match engine.generate_streaming_cancellable(
+                run.request.clone(),
+                |chunk| {
+                    progress(chunk.generated_patch_count, chunk.max_patches);
+                    samples.extend_from_slice(&chunk.samples);
+                    Ok(())
+                },
+                Some(&run.cancel),
+            ) {
+                Ok(()) => Ok(samples),
+                Err(error) => Err(error),
+            }
+        } else {
+            engine.generate_cancellable(run.request.clone(), progress, Some(&run.cancel))
+        };
+
+        match result {
             Ok(samples) => {
                 let duration_seconds = samples.len() as f32 / run.sample_rate as f32;
                 Ok((run, samples, duration_seconds))
@@ -542,10 +565,11 @@ impl AppCore {
             min_len: item.snapshot.generation.min_len,
             max_len: item.snapshot.generation.max_len,
             normalize: false,
-            retry_badcase: item.snapshot.generation.retry_badcase,
+            retry_badcase: item.snapshot.generation.retry_badcase
+                && !item.snapshot.generation.streaming,
             retry_badcase_max_times: item.snapshot.generation.retry_badcase_max_times,
             retry_badcase_ratio_threshold: item.snapshot.generation.retry_badcase_ratio_threshold,
-            consolidate_n: 1,
+            consolidate_n: item.snapshot.generation.stream_consolidate_n.max(1),
         })
     }
 
@@ -742,6 +766,10 @@ fn select_existing_model(saved: Option<String>, models: &[ModelChoice]) -> Optio
     models.first().map(|model| model.id.clone())
 }
 
+fn normalize_generation_settings(generation: &mut crate::types::GenerationSettings) {
+    generation.stream_consolidate_n = generation.stream_consolidate_n.max(1);
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -810,6 +838,48 @@ mod tests {
             core.snapshot().config.selected_model_id,
             config.selected_model_id
         );
+    }
+
+    #[test]
+    fn synthesis_request_uses_streaming_config() {
+        let mut core = AppCore::from_config(AppConfig {
+            generation: GenerationSettings {
+                streaming: true,
+                stream_consolidate_n: 4,
+                retry_badcase: true,
+                ..GenerationSettings::default()
+            },
+            ..AppConfig::default()
+        })
+        .unwrap();
+        core.set_loaded_model_for_test("alpha".to_string());
+
+        let item = core.enqueue_generation("hello".to_string()).unwrap();
+        let request = core.synthesis_request_for_test(&item.id).unwrap();
+
+        assert!(!request.retry_badcase);
+        assert_eq!(request.consolidate_n, 4);
+    }
+
+    #[test]
+    fn streaming_config_preserves_retry_preference_but_disables_request_retry() {
+        let mut core = AppCore::from_config(AppConfig {
+            generation: GenerationSettings {
+                streaming: true,
+                retry_badcase: true,
+                ..GenerationSettings::default()
+            },
+            ..AppConfig::default()
+        })
+        .unwrap();
+        core.set_loaded_model_for_test("alpha".to_string());
+
+        assert!(core.snapshot().config.generation.retry_badcase);
+
+        let item = core.enqueue_generation("hello".to_string()).unwrap();
+        let request = core.synthesis_request_for_test(&item.id).unwrap();
+
+        assert!(!request.retry_badcase);
     }
 
     #[test]

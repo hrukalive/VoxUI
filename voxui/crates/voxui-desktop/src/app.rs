@@ -16,7 +16,7 @@ use crate::tauri_api::{
 #[component]
 pub fn App() -> impl IntoView {
     let (settings_open, set_settings_open) = signal(false);
-    let (settings_page, set_settings_page) = signal(SettingsPage::Models);
+    let (settings_page, set_settings_page) = signal(SettingsPage::General);
     let (load_open, set_load_open) = signal(false);
     let (load_percent, set_load_percent) = signal(0.0_f32);
     let (snapshot, set_snapshot) = signal(Some(fallback_snapshot()));
@@ -296,7 +296,7 @@ fn fallback_snapshot() -> AppSnapshot {
             model_root: None,
             selected_model_id: None,
             language: LanguageMode::System,
-            backend: BackendKind::Cpu,
+            backend: BackendKind::Cuda,
             audio_host: None,
             audio_device: None,
             volume: 0.8,
@@ -306,6 +306,8 @@ fn fallback_snapshot() -> AppSnapshot {
                 inference_timesteps: 10,
                 min_len: 2,
                 max_len: 2000,
+                streaming: true,
+                stream_consolidate_n: 10,
                 retry_badcase: true,
                 retry_badcase_max_times: 3,
                 retry_badcase_ratio_threshold: 6.0,
