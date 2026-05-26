@@ -19,8 +19,7 @@ fn lora_linear_delta_matches_formula() {
     let device = Device::Cpu;
     let x = Tensor::from_vec(vec![1f32, 2., 3., 4.], (1, 4), &device).unwrap();
     let base = Tensor::zeros((1, 3), candle_core::DType::F32, &device).unwrap();
-    let a = Tensor::from_vec(vec![1f32, 0., 0., 1., 1., 1., 0., 0.], (2, 4), &device)
-        .unwrap();
+    let a = Tensor::from_vec(vec![1f32, 0., 0., 1., 1., 1., 0., 0.], (2, 4), &device).unwrap();
     let b = Tensor::from_vec(vec![1f32, 0., 0., 1., 1., 1.], (3, 2), &device).unwrap();
 
     let out = LoraAdapter::apply_raw(&base, &x, &a, &b, 4.0, 2).unwrap();
@@ -37,16 +36,13 @@ fn lora_adapter_changes_generation_without_breaking_audio() {
         eprintln!("skip: model directory not found at {}", model_dir.display());
         return;
     };
-    let lora_file = entries
-        .flatten()
-        .map(|e| e.path())
-        .find(|p| {
-            p.is_file()
-                && p.extension().and_then(|v| v.to_str()) == Some("gguf")
-                && p.file_stem()
-                    .map(|s| s.to_string_lossy().starts_with("lora_"))
-                    .unwrap_or(false)
-        });
+    let lora_file = entries.flatten().map(|e| e.path()).find(|p| {
+        p.is_file()
+            && p.extension().and_then(|v| v.to_str()) == Some("gguf")
+            && p.file_stem()
+                .map(|s| s.to_string_lossy().starts_with("lora_"))
+                .unwrap_or(false)
+    });
     let Some(lora_file) = lora_file else {
         eprintln!("skip: no single-file LoRA adapter exported");
         return;

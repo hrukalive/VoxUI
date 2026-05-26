@@ -111,7 +111,11 @@ fn main() -> Result<()> {
     // 6. Test embedding first
     println!("\nTesting embedding...");
     let embed = model.embed(&token_ids)?;
-    println!("Embedding shape: {:?}, dtype: {:?}", embed.shape(), embed.dtype());
+    println!(
+        "Embedding shape: {:?}, dtype: {:?}",
+        embed.shape(),
+        embed.dtype()
+    );
 
     // 7. Forward pass (full model)
     println!("\nRunning forward pass with {} tokens...", token_ids.len());
@@ -132,7 +136,9 @@ fn main() -> Result<()> {
         }
         Err(e) => {
             println!("Forward pass failed (expected during development): {e}");
-            println!("This likely indicates a tensor shape mismatch that needs fixing in base_lm.rs");
+            println!(
+                "This likely indicates a tensor shape mismatch that needs fixing in base_lm.rs"
+            );
         }
     }
 

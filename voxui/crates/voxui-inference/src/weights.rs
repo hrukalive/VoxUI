@@ -70,7 +70,10 @@ impl RuntimeTensor {
         match self {
             RuntimeTensor::Dense(tensor) => {
                 let ids = Tensor::new(token_ids, tensor.device())?;
-                tensor.index_select(&ids, 0)?.to_dtype(dtype).map_err(Into::into)
+                tensor
+                    .index_select(&ids, 0)?
+                    .to_dtype(dtype)
+                    .map_err(Into::into)
             }
             RuntimeTensor::Quantized(tensor) => tensor.embedding_rows(token_ids, dtype),
         }
@@ -92,7 +95,10 @@ impl QuantizedTensor {
     fn embedding_rows(&self, token_ids: &[u32], dtype: DType) -> Result<Tensor> {
         let dense = self.dequantize()?;
         let ids = Tensor::new(token_ids, &self.device)?;
-        dense.index_select(&ids, 0)?.to_dtype(dtype).map_err(Into::into)
+        dense
+            .index_select(&ids, 0)?
+            .to_dtype(dtype)
+            .map_err(Into::into)
     }
 }
 

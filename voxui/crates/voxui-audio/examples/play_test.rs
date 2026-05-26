@@ -1,4 +1,4 @@
-use voxui_audio::{AudioSystem, AudioPlayer};
+use voxui_audio::{AudioPlayer, AudioSystem};
 
 fn main() {
     let system = AudioSystem::new();
@@ -18,9 +18,7 @@ fn main() {
 
     let sample_rate: u32 = 48000;
     let samples: Vec<f32> = (0..sample_rate)
-        .map(|i| {
-            (2.0 * std::f32::consts::PI * 440.0 * i as f32 / sample_rate as f32).sin() * 0.3
-        })
+        .map(|i| (2.0 * std::f32::consts::PI * 440.0 * i as f32 / sample_rate as f32).sin() * 0.3)
         .collect();
 
     let mut player = AudioPlayer::new(&host, &device, sample_rate).unwrap();

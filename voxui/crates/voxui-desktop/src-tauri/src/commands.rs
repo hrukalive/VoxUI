@@ -12,8 +12,8 @@ use voxui_inference::VoxCPMEngine;
 use crate::app_core::AppCore;
 use crate::generation_queue::HistoryItem;
 use crate::types::{
-    AppSnapshot, AudioStateDto, BackendKind, CommandResult, ConfigPatch,
-    GenerationDoneEvent, GenerationProgressEvent, ModelChoice, PlaybackStateEvent,
+    AppSnapshot, AudioStateDto, BackendKind, CommandResult, ConfigPatch, GenerationDoneEvent,
+    GenerationProgressEvent, ModelChoice, PlaybackStateEvent,
 };
 
 pub type SharedAppCore = Arc<Mutex<AppCore>>;
@@ -85,7 +85,7 @@ pub fn test_audio(state: State<'_, SharedAppCore>) -> Result<CommandResult, Stri
         &devices,
         system.default_device_name(&host),
     )
-        .map_err(|err| err.to_string())?;
+    .map_err(|err| err.to_string())?;
     let sample_rate = 48_000;
     let samples = crate::audio::sine_with_fades(sample_rate, 48_000, 440.0, config.volume);
     let mut player =
@@ -353,7 +353,10 @@ fn device_for_backend(backend: BackendKind) -> Result<Device, String> {
             }
             #[cfg(not(feature = "cuda"))]
             {
-                Err("CUDA backend requested but voxui-desktop was built without CUDA support".to_string())
+                Err(
+                    "CUDA backend requested but voxui-desktop was built without CUDA support"
+                        .to_string(),
+                )
             }
         }
     }
@@ -422,8 +425,8 @@ fn spawn_generation(window: Window, shared: SharedAppCore, run: crate::app_core:
             }
             Err((run, error)) => {
                 let item_id = run.item_id.clone();
-                let is_cancelled = run.cancel.load(Ordering::SeqCst)
-                    || error.to_lowercase().contains("cancel");
+                let is_cancelled =
+                    run.cancel.load(Ordering::SeqCst) || error.to_lowercase().contains("cancel");
                 let error = match shared.lock() {
                     Ok(mut core) => {
                         if is_cancelled {
@@ -477,11 +480,7 @@ fn spawn_generation(window: Window, shared: SharedAppCore, run: crate::app_core:
     }
 }
 
-fn spawn_playback(
-    window: Window,
-    shared: SharedAppCore,
-    run: crate::app_core::PlaybackRun,
-) {
+fn spawn_playback(window: Window, shared: SharedAppCore, run: crate::app_core::PlaybackRun) {
     let event_item_id = run.item_id.clone();
     let worker_window = window.clone();
     let worker_shared = shared.clone();
@@ -516,12 +515,13 @@ fn spawn_playback(
 
         let stop_result = match device {
             Ok(device) => {
-                match AudioPlayer::new(&host, &device, run.audio.sample_rate)
-                    .and_then(|mut player| {
+                match AudioPlayer::new(&host, &device, run.audio.sample_rate).and_then(
+                    |mut player| {
                         let done = player.play(run.audio.samples)?;
                         wait_for_playback(done, run.stop, &mut player);
                         Ok(())
-                    }) {
+                    },
+                ) {
                     Ok(()) => "stopped".to_string(),
                     Err(error) => format!("error:{error}"),
                 }
@@ -568,11 +568,7 @@ fn spawn_playback(
     }
 }
 
-fn wait_for_playback(
-    done: mpsc::Receiver<()>,
-    stop: mpsc::Receiver<()>,
-    player: &mut AudioPlayer,
-) {
+fn wait_for_playback(done: mpsc::Receiver<()>, stop: mpsc::Receiver<()>, player: &mut AudioPlayer) {
     loop {
         if stop.try_recv().is_ok() {
             player.stop();
@@ -585,7 +581,10 @@ fn wait_for_playback(
     }
 }
 
-fn spawn_background(name: &'static str, task: impl FnOnce() + Send + 'static) -> Result<(), String> {
+fn spawn_background(
+    name: &'static str,
+    task: impl FnOnce() + Send + 'static,
+) -> Result<(), String> {
     thread::Builder::new()
         .name(name.to_string())
         .spawn(task)

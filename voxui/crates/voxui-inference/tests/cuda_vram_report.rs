@@ -210,7 +210,10 @@ fn model_dir(name: &str) -> PathBuf {
 
 #[cfg(feature = "cuda")]
 fn artifact_dir() -> PathBuf {
-    repo_root().join("voxui").join("target").join("cuda-vram-report")
+    repo_root()
+        .join("voxui")
+        .join("target")
+        .join("cuda-vram-report")
 }
 
 #[cfg(feature = "cuda")]
@@ -377,14 +380,21 @@ fn vram_report_child() -> Result<()> {
 #[cfg(feature = "cuda")]
 fn run_child_model_report(model_name: &str) -> Result<serde_json::Value> {
     let output = Command::new(std::env::current_exe()?)
-        .args(["--exact", "vram_report_child", "--nocapture", "--test-threads=1"])
+        .args([
+            "--exact",
+            "vram_report_child",
+            "--nocapture",
+            "--test-threads=1",
+        ])
         .env(CHILD_MODEL_ENV, model_name)
         .output()
         .with_context(|| format!("run child VRAM report for {model_name}"))?;
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     if !output.status.success() {
-        anyhow::bail!("child VRAM report failed for {model_name}\nstdout:\n{stdout}\nstderr:\n{stderr}");
+        anyhow::bail!(
+            "child VRAM report failed for {model_name}\nstdout:\n{stdout}\nstderr:\n{stderr}"
+        );
     }
     let json_line = stdout
         .lines()

@@ -3,7 +3,10 @@
 use anyhow::{anyhow, Result};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use r8brain_rs::{PrecisionProfile, Resampler};
-use ringbuf::{traits::{Consumer, Observer, Producer, Split}, HeapRb};
+use ringbuf::{
+    traits::{Consumer, Observer, Producer, Split},
+    HeapRb,
+};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 
@@ -226,8 +229,7 @@ impl StreamingPlayer {
         }
         let device_rate = default_config.sample_rate().0;
 
-        let buffer_capacity =
-            (source_sample_rate as f32 * pre_buffer_secs).ceil() as usize;
+        let buffer_capacity = (source_sample_rate as f32 * pre_buffer_secs).ceil() as usize;
         let ring = HeapRb::<f32>::new(buffer_capacity);
         let (producer, mut consumer) = ring.split();
 
@@ -359,10 +361,7 @@ mod tests {
 
         assert!(prepared.len() > samples.len());
         assert_eq!(&prepared[..50], vec![0.0; 50].as_slice());
-        assert_eq!(
-            &prepared[50..50 + samples.len()],
-            samples.as_slice()
-        );
+        assert_eq!(&prepared[50..50 + samples.len()], samples.as_slice());
         assert_eq!(&prepared[50 + samples.len()..], vec![0.0; 50].as_slice());
     }
 

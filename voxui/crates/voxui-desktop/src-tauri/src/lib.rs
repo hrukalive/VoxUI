@@ -1,5 +1,5 @@
-use std::sync::{Arc, Mutex};
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
 use app_core::AppCore;
 use types::AppConfig;
@@ -16,8 +16,8 @@ pub mod types;
 pub fn run() {
     let _ = tracing_subscriber::fmt().try_init();
     let (config, config_path) = startup_config();
-    let mut core =
-        AppCore::from_config(config).expect("persisted app config should initialize desktop app core");
+    let mut core = AppCore::from_config(config)
+        .expect("persisted app config should initialize desktop app core");
     core.set_config_path(config_path);
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())

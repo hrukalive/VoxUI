@@ -121,8 +121,9 @@ impl GgufFile {
                 shape.push(cursor.read_u64::<LittleEndian>()?);
             }
             let dtype_raw = cursor.read_u32::<LittleEndian>()?;
-            let dtype = GgmlType::from_u32(dtype_raw)
-                .with_context(|| format!("tensor '{}' has unsupported dtype {}", name, dtype_raw))?;
+            let dtype = GgmlType::from_u32(dtype_raw).with_context(|| {
+                format!("tensor '{}' has unsupported dtype {}", name, dtype_raw)
+            })?;
             let offset = cursor.read_u64::<LittleEndian>()?;
             let data_size = compute_data_size(&shape, dtype);
 

@@ -54,7 +54,10 @@ impl GgufModelLoader {
     pub fn from_model_dir(model_dir: &Path, device: Device) -> Result<Self> {
         let path = model_dir.join("model.gguf");
         if !path.is_file() {
-            anyhow::bail!("model.gguf not found in model directory '{}'", model_dir.display());
+            anyhow::bail!(
+                "model.gguf not found in model directory '{}'",
+                model_dir.display()
+            );
         }
         Self::new(&path, device)
     }
@@ -171,17 +174,13 @@ impl GgufModelLoader {
     }
 
     fn load_tensor_uncached(&self, name: &str) -> Result<Tensor> {
-        let info = self
-            .store
-            .gguf
-            .tensor_info(name)
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "Tensor '{}' not found in GGUF file '{}'",
-                    name,
-                    self.store.path.display()
-                )
-            })?;
+        let info = self.store.gguf.tensor_info(name).ok_or_else(|| {
+            anyhow::anyhow!(
+                "Tensor '{}' not found in GGUF file '{}'",
+                name,
+                self.store.path.display()
+            )
+        })?;
         if info.is_quantized() {
             anyhow::bail!(
                 "quantized tensor {name} has dtype {}; use load_linear_weight or load_runtime_tensor so it is not cached as a dense resident tensor",

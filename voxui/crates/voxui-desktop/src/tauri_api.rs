@@ -340,9 +340,7 @@ pub async fn listen_app_event(
     handler: impl Fn(JsValue) + 'static,
 ) -> Result<(), String> {
     let closure = Closure::wrap(Box::new(handler) as Box<dyn Fn(JsValue)>);
-    let value = listen(event, &closure)
-        .await
-        .map_err(stringify_js_error)?;
+    let value = listen(event, &closure).await.map_err(stringify_js_error)?;
 
     if value.is_undefined() || value.is_function() {
         closure.forget();

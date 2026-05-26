@@ -84,7 +84,10 @@ impl TraceCase {
         let path = self.root.join(&record.file);
         let bytes = std::fs::read(&path).with_context(|| format!("read {}", path.display()))?;
         if bytes.len() % 4 != 0 {
-            bail!("trace tensor {} byte length is not divisible by 4", path.display());
+            bail!(
+                "trace tensor {} byte length is not divisible by 4",
+                path.display()
+            );
         }
         let mut data = Vec::with_capacity(bytes.len() / 4);
         for chunk in bytes.chunks_exact(4) {
@@ -104,18 +107,30 @@ impl TraceCase {
 
 pub fn assert_close(actual: &Tensor, expected: &Tensor, tolerance: f32) -> Result<()> {
     if actual.dims() != expected.dims() {
-        bail!("shape mismatch: actual {:?}, expected {:?}", actual.dims(), expected.dims());
+        bail!(
+            "shape mismatch: actual {:?}, expected {:?}",
+            actual.dims(),
+            expected.dims()
+        );
     }
     let actual = flat_f32(actual)?;
     let expected = flat_f32(expected)?;
     assert_close_slices(&actual, &expected, tolerance)
 }
 
-pub fn assert_close_prefix(actual: &Tensor, expected_prefix: &Tensor, tolerance: f32) -> Result<()> {
+pub fn assert_close_prefix(
+    actual: &Tensor,
+    expected_prefix: &Tensor,
+    tolerance: f32,
+) -> Result<()> {
     let actual = flat_f32(actual)?;
     let expected = flat_f32(expected_prefix)?;
     if actual.len() < expected.len() {
-        bail!("actual tensor has {} values, expected prefix has {}", actual.len(), expected.len());
+        bail!(
+            "actual tensor has {} values, expected prefix has {}",
+            actual.len(),
+            expected.len()
+        );
     }
     assert_close_slices(&actual[..expected.len()], &expected, tolerance)
 }
@@ -131,7 +146,11 @@ fn flat_f32(tensor: &Tensor) -> Result<Vec<f32>> {
 
 fn assert_close_slices(actual: &[f32], expected: &[f32], tolerance: f32) -> Result<()> {
     if actual.len() != expected.len() {
-        bail!("length mismatch: actual {}, expected {}", actual.len(), expected.len());
+        bail!(
+            "length mismatch: actual {}, expected {}",
+            actual.len(),
+            expected.len()
+        );
     }
     let mut max_abs = 0.0f32;
     let mut max_idx = 0usize;

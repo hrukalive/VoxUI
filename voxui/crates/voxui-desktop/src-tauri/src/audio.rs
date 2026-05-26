@@ -50,7 +50,10 @@ pub fn resolve_output_device_name(
     default_device: Result<String>,
 ) -> Result<String> {
     if let Some(device) = configured_device {
-        if available_devices.iter().any(|available| available.name == device) {
+        if available_devices
+            .iter()
+            .any(|available| available.name == device)
+        {
             return Ok(device);
         }
     }
