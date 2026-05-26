@@ -14,9 +14,9 @@
     "windows": [
       {
         "title": "AhanSays",
-        "width": 850,
+        "width": 876,
         "height": 520,
-        "minWidth": 850,
+        "minWidth": 876,
         "minHeight": 520
       }
     ],

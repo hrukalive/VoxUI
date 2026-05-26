@@ -45,7 +45,7 @@ pub fn SettingsModal(
                 <section class="modal settings-modal" role="dialog" aria-modal="true" aria-label=move || labels().settings>
                     <header class="modal-header">
                         <h2>{move || labels().settings}</h2>
-                        <button class="secondary-button settings-save-button" type="button" aria-label=move || labels().save on:click=move |_| { on_close() }>
+                        <button class="primary-button" type="button" aria-label=move || labels().save on:click=move |_| { on_close() }>
                             {move || labels().save}
                         </button>
                     </header>
@@ -85,6 +85,7 @@ pub fn SettingsModal(
                                                 options=move || language_options(labels())
                                                 disabled=move || false
                                                 on_change=move |value| {
+                                                    web_sys::console::log_1(&format!("selected: {value}").into());
                                                     on_config_patch(ConfigPatch {
                                                         language: Some(parse_language(&value)),
                                                         ..ConfigPatch::default()
@@ -316,7 +317,7 @@ pub fn SettingsModal(
                                                     });
                                                 }
                                             />
-                                            <button class="secondary-button" type="button" on:click=move |_| { on_test_audio() }>
+                                            <button class="primary-button" type="button" on:click=move |_| { on_test_audio() }>
                                                 {move || labels().test}
                                             </button>
                                         </div>
