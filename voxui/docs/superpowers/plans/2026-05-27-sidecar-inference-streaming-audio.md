@@ -570,7 +570,7 @@ pub struct StreamingPlayer {
     producer: ringbuf::HeapProd<f32>,
     resampler: StreamingResampler,
     stop: Arc<AtomicBool>,
-    done: mpsc::Receiver<()>,
+    done: Option<mpsc::Receiver<()>>,
 }
 
 impl StreamingPlayer {
@@ -644,7 +644,7 @@ impl StreamingPlayer {
             producer,
             resampler: StreamingResampler::new(source_sample_rate, device_rate, 8192)?,
             stop,
-            done: done_rx,
+            done: Some(done_rx),
         })
     }
 
@@ -654,11 +654,13 @@ impl StreamingPlayer {
         Ok(())
     }
 
-    pub fn finish(mut self) -> Result<mpsc::Receiver<()>> {
+    pub fn finish(&mut self) -> Result<mpsc::Receiver<()>> {
         let tail = self.resampler.finish()?;
         self.push_resampled(&tail);
         self.stop.store(true, Ordering::SeqCst);
-        Ok(self.done)
+        self.done
+            .take()
+            .ok_or_else(|| anyhow!("streaming playback has already been finished"))
     }
 
     pub fn stop(&self) {
