@@ -367,7 +367,7 @@ pub struct StreamingPlayer {
     producer: ringbuf::HeapProd<f32>,
     resampler: StreamingResampler,
     stop: Arc<AtomicBool>,
-    done: mpsc::Receiver<()>,
+    done: Option<mpsc::Receiver<()>>,
 }
 
 impl StreamingPlayer {
@@ -445,7 +445,7 @@ impl StreamingPlayer {
             producer,
             resampler,
             stop,
-            done,
+            done: Some(done),
         })
     }
 
@@ -459,18 +459,12 @@ impl StreamingPlayer {
 
     /// Flush any resampler tail, signal that no more samples will be pushed, and
     /// return a receiver that fires when queued audio has drained.
-    pub fn finish(mut self) -> Result<mpsc::Receiver<()>> {
+    pub fn finish(&mut self) -> Result<mpsc::Receiver<()>> {
         let tail = self.resampler.finish()?;
         self.push_resampled(&tail);
         self.stop.store(true, Ordering::SeqCst);
 
-        self.done
-            .recv()
-            .map_err(|_| anyhow!("streaming playback channel closed unexpectedly"))?;
-        let (tx, rx) = mpsc::channel();
-        let _ = tx.send(());
-
-        Ok(rx)
+        take_streaming_done_receiver(&mut self.done)
     }
 
     pub fn stop(&self) {
@@ -488,6 +482,13 @@ impl StreamingPlayer {
             }
         }
     }
+}
+
+fn take_streaming_done_receiver(
+    done: &mut Option<mpsc::Receiver<()>>,
+) -> Result<mpsc::Receiver<()>> {
+    done.take()
+        .ok_or_else(|| anyhow!("streaming playback has already been finished"))
 }
 
 fn streaming_buffer_capacity(source_rate: u32, device_rate: u32, pre_buffer_secs: f32) -> usize {
@@ -679,5 +680,19 @@ mod tests {
     #[test]
     fn streaming_buffer_capacity_has_minimum_size() {
         assert_eq!(super::streaming_buffer_capacity(16_000, 48_000, 0.0), 4_800);
+    }
+
+    #[test]
+    fn streaming_done_receiver_can_only_be_taken_once() {
+        let (_tx, rx) = super::mpsc::channel();
+        let mut done = Some(rx);
+
+        assert!(super::take_streaming_done_receiver(&mut done).is_ok());
+        let err = super::take_streaming_done_receiver(&mut done).unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "streaming playback has already been finished"
+        );
     }
 }
