@@ -6533,6 +6533,7 @@ dependencies = [
  "uuid",
  "voxui-audio",
  "voxui-inference",
+ "voxui-sidecar-protocol",
 ]
 
 [[package]]

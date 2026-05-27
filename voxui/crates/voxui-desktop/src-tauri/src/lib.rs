@@ -9,6 +9,7 @@ pub mod audio;
 pub mod commands;
 pub mod config;
 pub mod generation_queue;
+pub mod inference_sidecar;
 pub mod model_discovery;
 pub mod playback;
 pub mod types;
