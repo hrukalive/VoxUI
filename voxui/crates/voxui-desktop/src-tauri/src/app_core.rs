@@ -10,7 +10,7 @@ use crate::generation_queue::{GenerationQueue, HistoryItem, HistoryStatus};
 use crate::model_discovery::discover_models;
 use crate::playback::{GeneratedAudio, GeneratedAudioCache};
 use crate::types::{AppConfig, AppSnapshot, ConfigPatch, LoadUiState, ModelChoice};
-use voxui_inference::{SynthesisRequest, VoxCPMEngine};
+use voxui_inference::SynthesisRequest;
 
 struct ActiveModelLoad {
     id: u64,
@@ -33,8 +33,8 @@ pub struct AppCore {
     models: Vec<ModelChoice>,
     selected_model_id: Option<String>,
     loaded_model_id: Option<String>,
+    loaded_sample_rate: Option<u32>,
     load_state: LoadUiState,
-    engine: Option<voxui_inference::VoxCPMEngine>,
     next_load_id: u64,
     active_load: Option<ActiveModelLoad>,
     config_path: Option<PathBuf>,
@@ -49,7 +49,6 @@ pub struct AppCore {
 pub struct GenerationRun {
     pub item_id: String,
     pub request: SynthesisRequest,
-    pub engine: Option<VoxCPMEngine>,
     pub sample_rate: u32,
     pub streaming: bool,
     pub cancel: Arc<AtomicBool>,
@@ -82,8 +81,8 @@ impl AppCore {
             models,
             selected_model_id,
             loaded_model_id: None,
+            loaded_sample_rate: None,
             load_state: LoadUiState::Idle,
-            engine: None,
             next_load_id: 1,
             active_load: None,
             config_path: None,
@@ -398,22 +397,16 @@ impl AppCore {
         let request = self
             .synthesis_request(item_id)
             .map_err(|error| error.to_string())?;
-        let engine = self.engine.take();
-        let sample_rate = engine
-            .as_ref()
-            .map(VoxCPMEngine::sample_rate)
-            .unwrap_or(16_000);
+        let sample_rate = self.loaded_sample_rate.unwrap_or(16_000);
         let cancel = Arc::new(AtomicBool::new(false));
 
         if let Err(error) = self.begin_generation_state(item_id, cancel.clone()) {
-            self.engine = engine;
             return Err(error);
         }
 
         Ok(GenerationRun {
             item_id: item_id.to_string(),
             request,
-            engine,
             sample_rate,
             streaming,
             cancel,
@@ -481,9 +474,6 @@ impl AppCore {
         duration_seconds: f32,
     ) {
         let item_id = run.item_id;
-        if let Some(engine) = run.engine {
-            self.engine = Some(engine);
-        }
         self.clear_active_generation(&item_id);
         self.audio_cache.insert(
             item_id.clone(),
@@ -498,9 +488,6 @@ impl AppCore {
 
     pub fn finish_generation_failure(&mut self, run: GenerationRun, error: String) -> String {
         let item_id = run.item_id;
-        if let Some(engine) = run.engine {
-            self.engine = Some(engine);
-        }
         self.clear_active_generation(&item_id);
         self.queue.mark_failed(&item_id, error.clone());
         error
@@ -508,9 +495,6 @@ impl AppCore {
 
     pub fn finish_generation_canceled(&mut self, run: GenerationRun) {
         let item_id = run.item_id;
-        if let Some(engine) = run.engine {
-            self.engine = Some(engine);
-        }
         self.clear_active_generation(&item_id);
         if !self.queue.mark_canceled(&item_id) {
             let _ = self.queue.mark_canceled(&item_id);
@@ -518,41 +502,16 @@ impl AppCore {
     }
 
     pub fn execute_generation_run<F>(
-        mut run: GenerationRun,
-        progress: F,
+        run: GenerationRun,
+        _progress: F,
     ) -> std::result::Result<(GenerationRun, Vec<f32>, f32), (GenerationRun, String)>
     where
         F: Fn(usize, usize),
     {
-        let Some(engine) = run.engine.as_mut() else {
-            return Err((run, "no model engine loaded for generation".to_string()));
-        };
-
-        let result = if run.streaming {
-            let mut samples = Vec::new();
-            match engine.generate_streaming_cancellable(
-                run.request.clone(),
-                |chunk| {
-                    progress(chunk.generated_patch_count, chunk.max_patches);
-                    samples.extend_from_slice(&chunk.samples);
-                    Ok(())
-                },
-                Some(&run.cancel),
-            ) {
-                Ok(()) => Ok(samples),
-                Err(error) => Err(error),
-            }
-        } else {
-            engine.generate_cancellable(run.request.clone(), progress, Some(&run.cancel))
-        };
-
-        match result {
-            Ok(samples) => {
-                let duration_seconds = samples.len() as f32 / run.sample_rate as f32;
-                Ok((run, samples, duration_seconds))
-            }
-            Err(error) => Err((run, error.to_string())),
-        }
+        Err((
+            run,
+            "generation execution is owned by the inference sidecar".to_string(),
+        ))
     }
 
     pub fn synthesis_request_for_test(
@@ -625,30 +584,14 @@ impl AppCore {
         Ok((load_id, cancel))
     }
 
-    pub fn mark_load_success(
-        &mut self,
-        load_id: u64,
-        choice_id: String,
-        engine: voxui_inference::VoxCPMEngine,
-    ) -> bool {
-        self.mark_load_success_inner(load_id, choice_id, Some(engine))
-    }
-
-    fn mark_load_success_inner(
-        &mut self,
-        load_id: u64,
-        choice_id: String,
-        engine: Option<voxui_inference::VoxCPMEngine>,
-    ) -> bool {
+    pub fn mark_load_success(&mut self, load_id: u64, choice_id: String, sample_rate: u32) -> bool {
         if !self.active_load_matches(load_id) {
             return false;
         }
 
         self.active_load = None;
-        if let Some(engine) = engine {
-            self.engine = Some(engine);
-        }
         self.loaded_model_id = Some(choice_id);
+        self.loaded_sample_rate = Some(sample_rate);
         self.load_state = LoadUiState::Idle;
         true
     }
@@ -671,6 +614,7 @@ impl AppCore {
         match result {
             Ok(()) => {
                 self.loaded_model_id = Some("new-model".to_string());
+                self.loaded_sample_rate = Some(16_000);
                 self.load_state = LoadUiState::Idle;
             }
             Err(_) => self.mark_load_finished_without_swap(),
@@ -686,7 +630,7 @@ impl AppCore {
         load_id: u64,
         choice_id: String,
     ) -> bool {
-        self.mark_load_success_inner(load_id, choice_id, None)
+        self.mark_load_success(load_id, choice_id, 16_000)
     }
 
     pub fn cancel_generation_item(&mut self, item_id: &str) -> bool {
@@ -710,6 +654,7 @@ impl AppCore {
 
     pub fn set_loaded_model_for_test(&mut self, model_id: String) {
         self.loaded_model_id = Some(model_id);
+        self.loaded_sample_rate = Some(16_000);
     }
 
     pub fn set_generated_audio_for_test(
@@ -917,6 +862,18 @@ mod tests {
         assert_eq!(playback.item_id, ready.id);
         assert_eq!(snapshot.history[0].status, HistoryStatus::Playing);
         assert_eq!(snapshot.history[1].status, HistoryStatus::Generating);
+    }
+
+    #[test]
+    fn sidecar_generation_run_does_not_take_local_engine() {
+        let mut core = AppCore::from_config(AppConfig::default()).unwrap();
+        core.set_loaded_model_for_test("model".to_string());
+        let item = core.enqueue_generation("hello".to_string()).unwrap();
+
+        let run = core.begin_generation_run(&item.id).unwrap();
+
+        assert_eq!(run.item_id, item.id);
+        assert_eq!(run.sample_rate, 16_000);
     }
 
     #[test]

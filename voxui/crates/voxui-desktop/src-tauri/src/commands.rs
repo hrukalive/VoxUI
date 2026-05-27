@@ -125,8 +125,9 @@ pub fn load_model(
         let result = load_engine_for_choice(&window, &choice, backend, &cancel);
         let done = match result {
             Ok(engine) => {
+                let sample_rate = engine.sample_rate();
                 let loaded_model_id = if let Ok(mut core) = shared.lock() {
-                    if !core.mark_load_success(load_id, choice.id.clone(), engine) {
+                    if !core.mark_load_success(load_id, choice.id.clone(), sample_rate) {
                         return;
                     }
                     core.snapshot().loaded_model_id
