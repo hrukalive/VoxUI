@@ -466,7 +466,7 @@ fn default_label(label: &str, value: Option<&str>) -> String {
 
 fn parse_optional_audio_choice(value: String) -> Option<String> {
     if value.is_empty() || value == DEFAULT_AUDIO_CHOICE {
-        None
+        Some(String::new())
     } else {
         Some(value)
     }

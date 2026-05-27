@@ -364,13 +364,14 @@ fn apply_optimistic_patch(snapshot: &mut AppSnapshot, patch: &ConfigPatch) {
         snapshot.config.backend = backend;
     }
     if let Some(audio_host) = patch.audio_host.as_ref() {
-        if snapshot.config.audio_host != *audio_host {
+        let audio_host = empty_string_as_none(audio_host.clone());
+        if snapshot.config.audio_host != audio_host {
             snapshot.config.audio_device = None;
         }
-        snapshot.config.audio_host = audio_host.clone();
+        snapshot.config.audio_host = audio_host;
     }
     if let Some(audio_device) = patch.audio_device.as_ref() {
-        snapshot.config.audio_device = audio_device.clone();
+        snapshot.config.audio_device = empty_string_as_none(audio_device.clone());
     }
     if let Some(volume) = patch.volume {
         snapshot.config.volume = volume.clamp(0.0, 1.0);
@@ -381,4 +382,8 @@ fn apply_optimistic_patch(snapshot: &mut AppSnapshot, patch: &ConfigPatch) {
     if let Some(generation) = patch.generation.as_ref() {
         snapshot.config.generation = generation.clone();
     }
+}
+
+fn empty_string_as_none(value: Option<String>) -> Option<String> {
+    value.filter(|value| !value.is_empty())
 }

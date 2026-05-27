@@ -138,6 +138,34 @@ fn clearing_audio_host_to_default_clears_host_and_device() {
 }
 
 #[test]
+fn empty_audio_host_patch_clears_host_and_device() {
+    let mut core = AppCore::from_config(AppConfig {
+        audio_host: Some("Wasapi".to_string()),
+        audio_device: Some("Speakers".to_string()),
+        ..AppConfig::default()
+    })
+    .unwrap();
+
+    let snapshot = core
+        .apply_patch(ConfigPatch {
+            model_root: None,
+            selected_model_id: None,
+            language: None,
+            theme: None,
+            backend: None,
+            audio_host: Some(Some(String::new())),
+            audio_device: Some(Some(String::new())),
+            volume: None,
+            max_input_chars: None,
+            generation: None,
+        })
+        .unwrap();
+
+    assert_eq!(snapshot.config.audio_host, None);
+    assert_eq!(snapshot.config.audio_device, None);
+}
+
+#[test]
 fn clearing_audio_device_to_default_keeps_selected_host() {
     let mut core = AppCore::from_config(AppConfig {
         audio_host: Some("Wasapi".to_string()),
@@ -155,6 +183,34 @@ fn clearing_audio_device_to_default_keeps_selected_host() {
             backend: None,
             audio_host: None,
             audio_device: Some(None),
+            volume: None,
+            max_input_chars: None,
+            generation: None,
+        })
+        .unwrap();
+
+    assert_eq!(snapshot.config.audio_host.as_deref(), Some("Wasapi"));
+    assert_eq!(snapshot.config.audio_device, None);
+}
+
+#[test]
+fn empty_audio_device_patch_clears_device_and_keeps_host() {
+    let mut core = AppCore::from_config(AppConfig {
+        audio_host: Some("Wasapi".to_string()),
+        audio_device: Some("Speakers".to_string()),
+        ..AppConfig::default()
+    })
+    .unwrap();
+
+    let snapshot = core
+        .apply_patch(ConfigPatch {
+            model_root: None,
+            selected_model_id: None,
+            language: None,
+            theme: None,
+            backend: None,
+            audio_host: None,
+            audio_device: Some(Some(String::new())),
             volume: None,
             max_input_chars: None,
             generation: None,

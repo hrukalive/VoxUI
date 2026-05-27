@@ -128,13 +128,14 @@ impl AppCore {
             self.config.backend = backend;
         }
         if let Some(audio_host) = patch.audio_host {
+            let audio_host = empty_string_as_none(audio_host);
             if self.config.audio_host != audio_host {
                 self.config.audio_device = None;
             }
             self.config.audio_host = audio_host;
         }
         if let Some(audio_device) = patch.audio_device {
-            self.config.audio_device = audio_device;
+            self.config.audio_device = empty_string_as_none(audio_device);
         }
         if let Some(volume) = patch.volume {
             self.config.volume = volume.clamp(0.0, 1.0);
@@ -768,6 +769,10 @@ fn select_existing_model(saved: Option<String>, models: &[ModelChoice]) -> Optio
     }
 
     models.first().map(|model| model.id.clone())
+}
+
+fn empty_string_as_none(value: Option<String>) -> Option<String> {
+    value.filter(|value| !value.is_empty())
 }
 
 fn normalize_generation_settings(generation: &mut crate::types::GenerationSettings) {
