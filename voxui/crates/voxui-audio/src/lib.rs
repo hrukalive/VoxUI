@@ -12,6 +12,7 @@ use std::sync::{mpsc, Arc, Mutex};
 
 const PLAYBACK_CLEAR_AND_DRAIN_MS: usize = 50;
 const PLAYBACK_EDGE_FADE_MS: usize = 8;
+const RESAMPLER_FLUSH_INPUT_LEN: usize = 64;
 const VOLUME_TAPER_DB: f32 = 36.0;
 
 #[derive(Debug, Clone)]
@@ -263,6 +264,100 @@ impl Drop for AudioPlayer {
     }
 }
 
+pub struct StreamingResampler {
+    source_rate: u32,
+    device_rate: u32,
+    resampler: Resampler,
+    input_scratch: Vec<f64>,
+    output_scratch: Vec<f64>,
+}
+
+impl StreamingResampler {
+    pub fn new(source_rate: u32, device_rate: u32, max_input_len: usize) -> Result<Self> {
+        if source_rate == 0 {
+            return Err(anyhow!("source sample rate must be greater than 0"));
+        }
+        if device_rate == 0 {
+            return Err(anyhow!("device sample rate must be greater than 0"));
+        }
+
+        let max_input_len = max_input_len.max(RESAMPLER_FLUSH_INPUT_LEN);
+        let resampler = Resampler::new(
+            source_rate as f64,
+            device_rate as f64,
+            max_input_len,
+            2.0,
+            PrecisionProfile::Bits24,
+        );
+
+        Ok(Self {
+            source_rate,
+            device_rate,
+            resampler,
+            input_scratch: Vec::with_capacity(max_input_len),
+            output_scratch: Vec::new(),
+        })
+    }
+
+    pub fn source_rate(&self) -> u32 {
+        self.source_rate
+    }
+
+    pub fn device_rate(&self) -> u32 {
+        self.device_rate
+    }
+
+    pub fn process(&mut self, samples: &[f32]) -> Result<Vec<f32>> {
+        if samples.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut output = Vec::with_capacity(self.output_buffer_len(samples.len()));
+        let max_input_len = self.resampler.max_input_len();
+
+        for chunk in samples.chunks(max_input_len) {
+            self.input_scratch.clear();
+            self.input_scratch
+                .extend(chunk.iter().map(|&sample| sample as f64));
+
+            let max_out = self.output_buffer_len(chunk.len());
+            self.output_scratch.resize(max_out, 0.0);
+
+            let produced = self
+                .resampler
+                .process(&self.input_scratch, &mut self.output_scratch);
+            output.extend(
+                self.output_scratch[..produced]
+                    .iter()
+                    .map(|&sample| sample as f32),
+            );
+        }
+
+        Ok(output)
+    }
+
+    pub fn finish(&mut self) -> Result<Vec<f32>> {
+        self.output_scratch.resize(self.flush_buffer_len(), 0.0);
+        let produced = self.resampler.flush(&mut self.output_scratch);
+
+        Ok(self.output_scratch[..produced]
+            .iter()
+            .map(|&sample| sample as f32)
+            .collect())
+    }
+
+    fn output_buffer_len(&self, input_len: usize) -> usize {
+        let ratio = self.device_rate as f64 / self.source_rate as f64;
+        ((input_len as f64 * ratio).ceil() as usize)
+            .saturating_add(self.resampler.max_input_len() * 4)
+            .max(128)
+    }
+
+    fn flush_buffer_len(&self) -> usize {
+        self.output_buffer_len(64).max(8_192)
+    }
+}
+
 /// Streaming audio player that resamples and pushes audio chunks to the default
 /// output device in real time via a lock-free ring buffer.
 #[allow(dead_code)]
@@ -479,5 +574,63 @@ mod tests {
         assert_eq!(volume.get(), 1.0);
         volume.set(-1.0);
         assert_eq!(volume.get(), 0.0);
+    }
+
+    #[test]
+    fn streaming_resampler_splits_large_input_and_flushes_tail() {
+        let mut resampler = super::StreamingResampler::new(16_000, 48_000, 128).unwrap();
+        let input = (0..1_000)
+            .map(|idx| ((idx as f32) / 20.0).sin())
+            .collect::<Vec<_>>();
+
+        let out = resampler.process(&input).unwrap();
+        let tail = resampler.finish().unwrap();
+
+        assert!(!tail.is_empty());
+        assert!(out.len() + tail.len() > input.len());
+    }
+
+    #[test]
+    fn streaming_resampler_small_max_input_len_finish_does_not_panic() {
+        let mut resampler = super::StreamingResampler::new(16_000, 48_000, 1).unwrap();
+        let input = (0..32)
+            .map(|idx| ((idx as f32) / 10.0).sin())
+            .collect::<Vec<_>>();
+
+        let _ = resampler.process(&input).unwrap();
+        let _ = resampler.finish().unwrap();
+    }
+
+    #[test]
+    fn streaming_resampler_chunked_output_matches_one_shot_output_length() {
+        let input = (0..3_000)
+            .map(|idx| ((idx as f32) / 30.0).sin() * 0.5)
+            .collect::<Vec<_>>();
+        let mut whole = super::StreamingResampler::new(24_000, 48_000, 512).unwrap();
+        let mut chunked = super::StreamingResampler::new(24_000, 48_000, 512).unwrap();
+
+        let mut whole_out = whole.process(&input).unwrap();
+        whole_out.extend(whole.finish().unwrap());
+
+        let mut chunked_out = Vec::new();
+        for chunk in input.chunks(137) {
+            chunked_out.extend(chunked.process(chunk).unwrap());
+        }
+        chunked_out.extend(chunked.finish().unwrap());
+
+        let len_delta = whole_out.len().abs_diff(chunked_out.len());
+        assert!(len_delta <= 2, "length delta was {len_delta}");
+
+        for (index, (whole_sample, chunked_sample)) in whole_out
+            .iter()
+            .zip(chunked_out.iter())
+            .enumerate()
+        {
+            let delta = (whole_sample - chunked_sample).abs();
+            assert!(
+                delta <= 1.0e-4,
+                "sample {index} delta was {delta}: whole={whole_sample}, chunked={chunked_sample}"
+            );
+        }
     }
 }
