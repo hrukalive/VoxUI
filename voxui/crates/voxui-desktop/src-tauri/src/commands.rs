@@ -1,10 +1,11 @@
+use std::collections::HashMap;
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 
 use tauri::{AppHandle, Emitter, State, Window};
 use tauri_plugin_dialog::DialogExt;
-use voxui_audio::{AudioPlayer, AudioSystem};
+use voxui_audio::{AudioPlayer, AudioSystem, StreamingPlayer, VolumeHandle};
 use voxui_sidecar_protocol::{
     BackendKind as ProtocolBackendKind, Frame, OperationStatus, SidecarCommand, SidecarEvent,
     SynthesisRequestDto,
@@ -21,6 +22,14 @@ use crate::types::{
 pub type SharedAppCore = Arc<Mutex<AppCore>>;
 
 static SIDECAR_PROCESS: OnceLock<Mutex<Option<SidecarProcess>>> = OnceLock::new();
+static STREAMING_PLAYERS: OnceLock<Mutex<HashMap<String, mpsc::Sender<StreamingPlaybackCommand>>>> =
+    OnceLock::new();
+
+enum StreamingPlaybackCommand {
+    Push(Vec<f32>),
+    Finish,
+    Stop,
+}
 
 pub(crate) fn with_core<T>(
     state: State<'_, SharedAppCore>,
@@ -209,6 +218,7 @@ pub fn cancel_generation(
         })
     })?;
     if canceled.ok {
+        stop_streaming_playback(&item_id);
         let _ = send_sidecar_command(
             &window,
             state.inner().clone(),
@@ -489,9 +499,7 @@ fn handle_sidecar_event(window: &Window, shared: SharedAppCore, frame: Frame<Sid
             if let Ok(samples) =
                 crate::inference_sidecar::sidecar_samples_from_payload(&frame.payload)
             {
-                if let Ok(mut core) = shared.lock() {
-                    let _ = core.append_generation_audio_chunk(&item_id, samples, sample_rate);
-                }
+                handle_streaming_audio_chunk(window, shared.clone(), item_id, samples, sample_rate);
             }
         }
         SidecarEvent::AudioFinal {
@@ -523,14 +531,18 @@ fn handle_sidecar_event(window: &Window, shared: SharedAppCore, frame: Frame<Sid
                                 let _ = core.finish_generation_success_from_sidecar(
                                     &item_id, rate, duration,
                                 );
-                                playback_run =
-                                    core.begin_or_queue_auto_playback(&item_id).ok().flatten();
+                                if !finish_streaming_playback(window, item_id.clone()) {
+                                    playback_run =
+                                        core.begin_or_queue_auto_playback(&item_id).ok().flatten();
+                                }
                             }
                         }
                         OperationStatus::Canceled => {
+                            stop_streaming_playback(&item_id);
                             let _ = core.finish_generation_canceled_from_sidecar(&item_id);
                         }
                         OperationStatus::Failed => {
+                            stop_streaming_playback(&item_id);
                             let _ = core.finish_generation_failure_from_sidecar(
                                 &item_id,
                                 error
@@ -596,6 +608,169 @@ fn synthesis_request_dto(request: voxui_inference::SynthesisRequest) -> Synthesi
         retry_badcase_max_times: request.retry_badcase_max_times,
         retry_badcase_ratio_threshold: request.retry_badcase_ratio_threshold,
         consolidate_n: request.consolidate_n,
+    }
+}
+
+fn streaming_players() -> &'static Mutex<HashMap<String, mpsc::Sender<StreamingPlaybackCommand>>> {
+    STREAMING_PLAYERS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn handle_streaming_audio_chunk(
+    window: &Window,
+    shared: SharedAppCore,
+    item_id: String,
+    samples: Vec<f32>,
+    sample_rate: u32,
+) {
+    if let Ok(mut core) = shared.lock() {
+        let _ = core.append_generation_audio_chunk(&item_id, samples.clone(), sample_rate);
+    }
+
+    let mut players = match streaming_players().lock() {
+        Ok(players) => players,
+        Err(_) => return,
+    };
+    if !players.contains_key(&item_id) {
+        match start_streaming_playback_worker(window.clone(), shared, item_id.clone(), sample_rate)
+        {
+            Ok(sender) => {
+                players.insert(item_id.clone(), sender);
+                let _ = window.emit(
+                    "playback_state",
+                    PlaybackStateEvent {
+                        item_id: Some(item_id.clone()),
+                        state: "playing".to_string(),
+                    },
+                );
+            }
+            Err(error) => {
+                tracing::warn!("failed to start streaming playback for {item_id}: {error}");
+                return;
+            }
+        }
+    }
+
+    if let Some(sender) = players.get(&item_id) {
+        if let Err(error) = sender.send(StreamingPlaybackCommand::Push(samples)) {
+            tracing::warn!("failed to push streaming audio for {item_id}: {error}");
+        }
+    }
+}
+
+fn start_streaming_playback_worker(
+    window: Window,
+    shared: SharedAppCore,
+    item_id: String,
+    sample_rate: u32,
+) -> Result<mpsc::Sender<StreamingPlaybackCommand>, String> {
+    let config = shared
+        .lock()
+        .map_err(|_| "app state lock poisoned".to_string())?
+        .snapshot()
+        .config;
+    let (sender, receiver) = mpsc::channel();
+    let worker_item_id = item_id.clone();
+    spawn_background("voxui-streaming-playback", move || {
+        let state = run_streaming_playback_worker(config, sample_rate, receiver);
+        let _ = window.emit(
+            "playback_state",
+            PlaybackStateEvent {
+                item_id: Some(worker_item_id),
+                state,
+            },
+        );
+    })?;
+    Ok(sender)
+}
+
+fn run_streaming_playback_worker(
+    config: crate::types::AppConfig,
+    sample_rate: u32,
+    receiver: mpsc::Receiver<StreamingPlaybackCommand>,
+) -> String {
+    let mut player = match create_streaming_player(config, sample_rate) {
+        Ok(player) => player,
+        Err(error) => return format!("error:{error}"),
+    };
+
+    while let Ok(command) = receiver.recv() {
+        match command {
+            StreamingPlaybackCommand::Push(samples) => {
+                if let Err(error) = player.push(&samples) {
+                    return format!("error:{error}");
+                }
+            }
+            StreamingPlaybackCommand::Finish => {
+                return match player.finish().and_then(|drain| drain.wait()) {
+                    Ok(()) => "stopped".to_string(),
+                    Err(error) => format!("error:{error}"),
+                };
+            }
+            StreamingPlaybackCommand::Stop => {
+                player.stop();
+                return "stopped".to_string();
+            }
+        }
+    }
+
+    player.stop();
+    "stopped".to_string()
+}
+
+fn create_streaming_player(
+    config: crate::types::AppConfig,
+    sample_rate: u32,
+) -> Result<StreamingPlayer, String> {
+    let system = AudioSystem::new();
+    let host = config
+        .audio_host
+        .clone()
+        .unwrap_or_else(|| system.default_host_name());
+    let devices = crate::audio::list_devices(&system, &host).map_err(|error| error.to_string())?;
+    let device = crate::audio::resolve_output_device_name(
+        config.audio_device.clone(),
+        &devices,
+        system.default_device_name(&host),
+    )
+    .map_err(|error| error.to_string())?;
+    StreamingPlayer::new(
+        &host,
+        &device,
+        sample_rate,
+        0.25,
+        VolumeHandle::new(config.volume),
+    )
+    .map_err(|error| error.to_string())
+}
+
+fn finish_streaming_playback(window: &Window, item_id: String) -> bool {
+    let sender = match streaming_players().lock() {
+        Ok(mut players) => players.remove(&item_id),
+        Err(_) => None,
+    };
+    let Some(sender) = sender else {
+        return false;
+    };
+    if let Err(error) = sender.send(StreamingPlaybackCommand::Finish) {
+        tracing::warn!("failed to finish streaming playback for {item_id}: {error}");
+        let _ = window.emit(
+            "playback_state",
+            PlaybackStateEvent {
+                item_id: Some(item_id),
+                state: "error:streaming playback worker stopped".to_string(),
+            },
+        );
+    }
+    true
+}
+
+fn stop_streaming_playback(item_id: &str) {
+    let sender = match streaming_players().lock() {
+        Ok(mut players) => players.remove(item_id),
+        Err(_) => None,
+    };
+    if let Some(sender) = sender {
+        let _ = sender.send(StreamingPlaybackCommand::Stop);
     }
 }
 
