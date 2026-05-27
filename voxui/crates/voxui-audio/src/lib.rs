@@ -363,11 +363,16 @@ impl StreamingResampler {
 /// output device in real time via a lock-free ring buffer.
 #[allow(dead_code)]
 pub struct StreamingPlayer {
-    stream: cpal::Stream,
+    stream: Option<cpal::Stream>,
     producer: ringbuf::HeapProd<f32>,
     resampler: StreamingResampler,
     stop: Arc<AtomicBool>,
     done: Option<mpsc::Receiver<()>>,
+}
+
+pub struct StreamingDrain {
+    stream: cpal::Stream,
+    done: mpsc::Receiver<()>,
 }
 
 impl StreamingPlayer {
@@ -441,7 +446,7 @@ impl StreamingPlayer {
         stream.play()?;
 
         Ok(Self {
-            stream,
+            stream: Some(stream),
             producer,
             resampler,
             stop,
@@ -458,13 +463,22 @@ impl StreamingPlayer {
     }
 
     /// Flush any resampler tail, signal that no more samples will be pushed, and
-    /// return a receiver that fires when queued audio has drained.
-    pub fn finish(&mut self) -> Result<mpsc::Receiver<()>> {
+    /// return a drain guard that keeps the stream alive until queued audio drains.
+    pub fn finish(mut self) -> Result<StreamingDrain> {
         let tail = self.resampler.finish()?;
         self.push_resampled(&tail);
         self.stop.store(true, Ordering::SeqCst);
 
-        take_streaming_done_receiver(&mut self.done)
+        let stream = self
+            .stream
+            .take()
+            .ok_or_else(|| anyhow!("streaming playback stream is unavailable"))?;
+        let done = self
+            .done
+            .take()
+            .ok_or_else(|| anyhow!("streaming playback has already been finished"))?;
+
+        Ok(StreamingDrain { stream, done })
     }
 
     pub fn stop(&self) {
@@ -484,11 +498,14 @@ impl StreamingPlayer {
     }
 }
 
-fn take_streaming_done_receiver(
-    done: &mut Option<mpsc::Receiver<()>>,
-) -> Result<mpsc::Receiver<()>> {
-    done.take()
-        .ok_or_else(|| anyhow!("streaming playback has already been finished"))
+impl StreamingDrain {
+    pub fn wait(self) -> Result<()> {
+        self.done
+            .recv()
+            .map_err(|_| anyhow!("streaming playback channel closed unexpectedly"))?;
+        drop(self.stream);
+        Ok(())
+    }
 }
 
 fn streaming_buffer_capacity(source_rate: u32, device_rate: u32, pre_buffer_secs: f32) -> usize {
@@ -682,17 +699,4 @@ mod tests {
         assert_eq!(super::streaming_buffer_capacity(16_000, 48_000, 0.0), 4_800);
     }
 
-    #[test]
-    fn streaming_done_receiver_can_only_be_taken_once() {
-        let (_tx, rx) = super::mpsc::channel();
-        let mut done = Some(rx);
-
-        assert!(super::take_streaming_done_receiver(&mut done).is_ok());
-        let err = super::take_streaming_done_receiver(&mut done).unwrap_err();
-
-        assert_eq!(
-            err.to_string(),
-            "streaming playback has already been finished"
-        );
-    }
 }
