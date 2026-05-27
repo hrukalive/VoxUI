@@ -351,9 +351,12 @@ fn resolve_sidecar_path() -> Result<std::path::PathBuf, String> {
     let dir = exe
         .parent()
         .ok_or_else(|| format!("executable path has no parent: {}", exe.display()))?;
+    let target_triple = option_env!("TAURI_ENV_TARGET_TRIPLE").unwrap_or("x86_64-pc-windows-msvc");
     let candidates = [
         dir.join("voxui-inference-sidecar.exe"),
+        dir.join(format!("voxui-inference-sidecar-{target_triple}.exe")),
         dir.join("voxui-inference-sidecar"),
+        dir.join(format!("voxui-inference-sidecar-{target_triple}")),
     ];
     candidates
         .into_iter()

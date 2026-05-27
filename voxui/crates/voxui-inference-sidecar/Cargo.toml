@@ -14,3 +14,7 @@ voxui-inference = { path = "../voxui-inference" }
 voxui-sidecar-protocol = { path = "../voxui-sidecar-protocol" }
 tracing = "0.1"
 tracing-subscriber = "0.3"
+
+[features]
+default = []
+cuda = ["voxui-inference/cuda"]
