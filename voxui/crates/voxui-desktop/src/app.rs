@@ -35,7 +35,13 @@ pub fn App() -> impl IntoView {
     });
 
     let current_snapshot = move || snapshot.get().unwrap_or_else(fallback_snapshot);
-    let current_labels = move || labels(ui_language(current_snapshot().config.language));
+    let current_labels = move || {
+        let snapshot = current_snapshot();
+        labels(ui_language(
+            snapshot.config.language,
+            snapshot.system_language,
+        ))
+    };
     let refresh_snapshot = move || {
         spawn_local(async move {
             if let Ok(next_snapshot) = crate::tauri_api::get_app_state().await {
@@ -101,7 +107,10 @@ pub fn App() -> impl IntoView {
         >
             {move || {
                 let snapshot = current_snapshot();
-                let labels = labels(ui_language(snapshot.config.language));
+                let labels = labels(ui_language(
+                    snapshot.config.language,
+                    snapshot.system_language,
+                ));
                 let selected_model_id = snapshot.selected_model_id.clone();
                 let loaded_model_id = snapshot.loaded_model_id.clone();
                 let load_disabled = selected_model_id.is_none()
@@ -149,7 +158,10 @@ pub fn App() -> impl IntoView {
             }}
             {move || {
                 let snapshot = current_snapshot();
-                let labels = labels(ui_language(snapshot.config.language));
+                let labels = labels(ui_language(
+                    snapshot.config.language,
+                    snapshot.system_language,
+                ));
                 view! {
                     <HistoryList
                         labels=labels
@@ -287,10 +299,14 @@ pub fn App() -> impl IntoView {
     }
 }
 
-fn ui_language(language: LanguageMode) -> UiLanguage {
+fn ui_language(language: LanguageMode, system_language: LanguageMode) -> UiLanguage {
     match language {
         LanguageMode::English => UiLanguage::English,
-        LanguageMode::Chinese | LanguageMode::System => UiLanguage::Chinese,
+        LanguageMode::Chinese => UiLanguage::Chinese,
+        LanguageMode::System => match system_language {
+            LanguageMode::Chinese => UiLanguage::Chinese,
+            LanguageMode::English | LanguageMode::System => UiLanguage::English,
+        },
     }
 }
 
@@ -321,6 +337,7 @@ fn fallback_snapshot() -> AppSnapshot {
                 reference_wav_path: None,
             },
         },
+        system_language: LanguageMode::English,
         models: Vec::new(),
         selected_model_id: None,
         loaded_model_id: None,

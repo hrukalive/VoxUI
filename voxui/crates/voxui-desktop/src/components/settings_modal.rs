@@ -15,6 +15,8 @@ pub enum SettingsPage {
     About,
 }
 
+const DEFAULT_AUDIO_CHOICE: &str = "__voxui_default_audio__";
+
 #[component]
 pub fn SettingsModal(
     labels: impl Fn() -> Labels + Send + Sync + 'static + Copy,
@@ -85,7 +87,6 @@ pub fn SettingsModal(
                                                 options=move || language_options(labels())
                                                 disabled=move || false
                                                 on_change=move |value| {
-                                                    web_sys::console::log_1(&format!("selected: {value}").into());
                                                     on_config_patch(ConfigPatch {
                                                         language: Some(parse_language(&value)),
                                                         ..ConfigPatch::default()
@@ -274,12 +275,12 @@ pub fn SettingsModal(
                                             <CustomSelect
                                                 class="settings-select-control"
                                                 aria_label=labels().audio_driver
-                                                value=move || config().audio_host.unwrap_or_default()
+                                                value=move || config().audio_host.unwrap_or_else(|| DEFAULT_AUDIO_CHOICE.to_string())
                                                 options=move || audio_host_options(audio_state(), config().audio_host, labels())
                                                 disabled=move || false
                                                 on_change=move |value| {
                                                     on_config_patch(ConfigPatch {
-                                                        audio_host: Some(if value.is_empty() { None } else { Some(value) }),
+                                                        audio_host: Some(parse_optional_audio_choice(value)),
                                                         audio_device: Some(None),
                                                         ..ConfigPatch::default()
                                                     });
@@ -291,12 +292,12 @@ pub fn SettingsModal(
                                             <CustomSelect
                                                 class="settings-select-control"
                                                 aria_label=labels().output_device
-                                                value=move || config().audio_device.unwrap_or_default()
+                                                value=move || config().audio_device.unwrap_or_else(|| DEFAULT_AUDIO_CHOICE.to_string())
                                                 options=move || audio_device_options(audio_state(), &config(), labels())
                                                 disabled=move || false
                                                 on_change=move |value| {
                                                     on_config_patch(ConfigPatch {
-                                                        audio_device: Some(if value.is_empty() { None } else { Some(value) }),
+                                                        audio_device: Some(parse_optional_audio_choice(value)),
                                                         ..ConfigPatch::default()
                                                     });
                                                 }
@@ -413,13 +414,16 @@ fn audio_host_options(
     current_host: Option<String>,
     labels: Labels,
 ) -> Vec<SelectOption> {
-    std::iter::once(SelectOption::new("", labels.default_choice))
-        .chain(
-            audio_hosts_with_current(state, current_host)
-                .into_iter()
-                .map(|host| SelectOption::new(host.name.clone(), host.name)),
-        )
-        .collect()
+    std::iter::once(SelectOption::new(
+        DEFAULT_AUDIO_CHOICE,
+        default_label(labels.default_choice, state.default_host.as_deref()),
+    ))
+    .chain(
+        audio_hosts_with_current(state, current_host)
+            .into_iter()
+            .map(|host| SelectOption::new(host.name.clone(), host.name)),
+    )
+    .collect()
 }
 
 fn audio_device_options(
@@ -427,13 +431,45 @@ fn audio_device_options(
     config: &AppConfig,
     labels: Labels,
 ) -> Vec<SelectOption> {
-    std::iter::once(SelectOption::new("", labels.default_choice))
-        .chain(
-            audio_devices_for_selected_host(state, config)
-                .into_iter()
-                .map(|device| SelectOption::new(device.name.clone(), device.name)),
-        )
-        .collect()
+    let default_device = default_device_for_selected_host(&state, config);
+    std::iter::once(SelectOption::new(
+        DEFAULT_AUDIO_CHOICE,
+        default_label(labels.default_choice, default_device.as_deref()),
+    ))
+    .chain(
+        audio_devices_for_selected_host(state, config)
+            .into_iter()
+            .map(|device| SelectOption::new(device.name.clone(), device.name)),
+    )
+    .collect()
+}
+
+fn default_device_for_selected_host(state: &AudioState, config: &AppConfig) -> Option<String> {
+    let selected_host = config
+        .audio_host
+        .as_deref()
+        .or(state.default_host.as_deref())?;
+
+    state
+        .default_devices
+        .iter()
+        .find(|device| device.host_name == selected_host)
+        .map(|device| device.name.clone())
+}
+
+fn default_label(label: &str, value: Option<&str>) -> String {
+    match value {
+        Some(value) if !value.is_empty() => format!("{label} ({value})"),
+        _ => label.to_string(),
+    }
+}
+
+fn parse_optional_audio_choice(value: String) -> Option<String> {
+    if value.is_empty() || value == DEFAULT_AUDIO_CHOICE {
+        None
+    } else {
+        Some(value)
+    }
 }
 
 fn theme_value(theme: ThemeMode) -> &'static str {

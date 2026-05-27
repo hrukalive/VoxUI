@@ -36,11 +36,24 @@ pub fn audio_state(system: &AudioSystem) -> AudioStateDto {
         .iter()
         .any(|host| host.name == system.default_host_name())
         .then(|| system.default_host_name());
+    let default_devices = hosts
+        .iter()
+        .filter_map(|host| {
+            system
+                .default_device_name(&host.name)
+                .ok()
+                .map(|name| AudioDeviceDto {
+                    name,
+                    host_name: host.name.clone(),
+                })
+        })
+        .collect();
 
     AudioStateDto {
         hosts,
         devices,
         default_host,
+        default_devices,
     }
 }
 

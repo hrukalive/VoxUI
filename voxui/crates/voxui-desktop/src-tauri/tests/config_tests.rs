@@ -64,6 +64,10 @@ fn detects_chinese_for_zh_locale() {
         detect_language_from_locale(Some("zh_TW")),
         LanguageMode::Chinese
     );
+    assert_eq!(
+        detect_language_from_locale(Some("zh_CN.UTF-8")),
+        LanguageMode::Chinese
+    );
 }
 
 #[test]

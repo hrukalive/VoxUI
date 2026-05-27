@@ -5,6 +5,10 @@ use anyhow::{Context, Result};
 
 pub use crate::types::{AppConfig, BackendKind, GenerationSettings, LanguageMode, ThemeMode};
 
+pub fn detect_system_language() -> LanguageMode {
+    detect_language_from_locale(sys_locale::get_locale().as_deref())
+}
+
 pub fn detect_language_from_locale(locale: Option<&str>) -> LanguageMode {
     match locale {
         Some(value) if value.to_ascii_lowercase().starts_with("zh") => LanguageMode::Chinese,

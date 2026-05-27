@@ -110,6 +110,62 @@ fn changing_audio_host_clears_saved_audio_device() {
 }
 
 #[test]
+fn clearing_audio_host_to_default_clears_host_and_device() {
+    let mut core = AppCore::from_config(AppConfig {
+        audio_host: Some("Wasapi".to_string()),
+        audio_device: Some("Speakers".to_string()),
+        ..AppConfig::default()
+    })
+    .unwrap();
+
+    let snapshot = core
+        .apply_patch(ConfigPatch {
+            model_root: None,
+            selected_model_id: None,
+            language: None,
+            theme: None,
+            backend: None,
+            audio_host: Some(None),
+            audio_device: Some(None),
+            volume: None,
+            max_input_chars: None,
+            generation: None,
+        })
+        .unwrap();
+
+    assert_eq!(snapshot.config.audio_host, None);
+    assert_eq!(snapshot.config.audio_device, None);
+}
+
+#[test]
+fn clearing_audio_device_to_default_keeps_selected_host() {
+    let mut core = AppCore::from_config(AppConfig {
+        audio_host: Some("Wasapi".to_string()),
+        audio_device: Some("Speakers".to_string()),
+        ..AppConfig::default()
+    })
+    .unwrap();
+
+    let snapshot = core
+        .apply_patch(ConfigPatch {
+            model_root: None,
+            selected_model_id: None,
+            language: None,
+            theme: None,
+            backend: None,
+            audio_host: None,
+            audio_device: Some(None),
+            volume: None,
+            max_input_chars: None,
+            generation: None,
+        })
+        .unwrap();
+
+    assert_eq!(snapshot.config.audio_host.as_deref(), Some("Wasapi"));
+    assert_eq!(snapshot.config.audio_device, None);
+}
+
+#[test]
 fn enqueue_generation_rejects_when_no_model_is_loaded() {
     let mut core = AppCore::from_config(AppConfig::default()).unwrap();
 

@@ -25,6 +25,9 @@ pub fn CustomSelect(
     #[prop(default = "")] class: &'static str,
 ) -> impl IntoView {
     let (open, set_open) = signal(false);
+    let (suppress_button_click, set_suppress_button_click) = signal(false);
+    let (suppress_option_click, set_suppress_option_click) = signal(false);
+    let (option_pointer_down, set_option_pointer_down) = signal(false);
     let class_name = if class.is_empty() {
         "custom-select".to_string()
     } else {
@@ -42,6 +45,7 @@ pub fn CustomSelect(
             .unwrap_or_default()
     };
     let button_disabled = disabled.clone();
+    let mouse_down_disabled = disabled.clone();
     let click_disabled = disabled.clone();
     let menu_disabled_attr = disabled.clone();
     let menu_disabled_class = disabled.clone();
@@ -50,15 +54,32 @@ pub fn CustomSelect(
     let menu_on_change = on_change.clone();
 
     view! {
-        <div class=class_name on:focusout=move |_| set_open.set(false)>
+        <div class=class_name on:focusout=move |_| {
+            if !option_pointer_down.get() {
+                set_open.set(false);
+            }
+        }>
             <button
                 class="custom-select-button"
                 type="button"
                 aria-label=aria_label
                 aria-expanded=move || open.get().to_string()
                 disabled=move || button_disabled()
+                on:mousedown=move |event| {
+                    if !mouse_down_disabled() && event.button() == 0 {
+                        set_option_pointer_down.set(false);
+                        set_suppress_option_click.set(false);
+                        set_suppress_button_click.set(true);
+                        set_open.update(|open| *open = !*open);
+                    }
+                }
                 on:click=move |_| {
+                    if suppress_button_click.get() {
+                        set_suppress_button_click.set(false);
+                        return;
+                    }
                     if !click_disabled() {
+                        set_suppress_option_click.set(false);
                         set_open.update(|open| *open = !*open);
                     }
                 }
@@ -79,8 +100,10 @@ pub fn CustomSelect(
                         .into_iter()
                         .map(|option| {
                             let selected = current_value == option.value;
-                            let on_change = menu_on_change.clone();
-                            let change_option_value = option.value.clone();
+                            let mouseup_on_change = menu_on_change.clone();
+                            let click_on_change = menu_on_change.clone();
+                            let mouseup_option_value = option.value.clone();
+                            let click_option_value = option.value.clone();
                             let option_label = option.label;
                             view! {
                                 <button
@@ -89,8 +112,26 @@ pub fn CustomSelect(
                                     type="button"
                                     role="option"
                                     aria-selected=selected.to_string()
+                                    on:mousedown=move |event| {
+                                        event.prevent_default();
+                                        if event.button() == 0 {
+                                            set_option_pointer_down.set(true);
+                                        }
+                                    }
+                                    on:mouseup=move |event| {
+                                        if event.button() == 0 {
+                                            set_option_pointer_down.set(false);
+                                            set_suppress_option_click.set(true);
+                                            mouseup_on_change(mouseup_option_value.clone());
+                                            set_open.set(false);
+                                        }
+                                    }
                                     on:click=move |_| {
-                                        on_change(change_option_value.clone());
+                                        if suppress_option_click.get() {
+                                            set_suppress_option_click.set(false);
+                                            return;
+                                        }
+                                        click_on_change(click_option_value.clone());
                                         set_open.set(false);
                                     }
                                 >

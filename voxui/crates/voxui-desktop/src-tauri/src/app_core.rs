@@ -96,6 +96,7 @@ impl AppCore {
     pub fn snapshot(&self) -> AppSnapshot {
         AppSnapshot {
             config: self.config.clone(),
+            system_language: crate::config::detect_system_language(),
             models: self.models.clone(),
             selected_model_id: self.selected_model_id.clone(),
             loaded_model_id: self.loaded_model_id.clone(),
@@ -885,6 +886,23 @@ mod tests {
         let request = core.synthesis_request_for_test(&item.id).unwrap();
 
         assert!(!request.retry_badcase);
+    }
+
+    #[test]
+    fn playback_can_overlap_an_active_generation() {
+        let mut core = AppCore::from_config(AppConfig::default()).unwrap();
+        core.set_loaded_model_for_test("model".to_string());
+        let ready = core.enqueue_generation("ready".to_string()).unwrap();
+        core.set_generated_audio_for_test(ready.id.clone(), vec![0.0; 8], 16_000);
+        let generating = core.enqueue_generation("generating".to_string()).unwrap();
+
+        core.begin_generation_for_test(&generating.id).unwrap();
+        let playback = core.begin_playback(&ready.id).unwrap();
+        let snapshot = core.snapshot();
+
+        assert_eq!(playback.item_id, ready.id);
+        assert_eq!(snapshot.history[0].status, HistoryStatus::Playing);
+        assert_eq!(snapshot.history[1].status, HistoryStatus::Generating);
     }
 
     #[test]

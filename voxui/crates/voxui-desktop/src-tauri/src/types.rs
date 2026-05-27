@@ -235,6 +235,7 @@ pub struct AudioStateDto {
     pub hosts: Vec<AudioHostDto>,
     pub devices: Vec<AudioDeviceDto>,
     pub default_host: Option<String>,
+    pub default_devices: Vec<AudioDeviceDto>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -247,6 +248,7 @@ pub struct RequestSnapshot {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AppSnapshot {
     pub config: AppConfig,
+    pub system_language: LanguageMode,
     pub models: Vec<ModelChoice>,
     pub selected_model_id: Option<String>,
     pub loaded_model_id: Option<String>,

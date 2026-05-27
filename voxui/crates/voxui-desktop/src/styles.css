@@ -21,6 +21,9 @@
   --primary-bg: #3b75d3;
   --primary-hover: #5188db;
   --primary-text: #ffffff;
+  --danger-bg: #c9342b;
+  --danger-hover: #dc453a;
+  --danger-text: #ffffff;
   --text: #f7f8fb;
   --text-muted: #bac2d1;
   --text-soft: #aeb6c4;
@@ -53,6 +56,9 @@
   --primary-bg: #2563d8;
   --primary-hover: #1f57c2;
   --primary-text: #ffffff;
+  --danger-bg: #d92d20;
+  --danger-hover: #b42318;
+  --danger-text: #ffffff;
   --text: #1b2430;
   --text-muted: #526074;
   --text-soft: #69778b;
@@ -245,6 +251,7 @@ body {
 
 .custom-select-option.selected {
   background: var(--selected-bg);
+  color: var(--primary-text);
 }
 
 .custom-select-option + .custom-select-option {
@@ -257,12 +264,17 @@ body {
 
 .custom-select-option.selected:hover {
   background: var(--selected-hover);
+  color: var(--primary-text);
 }
 
 .primary-button,
 .generate-button,
 .icon-button,
-.secondary-button {
+.secondary-button,
+.danger-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   height: 34px;
   border: 1px solid var(--control-border);
   border-radius: 5px;
@@ -270,6 +282,8 @@ body {
   color: var(--text);
   padding: 0 12px;
   font: inherit;
+  line-height: 1.2;
+  white-space: nowrap;
   cursor: pointer;
 }
 
@@ -277,6 +291,7 @@ body {
 .generate-button:disabled,
 .icon-button:disabled,
 .secondary-button:disabled,
+.danger-button:disabled,
 .settings-field input:disabled,
 .settings-field select:disabled,
 .settings-field textarea:disabled {
@@ -300,6 +315,17 @@ body {
 .generate-button:hover:not(:disabled) {
   background: var(--primary-hover);
   border-color: var(--primary-hover);
+}
+
+.danger-button {
+  background: var(--danger-bg);
+  border-color: var(--danger-bg);
+  color: var(--danger-text);
+}
+
+.danger-button:hover:not(:disabled) {
+  background: var(--danger-hover);
+  border-color: var(--danger-hover);
 }
 
 .history-panel {
@@ -730,8 +756,20 @@ body {
 }
 
 .progress-modal {
-  max-width: 420px;
-  padding: 18px;
+  width: 420px;
+  max-width: calc(100vw - 48px);
+  padding: 0;
+}
+
+.progress-body {
+  display: grid;
+  gap: 14px;
+  padding: 24px 28px 26px;
+}
+
+.progress-cancel-button {
+  min-width: 86px;
+  padding: 0 18px;
 }
 
 .progress-track {

@@ -29,6 +29,7 @@ extern "C" {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AppSnapshot {
     pub config: AppConfig,
+    pub system_language: LanguageMode,
     pub models: Vec<ModelChoice>,
     pub selected_model_id: Option<String>,
     pub loaded_model_id: Option<String>,
@@ -55,6 +56,7 @@ pub struct AudioState {
     pub hosts: Vec<AudioHost>,
     pub devices: Vec<AudioDevice>,
     pub default_host: Option<String>,
+    pub default_devices: Vec<AudioDevice>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

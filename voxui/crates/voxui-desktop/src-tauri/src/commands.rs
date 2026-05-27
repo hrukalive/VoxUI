@@ -517,7 +517,8 @@ fn spawn_playback(window: Window, shared: SharedAppCore, run: crate::app_core::P
             Ok(device) => {
                 match AudioPlayer::new(&host, &device, run.audio.sample_rate).and_then(
                     |mut player| {
-                        let done = player.play(run.audio.samples)?;
+                        let samples = crate::audio::apply_volume(&run.audio.samples, config.volume);
+                        let done = player.play(samples)?;
                         wait_for_playback(done, run.stop, &mut player);
                         Ok(())
                     },
