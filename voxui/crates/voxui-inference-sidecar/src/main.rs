@@ -7,5 +7,5 @@ fn main() -> Result<()> {
         .init();
     let stdin = std::io::stdin();
     let stdout = std::io::stdout();
-    SidecarEngine::default().run(stdin.lock(), stdout.lock())
+    SidecarEngine::default().run(stdin, stdout.lock())
 }

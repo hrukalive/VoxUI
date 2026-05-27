@@ -1,7 +1,8 @@
 use std::cell::RefCell;
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{mpsc, Arc, Mutex};
+use std::thread;
 
 use anyhow::{Context, Result};
 use candle_core::Device;
@@ -14,29 +15,25 @@ use voxui_sidecar_protocol::{
 #[derive(Default)]
 pub struct SidecarEngine {
     engine: Option<VoxCPMEngine>,
-    active_load_cancel: Option<Arc<AtomicBool>>,
-    active_generation_cancel: Option<Arc<AtomicBool>>,
+    active_load_cancel: SharedCancel,
+    active_generation_cancel: SharedCancel,
 }
 
 impl SidecarEngine {
-    pub fn run<R, W>(&mut self, mut reader: R, mut writer: W) -> Result<()>
+    pub fn run<R, W>(&mut self, reader: R, mut writer: W) -> Result<()>
     where
-        R: Read,
+        R: Read + Send + 'static,
         W: Write,
     {
         emit_frame(&mut writer, ready_frame())?;
+        let commands = spawn_command_reader(
+            reader,
+            self.active_load_cancel.clone(),
+            self.active_generation_cancel.clone(),
+        );
 
-        loop {
-            let frame: Frame<SidecarCommand> = match read_frame(&mut reader) {
-                Ok(frame) => frame,
-                Err(error) => {
-                    if is_clean_eof(&error) {
-                        break;
-                    }
-                    return Err(error);
-                }
-            };
-            let shutdown = self.handle_command_write(frame.header, &mut writer)?;
+        while let Ok(command) = commands.recv() {
+            let shutdown = self.handle_command_write(command, &mut writer)?;
             if shutdown {
                 break;
             }
@@ -78,7 +75,7 @@ impl SidecarEngine {
                 self.cancel_active_generation();
                 self.cancel_active_load();
                 let cancel = Arc::new(AtomicBool::new(false));
-                self.active_load_cancel = Some(cancel.clone());
+                set_active_cancel(&self.active_load_cancel, Some(cancel.clone()));
                 let device = device_for_backend(backend);
 
                 let load_result = match device {
@@ -126,11 +123,8 @@ impl SidecarEngine {
                     Err(error) => Err(error),
                 };
 
-                let current_cancel = self.active_load_cancel.take();
-                let canceled = current_cancel
-                    .as_ref()
-                    .map(|active| active.load(Ordering::Relaxed))
-                    .unwrap_or(false);
+                let canceled = cancel.load(Ordering::Relaxed);
+                clear_matching_cancel(&self.active_load_cancel, &cancel);
 
                 match load_result {
                     Ok(engine) if !canceled => {
@@ -166,7 +160,7 @@ impl SidecarEngine {
                 }
             }
             SidecarCommand::CancelLoad { load_id } => {
-                if let Some(cancel) = self.active_load_cancel.take() {
+                if let Some(cancel) = take_active_cancel(&self.active_load_cancel) {
                     cancel.store(true, Ordering::Relaxed);
                 }
                 emit(model_load_done_canceled(load_id))?;
@@ -192,7 +186,7 @@ impl SidecarEngine {
                 };
 
                 let cancel = Arc::new(AtomicBool::new(false));
-                self.active_generation_cancel = Some(cancel.clone());
+                set_active_cancel(&self.active_generation_cancel, Some(cancel.clone()));
                 let request = synthesis_request_from_dto(request);
 
                 let result = if streaming {
@@ -213,7 +207,7 @@ impl SidecarEngine {
                     )
                 };
                 let canceled = cancel.load(Ordering::Relaxed);
-                self.active_generation_cancel = None;
+                clear_matching_cancel(&self.active_generation_cancel, &cancel);
 
                 match result {
                     Ok(()) if canceled => emit(generation_done_canceled(item_id))?,
@@ -248,15 +242,106 @@ impl SidecarEngine {
     }
 
     fn cancel_active_load(&mut self) {
-        if let Some(cancel) = self.active_load_cancel.take() {
+        if let Some(cancel) = take_active_cancel(&self.active_load_cancel) {
             cancel.store(true, Ordering::Relaxed);
         }
     }
 
     fn cancel_active_generation(&mut self) {
-        if let Some(cancel) = self.active_generation_cancel.as_ref() {
+        if let Some(cancel) = active_cancel(&self.active_generation_cancel) {
             cancel.store(true, Ordering::Relaxed);
         }
+    }
+}
+
+type SharedCancel = Arc<Mutex<Option<Arc<AtomicBool>>>>;
+
+fn spawn_command_reader<R>(
+    mut reader: R,
+    active_load_cancel: SharedCancel,
+    active_generation_cancel: SharedCancel,
+) -> mpsc::Receiver<SidecarCommand>
+where
+    R: Read + Send + 'static,
+{
+    let (sender, receiver) = mpsc::channel();
+    thread::Builder::new()
+        .name("voxui-sidecar-command-reader".to_string())
+        .spawn(move || loop {
+            let frame: Frame<SidecarCommand> = match read_frame(&mut reader) {
+                Ok(frame) => frame,
+                Err(error) if is_clean_eof(&error) => break,
+                Err(error) => {
+                    let _ = sender.send(SidecarCommand::Shutdown);
+                    tracing::error!("failed to read sidecar command: {error}");
+                    break;
+                }
+            };
+
+            if let Some(command) = handle_immediate_command(
+                frame.header,
+                &active_load_cancel,
+                &active_generation_cancel,
+            ) {
+                if sender.send(command).is_err() {
+                    break;
+                }
+            }
+        })
+        .expect("spawn sidecar command reader");
+    receiver
+}
+
+fn handle_immediate_command(
+    command: SidecarCommand,
+    active_load_cancel: &SharedCancel,
+    active_generation_cancel: &SharedCancel,
+) -> Option<SidecarCommand> {
+    match command {
+        SidecarCommand::CancelLoad { .. } => {
+            if let Some(cancel) = active_cancel(active_load_cancel) {
+                cancel.store(true, Ordering::Relaxed);
+            }
+            None
+        }
+        SidecarCommand::CancelSynthesis { .. } => {
+            if let Some(cancel) = active_cancel(active_generation_cancel) {
+                cancel.store(true, Ordering::Relaxed);
+            }
+            None
+        }
+        SidecarCommand::Shutdown => {
+            if let Some(cancel) = active_cancel(active_load_cancel) {
+                cancel.store(true, Ordering::Relaxed);
+            }
+            if let Some(cancel) = active_cancel(active_generation_cancel) {
+                cancel.store(true, Ordering::Relaxed);
+            }
+            Some(SidecarCommand::Shutdown)
+        }
+        other => Some(other),
+    }
+}
+
+fn set_active_cancel(slot: &SharedCancel, cancel: Option<Arc<AtomicBool>>) {
+    *slot.lock().expect("active cancel lock poisoned") = cancel;
+}
+
+fn active_cancel(slot: &SharedCancel) -> Option<Arc<AtomicBool>> {
+    slot.lock().expect("active cancel lock poisoned").clone()
+}
+
+fn take_active_cancel(slot: &SharedCancel) -> Option<Arc<AtomicBool>> {
+    slot.lock().expect("active cancel lock poisoned").take()
+}
+
+fn clear_matching_cancel(slot: &SharedCancel, cancel: &Arc<AtomicBool>) {
+    let mut active = slot.lock().expect("active cancel lock poisoned");
+    if active
+        .as_ref()
+        .is_some_and(|current| Arc::ptr_eq(current, cancel))
+    {
+        *active = None;
     }
 }
 
@@ -479,10 +564,8 @@ mod tests {
     #[test]
     fn cancel_generation_sets_active_cancel_flag() {
         let cancel = Arc::new(AtomicBool::new(false));
-        let mut sidecar = SidecarEngine {
-            active_generation_cancel: Some(cancel.clone()),
-            ..SidecarEngine::default()
-        };
+        let mut sidecar = SidecarEngine::default();
+        set_active_cancel(&sidecar.active_generation_cancel, Some(cancel.clone()));
         let mut events = Vec::new();
 
         sidecar
@@ -508,5 +591,24 @@ mod tests {
                 payload: Vec::new(),
             }]
         );
+    }
+
+    #[test]
+    fn immediate_cancel_synthesis_sets_flag_without_forwarding_command() {
+        let cancel = Arc::new(AtomicBool::new(false));
+        let load_cancel = SharedCancel::default();
+        let generation_cancel = SharedCancel::default();
+        set_active_cancel(&generation_cancel, Some(cancel.clone()));
+
+        let forwarded = handle_immediate_command(
+            SidecarCommand::CancelSynthesis {
+                item_id: "item-1".to_string(),
+            },
+            &load_cancel,
+            &generation_cancel,
+        );
+
+        assert!(forwarded.is_none());
+        assert!(cancel.load(Ordering::Relaxed));
     }
 }
