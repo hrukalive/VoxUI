@@ -1,4 +1,4 @@
-use std::io::{Read, Write};
+use std::io::{ErrorKind, Read, Write};
 use std::path::PathBuf;
 
 use anyhow::{bail, Context, Result};
@@ -142,7 +142,7 @@ where
     T: for<'de> Deserialize<'de>,
 {
     let mut lens = [0_u8; 8];
-    reader.read_exact(&mut lens).context("read frame lengths")?;
+    read_frame_lengths(reader, &mut lens)?;
     let header_len = u32::from_le_bytes(lens[0..4].try_into().unwrap()) as usize;
     let payload_len = u32::from_le_bytes(lens[4..8].try_into().unwrap()) as usize;
     if header_len > MAX_HEADER_BYTES {
@@ -162,6 +162,20 @@ where
         .context("read frame payload")?;
     let header = serde_json::from_slice(&header_bytes).context("deserialize frame header")?;
     Ok(Frame { header, payload })
+}
+
+fn read_frame_lengths<R: Read>(reader: &mut R, lens: &mut [u8; 8]) -> Result<()> {
+    let mut read = 0usize;
+    while read < lens.len() {
+        match reader.read(&mut lens[read..]) {
+            Ok(0) if read == 0 => bail!("sidecar protocol clean eof"),
+            Ok(0) => bail!("read frame lengths: unexpected eof after {read} bytes"),
+            Ok(len) => read += len,
+            Err(error) if error.kind() == ErrorKind::Interrupted => {}
+            Err(error) => return Err(error).context("read frame lengths"),
+        }
+    }
+    Ok(())
 }
 
 pub fn f32_samples_to_le_bytes(samples: &[f32]) -> Vec<u8> {
@@ -221,6 +235,15 @@ mod tests {
         let error = read_frame::<_, SidecarCommand>(&mut bytes.as_slice()).unwrap_err();
 
         assert!(error.to_string().contains("payload"));
+    }
+
+    #[test]
+    fn read_frame_distinguishes_clean_eof_from_partial_frame() {
+        let clean = read_frame::<_, SidecarCommand>(&mut [].as_slice()).unwrap_err();
+        assert!(clean.to_string().contains("clean eof"));
+
+        let partial = read_frame::<_, SidecarCommand>(&mut [1, 2, 3].as_slice()).unwrap_err();
+        assert!(partial.to_string().contains("unexpected eof"));
     }
 
     #[test]

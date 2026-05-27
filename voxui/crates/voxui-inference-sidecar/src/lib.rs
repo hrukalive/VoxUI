@@ -242,7 +242,7 @@ impl SidecarEngine {
 #[derive(Default)]
 struct CancelState<I> {
     active: Option<(I, Arc<AtomicBool>)>,
-    pending: Vec<I>,
+    pending: Option<I>,
 }
 
 type SharedCancel<I> = Arc<Mutex<CancelState<I>>>;
@@ -313,8 +313,8 @@ where
     I: Clone + Eq,
 {
     let mut state = slot.lock().expect("active cancel lock poisoned");
-    if let Some(index) = state.pending.iter().position(|pending| pending == &id) {
-        state.pending.remove(index);
+    if state.pending.as_ref().is_some_and(|pending| pending == &id) {
+        state.pending = None;
         cancel.store(true, Ordering::Relaxed);
     }
     state.active = Some((id, cancel));
@@ -331,9 +331,7 @@ where
             return;
         }
     }
-    if !state.pending.iter().any(|pending| pending == &id) {
-        state.pending.push(id);
-    }
+    state.pending = Some(id);
 }
 
 fn active_cancel<I>(slot: &SharedCancel<I>) -> Option<Arc<AtomicBool>> {
@@ -587,14 +585,7 @@ fn is_cancel_error(error: &anyhow::Error) -> bool {
 }
 
 fn is_clean_eof(error: &anyhow::Error) -> bool {
-    error
-        .downcast_ref::<std::io::Error>()
-        .map(|io| io.kind() == std::io::ErrorKind::UnexpectedEof)
-        .unwrap_or(false)
-        || error
-            .chain()
-            .filter_map(|cause| cause.downcast_ref::<std::io::Error>())
-            .any(|io| io.kind() == std::io::ErrorKind::UnexpectedEof)
+    error.to_string().contains("sidecar protocol clean eof")
 }
 
 #[cfg(test)]
@@ -668,6 +659,21 @@ mod tests {
         install_active_cancel(&generation_cancel, "item-1".to_string(), cancel.clone());
 
         assert!(cancel.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn only_most_recent_pending_cancel_is_retained() {
+        let first = Arc::new(AtomicBool::new(false));
+        let second = Arc::new(AtomicBool::new(false));
+        let generation_cancel = SharedCancel::default();
+
+        request_cancel(&generation_cancel, "item-1".to_string());
+        request_cancel(&generation_cancel, "item-2".to_string());
+        install_active_cancel(&generation_cancel, "item-1".to_string(), first.clone());
+        install_active_cancel(&generation_cancel, "item-2".to_string(), second.clone());
+
+        assert!(!first.load(Ordering::Relaxed));
+        assert!(second.load(Ordering::Relaxed));
     }
 
     #[test]
