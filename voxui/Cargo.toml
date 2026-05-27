@@ -4,6 +4,7 @@ members = [
     "crates/voxui-inference",
     "crates/voxui-audio",
     "crates/voxui-sidecar-protocol",
+    "crates/voxui-inference-sidecar",
     "crates/voxui-cli",
     "crates/voxui-desktop",
     "crates/voxui-desktop/src-tauri",

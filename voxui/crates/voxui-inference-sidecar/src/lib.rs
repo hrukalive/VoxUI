@@ -1,0 +1,512 @@
+use std::cell::RefCell;
+use std::io::{Read, Write};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+
+use anyhow::{Context, Result};
+use candle_core::Device;
+use voxui_inference::{SynthesisChunk, SynthesisRequest, VoxCPMEngine};
+use voxui_sidecar_protocol::{
+    f32_samples_to_le_bytes, read_frame, write_frame, BackendKind, Frame, OperationStatus,
+    SidecarCommand, SidecarEvent, SynthesisRequestDto,
+};
+
+#[derive(Default)]
+pub struct SidecarEngine {
+    engine: Option<VoxCPMEngine>,
+    active_load_cancel: Option<Arc<AtomicBool>>,
+    active_generation_cancel: Option<Arc<AtomicBool>>,
+}
+
+impl SidecarEngine {
+    pub fn run<R, W>(&mut self, mut reader: R, mut writer: W) -> Result<()>
+    where
+        R: Read,
+        W: Write,
+    {
+        emit_frame(&mut writer, ready_frame())?;
+
+        loop {
+            let frame: Frame<SidecarCommand> = match read_frame(&mut reader) {
+                Ok(frame) => frame,
+                Err(error) => {
+                    if is_clean_eof(&error) {
+                        break;
+                    }
+                    return Err(error);
+                }
+            };
+            let shutdown = self.handle_command_write(frame.header, &mut writer)?;
+            if shutdown {
+                break;
+            }
+        }
+
+        Ok(())
+    }
+
+    fn handle_command_write<W>(&mut self, command: SidecarCommand, writer: &mut W) -> Result<bool>
+    where
+        W: Write,
+    {
+        self.handle_command_with_emit(command, |frame| emit_frame(writer, frame))
+    }
+
+    #[cfg(test)]
+    fn handle_command(
+        &mut self,
+        command: SidecarCommand,
+        events: &mut Vec<Frame<SidecarEvent>>,
+    ) -> Result<bool> {
+        self.handle_command_with_emit(command, |frame| {
+            events.push(frame);
+            Ok(())
+        })
+    }
+
+    fn handle_command_with_emit<F>(&mut self, command: SidecarCommand, mut emit: F) -> Result<bool>
+    where
+        F: FnMut(Frame<SidecarEvent>) -> Result<()>,
+    {
+        match command {
+            SidecarCommand::LoadModel {
+                load_id,
+                model_dir,
+                lora_path,
+                backend,
+            } => {
+                self.cancel_active_generation();
+                self.cancel_active_load();
+                let cancel = Arc::new(AtomicBool::new(false));
+                self.active_load_cancel = Some(cancel.clone());
+                let device = device_for_backend(backend);
+
+                let load_result = match device {
+                    Ok(device) => {
+                        let emit_cell = RefCell::new(&mut emit);
+                        let progress_error = RefCell::new(None);
+                        let cancel_for_progress = cancel.clone();
+                        let loaded = VoxCPMEngine::load_with_progress(
+                            &model_dir,
+                            device,
+                            |component_index, component_total| {
+                                let event = Frame {
+                                    header: SidecarEvent::ModelLoadProgress {
+                                        load_id,
+                                        phase: "loading".to_string(),
+                                        loaded_bytes: component_index as u64,
+                                        total_bytes: component_total as u64,
+                                        component: None,
+                                        component_index,
+                                        component_total,
+                                    },
+                                    payload: Vec::new(),
+                                };
+                                if let Err(error) = (emit_cell.borrow_mut())(event) {
+                                    *progress_error.borrow_mut() = Some(error);
+                                    cancel_for_progress.store(true, Ordering::Relaxed);
+                                }
+                            },
+                            Some(cancel.as_ref()),
+                        );
+                        let progress_error = progress_error.into_inner();
+                        match (loaded, progress_error) {
+                            (_, Some(error)) => Err(error),
+                            (Ok(mut engine), None) => {
+                                if let Some(path) = lora_path {
+                                    engine.load_lora(&path).with_context(|| {
+                                        format!("load LoRA adapter {}", path.display())
+                                    })?;
+                                }
+                                Ok(engine)
+                            }
+                            (Err(error), None) => Err(error),
+                        }
+                    }
+                    Err(error) => Err(error),
+                };
+
+                let current_cancel = self.active_load_cancel.take();
+                let canceled = current_cancel
+                    .as_ref()
+                    .map(|active| active.load(Ordering::Relaxed))
+                    .unwrap_or(false);
+
+                match load_result {
+                    Ok(engine) if !canceled => {
+                        let sample_rate = engine.sample_rate();
+                        self.engine = Some(engine);
+                        emit(Frame {
+                            header: SidecarEvent::ModelLoadDone {
+                                load_id,
+                                status: OperationStatus::Success,
+                                sample_rate: Some(sample_rate),
+                                error: None,
+                            },
+                            payload: Vec::new(),
+                        })?;
+                    }
+                    Ok(_) => {
+                        emit(model_load_done_canceled(load_id))?;
+                    }
+                    Err(error) if canceled || is_cancel_error(&error) => {
+                        emit(model_load_done_canceled(load_id))?;
+                    }
+                    Err(error) => {
+                        emit(Frame {
+                            header: SidecarEvent::ModelLoadDone {
+                                load_id,
+                                status: OperationStatus::Failed,
+                                sample_rate: None,
+                                error: Some(error.to_string()),
+                            },
+                            payload: Vec::new(),
+                        })?;
+                    }
+                }
+            }
+            SidecarCommand::CancelLoad { load_id } => {
+                if let Some(cancel) = self.active_load_cancel.take() {
+                    cancel.store(true, Ordering::Relaxed);
+                }
+                emit(model_load_done_canceled(load_id))?;
+            }
+            SidecarCommand::Synthesize {
+                item_id,
+                request,
+                streaming,
+            } => {
+                self.cancel_active_generation();
+                let Some(engine) = self.engine.as_mut() else {
+                    emit(Frame {
+                        header: SidecarEvent::GenerationDone {
+                            item_id,
+                            status: OperationStatus::Failed,
+                            sample_rate: None,
+                            duration_seconds: None,
+                            error: Some("model is not loaded".to_string()),
+                        },
+                        payload: Vec::new(),
+                    })?;
+                    return Ok(false);
+                };
+
+                let cancel = Arc::new(AtomicBool::new(false));
+                self.active_generation_cancel = Some(cancel.clone());
+                let request = synthesis_request_from_dto(request);
+
+                let result = if streaming {
+                    run_streaming_generation(
+                        engine,
+                        item_id.clone(),
+                        request,
+                        cancel.clone(),
+                        &mut emit,
+                    )
+                } else {
+                    run_non_streaming_generation(
+                        engine,
+                        item_id.clone(),
+                        request,
+                        cancel.clone(),
+                        &mut emit,
+                    )
+                };
+                let canceled = cancel.load(Ordering::Relaxed);
+                self.active_generation_cancel = None;
+
+                match result {
+                    Ok(()) if canceled => emit(generation_done_canceled(item_id))?,
+                    Ok(()) => {}
+                    Err(error) if canceled || is_cancel_error(&error) => {
+                        emit(generation_done_canceled(item_id))?;
+                    }
+                    Err(error) => emit(Frame {
+                        header: SidecarEvent::GenerationDone {
+                            item_id,
+                            status: OperationStatus::Failed,
+                            sample_rate: None,
+                            duration_seconds: None,
+                            error: Some(error.to_string()),
+                        },
+                        payload: Vec::new(),
+                    })?,
+                }
+            }
+            SidecarCommand::CancelSynthesis { item_id } => {
+                self.cancel_active_generation();
+                emit(generation_done_canceled(item_id))?;
+            }
+            SidecarCommand::Shutdown => {
+                self.cancel_active_load();
+                self.cancel_active_generation();
+                return Ok(true);
+            }
+        }
+
+        Ok(false)
+    }
+
+    fn cancel_active_load(&mut self) {
+        if let Some(cancel) = self.active_load_cancel.take() {
+            cancel.store(true, Ordering::Relaxed);
+        }
+    }
+
+    fn cancel_active_generation(&mut self) {
+        if let Some(cancel) = self.active_generation_cancel.as_ref() {
+            cancel.store(true, Ordering::Relaxed);
+        }
+    }
+}
+
+fn run_non_streaming_generation<F>(
+    engine: &mut VoxCPMEngine,
+    item_id: String,
+    request: SynthesisRequest,
+    cancel: Arc<AtomicBool>,
+    emit: &mut F,
+) -> Result<()>
+where
+    F: FnMut(Frame<SidecarEvent>) -> Result<()>,
+{
+    let sample_rate = engine.sample_rate();
+    let progress_error = RefCell::new(None);
+    let samples = {
+        let emit_cell = RefCell::new(&mut *emit);
+        engine.generate_cancellable(
+            request,
+            |current, total| {
+                let event = Frame {
+                    header: SidecarEvent::GenerationProgress {
+                        item_id: item_id.clone(),
+                        current,
+                        total,
+                    },
+                    payload: Vec::new(),
+                };
+                if let Err(error) = (emit_cell.borrow_mut())(event) {
+                    *progress_error.borrow_mut() = Some(error);
+                }
+            },
+            Some(cancel.as_ref()),
+        )?
+    };
+    if let Some(error) = progress_error.into_inner() {
+        return Err(error);
+    }
+
+    let duration_seconds = duration_seconds(samples.len(), sample_rate);
+    emit(Frame {
+        header: SidecarEvent::AudioFinal {
+            item_id: item_id.clone(),
+            sample_rate,
+            duration_seconds,
+        },
+        payload: f32_samples_to_le_bytes(&samples),
+    })?;
+    emit(Frame {
+        header: SidecarEvent::GenerationDone {
+            item_id,
+            status: OperationStatus::Success,
+            sample_rate: Some(sample_rate),
+            duration_seconds: Some(duration_seconds),
+            error: None,
+        },
+        payload: Vec::new(),
+    })?;
+    Ok(())
+}
+
+fn run_streaming_generation<F>(
+    engine: &mut VoxCPMEngine,
+    item_id: String,
+    request: SynthesisRequest,
+    cancel: Arc<AtomicBool>,
+    emit: &mut F,
+) -> Result<()>
+where
+    F: FnMut(Frame<SidecarEvent>) -> Result<()>,
+{
+    let mut total_samples = 0usize;
+    let mut sample_rate = engine.sample_rate();
+    engine.generate_streaming_cancellable(
+        request,
+        |chunk| emit_streaming_chunk(&item_id, &mut total_samples, &mut sample_rate, chunk, emit),
+        Some(cancel.as_ref()),
+    )?;
+    let duration_seconds = duration_seconds(total_samples, sample_rate);
+    emit(Frame {
+        header: SidecarEvent::GenerationDone {
+            item_id,
+            status: OperationStatus::Success,
+            sample_rate: Some(sample_rate),
+            duration_seconds: Some(duration_seconds),
+            error: None,
+        },
+        payload: Vec::new(),
+    })?;
+    Ok(())
+}
+
+fn emit_streaming_chunk<F>(
+    item_id: &str,
+    total_samples: &mut usize,
+    sample_rate: &mut u32,
+    chunk: SynthesisChunk,
+    emit: &mut F,
+) -> Result<()>
+where
+    F: FnMut(Frame<SidecarEvent>) -> Result<()>,
+{
+    *sample_rate = chunk.sample_rate;
+    *total_samples += chunk.samples.len();
+    emit(Frame {
+        header: SidecarEvent::GenerationProgress {
+            item_id: item_id.to_string(),
+            current: chunk.generated_patch_count,
+            total: chunk.max_patches,
+        },
+        payload: Vec::new(),
+    })?;
+    emit(Frame {
+        header: SidecarEvent::AudioChunk {
+            item_id: item_id.to_string(),
+            sample_rate: chunk.sample_rate,
+            current: chunk.patch_index + 1,
+            total: chunk.max_patches,
+            is_final: chunk.is_final,
+        },
+        payload: f32_samples_to_le_bytes(&chunk.samples),
+    })
+}
+
+fn synthesis_request_from_dto(dto: SynthesisRequestDto) -> SynthesisRequest {
+    SynthesisRequest {
+        text: dto.text,
+        prompt_wav_path: dto.prompt_wav_path,
+        prompt_text: dto.prompt_text,
+        reference_wav_path: dto.reference_wav_path,
+        cfg_value: dto.cfg_value,
+        inference_timesteps: dto.inference_timesteps,
+        min_len: dto.min_len,
+        max_len: dto.max_len,
+        retry_badcase: dto.retry_badcase,
+        retry_badcase_max_times: dto.retry_badcase_max_times,
+        retry_badcase_ratio_threshold: dto.retry_badcase_ratio_threshold,
+        consolidate_n: dto.consolidate_n,
+        ..SynthesisRequest::default()
+    }
+}
+
+fn device_for_backend(backend: BackendKind) -> Result<Device> {
+    match backend {
+        BackendKind::Cpu => Ok(Device::Cpu),
+        BackendKind::Cuda => Device::new_cuda(0).context("initialize CUDA device 0"),
+    }
+}
+
+fn emit_frame<W>(writer: &mut W, frame: Frame<SidecarEvent>) -> Result<()>
+where
+    W: Write,
+{
+    write_frame(writer, &frame)
+}
+
+fn ready_frame() -> Frame<SidecarEvent> {
+    Frame {
+        header: SidecarEvent::Ready,
+        payload: Vec::new(),
+    }
+}
+
+fn model_load_done_canceled(load_id: u64) -> Frame<SidecarEvent> {
+    Frame {
+        header: SidecarEvent::ModelLoadDone {
+            load_id,
+            status: OperationStatus::Canceled,
+            sample_rate: None,
+            error: None,
+        },
+        payload: Vec::new(),
+    }
+}
+
+fn generation_done_canceled(item_id: String) -> Frame<SidecarEvent> {
+    Frame {
+        header: SidecarEvent::GenerationDone {
+            item_id,
+            status: OperationStatus::Canceled,
+            sample_rate: None,
+            duration_seconds: None,
+            error: None,
+        },
+        payload: Vec::new(),
+    }
+}
+
+fn duration_seconds(sample_count: usize, sample_rate: u32) -> f32 {
+    if sample_rate == 0 {
+        0.0
+    } else {
+        sample_count as f32 / sample_rate as f32
+    }
+}
+
+fn is_cancel_error(error: &anyhow::Error) -> bool {
+    let message = error.to_string().to_ascii_lowercase();
+    message.contains("cancelled") || message.contains("canceled")
+}
+
+fn is_clean_eof(error: &anyhow::Error) -> bool {
+    error
+        .downcast_ref::<std::io::Error>()
+        .map(|io| io.kind() == std::io::ErrorKind::UnexpectedEof)
+        .unwrap_or(false)
+        || error
+            .chain()
+            .filter_map(|cause| cause.downcast_ref::<std::io::Error>())
+            .any(|io| io.kind() == std::io::ErrorKind::UnexpectedEof)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+
+    use super::*;
+
+    #[test]
+    fn cancel_generation_sets_active_cancel_flag() {
+        let cancel = Arc::new(AtomicBool::new(false));
+        let mut sidecar = SidecarEngine {
+            active_generation_cancel: Some(cancel.clone()),
+            ..SidecarEngine::default()
+        };
+        let mut events = Vec::new();
+
+        sidecar
+            .handle_command(
+                SidecarCommand::CancelSynthesis {
+                    item_id: "item-1".to_string(),
+                },
+                &mut events,
+            )
+            .unwrap();
+
+        assert!(cancel.load(Ordering::Relaxed));
+        assert_eq!(
+            events,
+            vec![Frame {
+                header: SidecarEvent::GenerationDone {
+                    item_id: "item-1".to_string(),
+                    status: OperationStatus::Canceled,
+                    sample_rate: None,
+                    duration_seconds: None,
+                    error: None,
+                },
+                payload: Vec::new(),
+            }]
+        );
+    }
+}

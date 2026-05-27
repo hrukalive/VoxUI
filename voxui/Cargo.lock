@@ -6580,6 +6580,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "voxui-inference-sidecar"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "candle-core",
+ "serde_json",
+ "tracing",
+ "tracing-subscriber",
+ "voxui-inference",
+ "voxui-sidecar-protocol",
+]
+
+[[package]]
 name = "voxui-sidecar-protocol"
 version = "0.1.0"
 dependencies = [
