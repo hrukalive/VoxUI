@@ -33,6 +33,7 @@ impl SidecarEngine {
         );
 
         while let Ok(command) = commands.recv() {
+            let command = command?;
             let shutdown = self.handle_command_write(command, &mut writer)?;
             if shutdown {
                 break;
@@ -209,22 +210,8 @@ impl SidecarEngine {
                 let canceled = cancel.load(Ordering::Relaxed);
                 clear_matching_cancel(&self.active_generation_cancel, &cancel);
 
-                match result {
-                    Ok(()) if canceled => emit(generation_done_canceled(item_id))?,
-                    Ok(()) => {}
-                    Err(error) if canceled || is_cancel_error(&error) => {
-                        emit(generation_done_canceled(item_id))?;
-                    }
-                    Err(error) => emit(Frame {
-                        header: SidecarEvent::GenerationDone {
-                            item_id,
-                            status: OperationStatus::Failed,
-                            sample_rate: None,
-                            duration_seconds: None,
-                            error: Some(error.to_string()),
-                        },
-                        payload: Vec::new(),
-                    })?,
+                for frame in generation_done_for_result(item_id, result, canceled) {
+                    emit(frame)?;
                 }
             }
             SidecarCommand::CancelSynthesis { item_id } => {
@@ -260,7 +247,7 @@ fn spawn_command_reader<R>(
     mut reader: R,
     active_load_cancel: SharedCancel,
     active_generation_cancel: SharedCancel,
-) -> mpsc::Receiver<SidecarCommand>
+) -> mpsc::Receiver<Result<SidecarCommand>>
 where
     R: Read + Send + 'static,
 {
@@ -272,8 +259,8 @@ where
                 Ok(frame) => frame,
                 Err(error) if is_clean_eof(&error) => break,
                 Err(error) => {
-                    let _ = sender.send(SidecarCommand::Shutdown);
                     tracing::error!("failed to read sidecar command: {error}");
+                    let _ = sender.send(Err(error));
                     break;
                 }
             };
@@ -283,7 +270,7 @@ where
                 &active_load_cancel,
                 &active_generation_cancel,
             ) {
-                if sender.send(command).is_err() {
+                if sender.send(Ok(command)).is_err() {
                     break;
                 }
             }
@@ -302,13 +289,13 @@ fn handle_immediate_command(
             if let Some(cancel) = active_cancel(active_load_cancel) {
                 cancel.store(true, Ordering::Relaxed);
             }
-            None
+            Some(command)
         }
         SidecarCommand::CancelSynthesis { .. } => {
             if let Some(cancel) = active_cancel(active_generation_cancel) {
                 cancel.store(true, Ordering::Relaxed);
             }
-            None
+            Some(command)
         }
         SidecarCommand::Shutdown => {
             if let Some(cancel) = active_cancel(active_load_cancel) {
@@ -345,13 +332,52 @@ fn clear_matching_cancel(slot: &SharedCancel, cancel: &Arc<AtomicBool>) {
     }
 }
 
+#[derive(Debug, PartialEq)]
+struct GenerationOutcome {
+    sample_rate: u32,
+    duration_seconds: f32,
+}
+
+fn generation_done_for_result(
+    item_id: String,
+    result: Result<GenerationOutcome>,
+    canceled: bool,
+) -> Vec<Frame<SidecarEvent>> {
+    let frame = match result {
+        Ok(outcome) if !canceled => Frame {
+            header: SidecarEvent::GenerationDone {
+                item_id,
+                status: OperationStatus::Success,
+                sample_rate: Some(outcome.sample_rate),
+                duration_seconds: Some(outcome.duration_seconds),
+                error: None,
+            },
+            payload: Vec::new(),
+        },
+        Ok(_) => generation_done_canceled(item_id),
+        Err(error) if canceled || is_cancel_error(&error) => generation_done_canceled(item_id),
+        Err(error) => Frame {
+            header: SidecarEvent::GenerationDone {
+                item_id,
+                status: OperationStatus::Failed,
+                sample_rate: None,
+                duration_seconds: None,
+                error: Some(error.to_string()),
+            },
+            payload: Vec::new(),
+        },
+    };
+
+    vec![frame]
+}
+
 fn run_non_streaming_generation<F>(
     engine: &mut VoxCPMEngine,
     item_id: String,
     request: SynthesisRequest,
     cancel: Arc<AtomicBool>,
     emit: &mut F,
-) -> Result<()>
+) -> Result<GenerationOutcome>
 where
     F: FnMut(Frame<SidecarEvent>) -> Result<()>,
 {
@@ -390,17 +416,10 @@ where
         },
         payload: f32_samples_to_le_bytes(&samples),
     })?;
-    emit(Frame {
-        header: SidecarEvent::GenerationDone {
-            item_id,
-            status: OperationStatus::Success,
-            sample_rate: Some(sample_rate),
-            duration_seconds: Some(duration_seconds),
-            error: None,
-        },
-        payload: Vec::new(),
-    })?;
-    Ok(())
+    Ok(GenerationOutcome {
+        sample_rate,
+        duration_seconds,
+    })
 }
 
 fn run_streaming_generation<F>(
@@ -409,7 +428,7 @@ fn run_streaming_generation<F>(
     request: SynthesisRequest,
     cancel: Arc<AtomicBool>,
     emit: &mut F,
-) -> Result<()>
+) -> Result<GenerationOutcome>
 where
     F: FnMut(Frame<SidecarEvent>) -> Result<()>,
 {
@@ -421,17 +440,10 @@ where
         Some(cancel.as_ref()),
     )?;
     let duration_seconds = duration_seconds(total_samples, sample_rate);
-    emit(Frame {
-        header: SidecarEvent::GenerationDone {
-            item_id,
-            status: OperationStatus::Success,
-            sample_rate: Some(sample_rate),
-            duration_seconds: Some(duration_seconds),
-            error: None,
-        },
-        payload: Vec::new(),
-    })?;
-    Ok(())
+    Ok(GenerationOutcome {
+        sample_rate,
+        duration_seconds,
+    })
 }
 
 fn emit_streaming_chunk<F>(
@@ -594,7 +606,7 @@ mod tests {
     }
 
     #[test]
-    fn immediate_cancel_synthesis_sets_flag_without_forwarding_command() {
+    fn immediate_cancel_synthesis_sets_flag_and_forwards_command() {
         let cancel = Arc::new(AtomicBool::new(false));
         let load_cancel = SharedCancel::default();
         let generation_cancel = SharedCancel::default();
@@ -608,7 +620,27 @@ mod tests {
             &generation_cancel,
         );
 
-        assert!(forwarded.is_none());
+        assert_eq!(
+            forwarded,
+            Some(SidecarCommand::CancelSynthesis {
+                item_id: "item-1".to_string(),
+            })
+        );
         assert!(cancel.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn canceled_success_result_emits_only_canceled_generation_done() {
+        let frames = generation_done_for_result(
+            "item-1".to_string(),
+            Ok(GenerationOutcome {
+                sample_rate: 24_000,
+                duration_seconds: 1.5,
+            }),
+            true,
+        );
+
+        assert_eq!(frames.len(), 1);
+        assert_eq!(frames[0], generation_done_canceled("item-1".to_string()));
     }
 }
