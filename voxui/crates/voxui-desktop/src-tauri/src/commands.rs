@@ -1,22 +1,26 @@
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 
-use candle_core::Device;
 use tauri::{AppHandle, Emitter, State, Window};
 use tauri_plugin_dialog::DialogExt;
 use voxui_audio::{AudioPlayer, AudioSystem};
-use voxui_inference::VoxCPMEngine;
+use voxui_sidecar_protocol::{
+    BackendKind as ProtocolBackendKind, Frame, OperationStatus, SidecarCommand, SidecarEvent,
+    SynthesisRequestDto,
+};
 
 use crate::app_core::AppCore;
 use crate::generation_queue::HistoryItem;
+use crate::inference_sidecar::{SidecarProcess, SidecarReaderEvent};
 use crate::types::{
     AppSnapshot, AudioStateDto, BackendKind, CommandResult, ConfigPatch, GenerationDoneEvent,
     GenerationProgressEvent, ModelChoice, PlaybackStateEvent,
 };
 
 pub type SharedAppCore = Arc<Mutex<AppCore>>;
+
+static SIDECAR_PROCESS: OnceLock<Mutex<Option<SidecarProcess>>> = OnceLock::new();
 
 pub(crate) fn with_core<T>(
     state: State<'_, SharedAppCore>,
@@ -107,7 +111,7 @@ pub fn load_model(
     state: State<'_, SharedAppCore>,
     choice_id: String,
 ) -> Result<crate::types::LoadStartResult, String> {
-    let (choice, backend, load_id, cancel) = with_core(state.clone(), |core| {
+    let (choice, backend, load_id) = with_core(state.clone(), |core| {
         let choice = core
             .selected_choice()
             .map_err(|err| anyhow::anyhow!(err.to_string()))?;
@@ -116,68 +120,18 @@ pub fn load_model(
                 "requested choice does not match selected model"
             ));
         }
-        let (load_id, cancel) = core.mark_load_started()?;
-        Ok((choice, core.config().backend, load_id, cancel))
+        let (load_id, _) = core.mark_load_started()?;
+        Ok((choice, core.config().backend, load_id))
     })?;
 
     let shared = state.inner().clone();
-    let spawn_result = spawn_background("voxui-model-load", move || {
-        let result = load_engine_for_choice(&window, &choice, backend, &cancel);
-        let done = match result {
-            Ok(engine) => {
-                let sample_rate = engine.sample_rate();
-                let loaded_model_id = if let Ok(mut core) = shared.lock() {
-                    if !core.mark_load_success(load_id, choice.id.clone(), sample_rate) {
-                        return;
-                    }
-                    core.snapshot().loaded_model_id
-                } else {
-                    None
-                };
-                if loaded_model_id.is_none() {
-                    crate::types::ModelLoadDoneEvent {
-                        status: "error".to_string(),
-                        selected_model_id: Some(choice.id.clone()),
-                        loaded_model_id: None,
-                        error: Some("app state lock poisoned".to_string()),
-                    }
-                } else {
-                    crate::types::ModelLoadDoneEvent {
-                        status: "success".to_string(),
-                        selected_model_id: Some(choice.id.clone()),
-                        loaded_model_id,
-                        error: None,
-                    }
-                }
-            }
-            Err(error) => {
-                if let Ok(mut core) = shared.lock() {
-                    if !core.mark_load_finished_without_swap_for_load(load_id) {
-                        return;
-                    }
-                    let loaded = core.snapshot().loaded_model_id;
-                    let _ = window.emit(
-                        "model_load_done",
-                        crate::types::ModelLoadDoneEvent {
-                            status: "error".to_string(),
-                            selected_model_id: Some(choice.id.clone()),
-                            loaded_model_id: loaded,
-                            error: Some(error),
-                        },
-                    );
-                    return;
-                }
-                crate::types::ModelLoadDoneEvent {
-                    status: "error".to_string(),
-                    selected_model_id: Some(choice.id.clone()),
-                    loaded_model_id: None,
-                    error: Some("app state lock poisoned".to_string()),
-                }
-            }
-        };
-        let _ = window.emit("model_load_done", done);
-    });
-    if let Err(error) = spawn_result {
+    let command = SidecarCommand::LoadModel {
+        load_id,
+        model_dir: choice.model_dir.clone(),
+        lora_path: choice.lora_path.clone(),
+        backend: protocol_backend(backend),
+    };
+    if let Err(error) = send_sidecar_command(&window, shared, command) {
         let _ = with_core(state, |core| {
             core.mark_load_finished_without_swap_for_load(load_id);
             Ok(())
@@ -228,23 +182,40 @@ pub fn regenerate(
 }
 
 #[tauri::command]
-pub fn cancel_model_load(state: State<'_, SharedAppCore>) -> Result<CommandResult, String> {
-    with_core(state, |core| {
-        core.cancel_model_load_state();
-        Ok(CommandResult { ok: true })
-    })
+pub fn cancel_model_load(
+    window: Window,
+    state: State<'_, SharedAppCore>,
+) -> Result<CommandResult, String> {
+    let load_id = with_core(state.clone(), |core| Ok(core.cancel_model_load_state()))?;
+    if let Some(load_id) = load_id {
+        let _ = send_sidecar_command(
+            &window,
+            state.inner().clone(),
+            SidecarCommand::CancelLoad { load_id },
+        );
+    }
+    Ok(CommandResult { ok: true })
 }
 
 #[tauri::command]
 pub fn cancel_generation(
+    window: Window,
     state: State<'_, SharedAppCore>,
     item_id: String,
 ) -> Result<CommandResult, String> {
-    with_core(state, |core| {
+    let canceled = with_core(state.clone(), |core| {
         Ok(CommandResult {
             ok: core.cancel_generation_item(&item_id),
         })
-    })
+    })?;
+    if canceled.ok {
+        let _ = send_sidecar_command(
+            &window,
+            state.inner().clone(),
+            SidecarCommand::CancelSynthesis { item_id },
+        );
+    }
+    Ok(canceled)
 }
 
 #[tauri::command]
@@ -286,55 +257,6 @@ pub fn stop_audio(
     Ok(CommandResult { ok: true })
 }
 
-fn load_engine_for_choice(
-    window: &Window,
-    choice: &crate::types::ModelChoice,
-    backend: BackendKind,
-    cancel: &AtomicBool,
-) -> Result<VoxCPMEngine, String> {
-    let total_bytes = choice.model_bytes + choice.lora_bytes;
-    window
-        .emit(
-            "model_load_progress",
-            crate::types::ModelLoadProgressEvent {
-                phase: "reading".to_string(),
-                loaded_bytes: total_bytes,
-                total_bytes,
-                component: None,
-                component_index: 0,
-                component_total: 0,
-            },
-        )
-        .map_err(|err| err.to_string())?;
-
-    let device = device_for_backend(backend)?;
-    let mut engine = VoxCPMEngine::load_with_progress(
-        &choice.model_dir,
-        device,
-        |current, total| {
-            let _ = window.emit(
-                "model_load_progress",
-                crate::types::ModelLoadProgressEvent {
-                    phase: "device_loading".to_string(),
-                    loaded_bytes: total_bytes,
-                    total_bytes,
-                    component: None,
-                    component_index: current,
-                    component_total: total,
-                },
-            );
-        },
-        Some(cancel),
-    )
-    .map_err(|err| err.to_string())?;
-
-    if let Some(lora_path) = choice.lora_path.as_ref() {
-        engine.load_lora(lora_path).map_err(|err| err.to_string())?;
-    }
-
-    Ok(engine)
-}
-
 fn kick_generation_queue(window: &Window, shared: SharedAppCore) {
     let next_run = match shared.lock() {
         Ok(mut core) => core.begin_next_generation_run(),
@@ -342,28 +264,335 @@ fn kick_generation_queue(window: &Window, shared: SharedAppCore) {
     };
 
     match next_run {
-        Ok(Some(run)) => spawn_generation(window.clone(), shared, run),
+        Ok(Some(run)) => {
+            let item_id = run.item_id.clone();
+            let command = SidecarCommand::Synthesize {
+                item_id: item_id.clone(),
+                request: synthesis_request_dto(run.request.clone()),
+                streaming: run.streaming,
+            };
+            if let Err(error) = send_sidecar_command(window, shared.clone(), command) {
+                let done = match shared.lock() {
+                    Ok(mut core) => {
+                        let error = core.finish_generation_failure(run, error);
+                        GenerationDoneEvent {
+                            item_id,
+                            status: "failed".to_string(),
+                            error: Some(error),
+                            sample_rate: None,
+                            duration_seconds: None,
+                        }
+                    }
+                    Err(_) => GenerationDoneEvent {
+                        item_id,
+                        status: "failed".to_string(),
+                        error: Some("app state lock poisoned".to_string()),
+                        sample_rate: None,
+                        duration_seconds: None,
+                    },
+                };
+                let _ = window.emit("generation_done", done);
+                kick_generation_queue(window, shared);
+            }
+        }
         Ok(None) => {}
         Err(error) => tracing::warn!("failed to start queued generation: {error}"),
     }
 }
 
-fn device_for_backend(backend: BackendKind) -> Result<Device, String> {
+fn protocol_backend(backend: BackendKind) -> ProtocolBackendKind {
     match backend {
-        BackendKind::Cpu => Ok(Device::Cpu),
-        BackendKind::Cuda => {
-            #[cfg(feature = "cuda")]
-            {
-                Device::new_cuda(0).map_err(|error| error.to_string())
-            }
-            #[cfg(not(feature = "cuda"))]
-            {
-                Err(
-                    "CUDA backend requested but voxui-desktop was built without CUDA support"
-                        .to_string(),
-                )
+        BackendKind::Cpu => ProtocolBackendKind::Cpu,
+        BackendKind::Cuda => ProtocolBackendKind::Cuda,
+    }
+}
+
+fn sidecar_slot() -> &'static Mutex<Option<SidecarProcess>> {
+    SIDECAR_PROCESS.get_or_init(|| Mutex::new(None))
+}
+
+fn send_sidecar_command(
+    window: &Window,
+    shared: SharedAppCore,
+    command: SidecarCommand,
+) -> Result<(), String> {
+    ensure_sidecar(window, shared)?;
+    let mut guard = sidecar_slot()
+        .lock()
+        .map_err(|_| "sidecar process lock poisoned".to_string())?;
+    let Some(process) = guard.as_mut() else {
+        return Err("sidecar process is unavailable".to_string());
+    };
+    if let Err(error) = process.send(command) {
+        let _ = process.kill();
+        *guard = None;
+        return Err(error.to_string());
+    }
+    Ok(())
+}
+
+fn ensure_sidecar(window: &Window, shared: SharedAppCore) -> Result<(), String> {
+    let mut guard = sidecar_slot()
+        .lock()
+        .map_err(|_| "sidecar process lock poisoned".to_string())?;
+    if guard.is_some() {
+        return Ok(());
+    }
+
+    let path = resolve_sidecar_path()?;
+    let (process, receiver) = SidecarProcess::spawn(&path).map_err(|error| error.to_string())?;
+    spawn_sidecar_reader(window.clone(), shared, receiver)?;
+    *guard = Some(process);
+    Ok(())
+}
+
+fn resolve_sidecar_path() -> Result<std::path::PathBuf, String> {
+    let exe = std::env::current_exe().map_err(|error| error.to_string())?;
+    let dir = exe
+        .parent()
+        .ok_or_else(|| format!("executable path has no parent: {}", exe.display()))?;
+    let candidates = [
+        dir.join("voxui-inference-sidecar.exe"),
+        dir.join("voxui-inference-sidecar"),
+    ];
+    candidates
+        .into_iter()
+        .find(|path| path.exists())
+        .ok_or_else(|| {
+            format!(
+                "voxui-inference-sidecar was not found next to {}",
+                exe.display()
+            )
+        })
+}
+
+fn spawn_sidecar_reader(
+    window: Window,
+    shared: SharedAppCore,
+    receiver: mpsc::Receiver<SidecarReaderEvent>,
+) -> Result<(), String> {
+    spawn_background("voxui-sidecar-reader", move || {
+        for event in receiver {
+            match event {
+                SidecarReaderEvent::Frame(frame) => {
+                    handle_sidecar_event(&window, shared.clone(), frame);
+                }
+                SidecarReaderEvent::Error(error) => {
+                    tracing::error!("sidecar reader error: {error}");
+                    let _ = window.emit(
+                        "generation_done",
+                        GenerationDoneEvent {
+                            item_id: String::new(),
+                            status: "failed".to_string(),
+                            error: Some(error),
+                            sample_rate: None,
+                            duration_seconds: None,
+                        },
+                    );
+                    break;
+                }
+                SidecarReaderEvent::Eof => break,
             }
         }
+        if let Ok(mut guard) = sidecar_slot().lock() {
+            *guard = None;
+        }
+    })
+}
+
+fn handle_sidecar_event(window: &Window, shared: SharedAppCore, frame: Frame<SidecarEvent>) {
+    match frame.header {
+        SidecarEvent::Ready => {}
+        SidecarEvent::ModelLoadProgress {
+            phase,
+            loaded_bytes,
+            total_bytes,
+            component,
+            component_index,
+            component_total,
+            ..
+        } => {
+            let _ = window.emit(
+                "model_load_progress",
+                crate::types::ModelLoadProgressEvent {
+                    phase,
+                    loaded_bytes,
+                    total_bytes,
+                    component,
+                    component_index,
+                    component_total,
+                },
+            );
+        }
+        SidecarEvent::ModelLoadDone {
+            load_id,
+            status,
+            sample_rate,
+            error,
+        } => {
+            let done = match shared.lock() {
+                Ok(mut core) => {
+                    match status {
+                        OperationStatus::Success => {
+                            if let (Ok(choice), Some(sample_rate)) =
+                                (core.selected_choice(), sample_rate)
+                            {
+                                core.mark_load_success(load_id, choice.id, sample_rate);
+                            }
+                        }
+                        OperationStatus::Canceled | OperationStatus::Failed => {
+                            core.mark_load_finished_without_swap_for_load(load_id);
+                        }
+                    }
+                    let snapshot = core.snapshot();
+                    crate::types::ModelLoadDoneEvent {
+                        status: operation_status_label(status).to_string(),
+                        selected_model_id: snapshot.selected_model_id,
+                        loaded_model_id: snapshot.loaded_model_id,
+                        error,
+                    }
+                }
+                Err(_) => crate::types::ModelLoadDoneEvent {
+                    status: "failed".to_string(),
+                    selected_model_id: None,
+                    loaded_model_id: None,
+                    error: Some("app state lock poisoned".to_string()),
+                },
+            };
+            let _ = window.emit("model_load_done", done);
+        }
+        SidecarEvent::GenerationProgress {
+            item_id,
+            current,
+            total,
+        } => {
+            if let Ok(mut core) = shared.lock() {
+                core.mark_generation_progress(&item_id, current, total);
+            }
+            let _ = window.emit(
+                "generation_progress",
+                GenerationProgressEvent {
+                    item_id,
+                    current,
+                    total,
+                },
+            );
+        }
+        SidecarEvent::AudioChunk {
+            item_id,
+            sample_rate,
+            ..
+        } => {
+            if let Ok(samples) =
+                crate::inference_sidecar::sidecar_samples_from_payload(&frame.payload)
+            {
+                if let Ok(mut core) = shared.lock() {
+                    let _ = core.append_generation_audio_chunk(&item_id, samples, sample_rate);
+                }
+            }
+        }
+        SidecarEvent::AudioFinal {
+            item_id,
+            sample_rate,
+            ..
+        } => {
+            if let Ok(samples) =
+                crate::inference_sidecar::sidecar_samples_from_payload(&frame.payload)
+            {
+                if let Ok(mut core) = shared.lock() {
+                    let _ = core.append_generation_audio_chunk(&item_id, samples, sample_rate);
+                }
+            }
+        }
+        SidecarEvent::GenerationDone {
+            item_id,
+            status,
+            sample_rate,
+            duration_seconds,
+            error,
+        } => {
+            let mut playback_run = None;
+            let done = match shared.lock() {
+                Ok(mut core) => {
+                    match status {
+                        OperationStatus::Success => {
+                            if let (Some(rate), Some(duration)) = (sample_rate, duration_seconds) {
+                                let _ = core.finish_generation_success_from_sidecar(
+                                    &item_id, rate, duration,
+                                );
+                                playback_run =
+                                    core.begin_or_queue_auto_playback(&item_id).ok().flatten();
+                            }
+                        }
+                        OperationStatus::Canceled => {
+                            let _ = core.finish_generation_canceled_from_sidecar(&item_id);
+                        }
+                        OperationStatus::Failed => {
+                            let _ = core.finish_generation_failure_from_sidecar(
+                                &item_id,
+                                error
+                                    .clone()
+                                    .unwrap_or_else(|| "generation failed".to_string()),
+                            );
+                        }
+                    }
+                    GenerationDoneEvent {
+                        item_id: item_id.clone(),
+                        status: operation_status_label(status).to_string(),
+                        error,
+                        sample_rate,
+                        duration_seconds,
+                    }
+                }
+                Err(_) => GenerationDoneEvent {
+                    item_id: item_id.clone(),
+                    status: "failed".to_string(),
+                    error: Some("app state lock poisoned".to_string()),
+                    sample_rate: None,
+                    duration_seconds: None,
+                },
+            };
+            let _ = window.emit("generation_done", done);
+            if let Some(playback_run) = playback_run {
+                let _ = window.emit(
+                    "playback_state",
+                    PlaybackStateEvent {
+                        item_id: Some(playback_run.item_id.clone()),
+                        state: "playing".to_string(),
+                    },
+                );
+                spawn_playback(window.clone(), shared.clone(), playback_run);
+            }
+            kick_generation_queue(window, shared);
+        }
+        SidecarEvent::Error { message } => {
+            tracing::error!("sidecar error: {message}");
+        }
+    }
+}
+
+fn operation_status_label(status: OperationStatus) -> &'static str {
+    match status {
+        OperationStatus::Success => "success",
+        OperationStatus::Canceled => "canceled",
+        OperationStatus::Failed => "failed",
+    }
+}
+
+fn synthesis_request_dto(request: voxui_inference::SynthesisRequest) -> SynthesisRequestDto {
+    SynthesisRequestDto {
+        text: request.text,
+        prompt_wav_path: request.prompt_wav_path,
+        prompt_text: request.prompt_text,
+        reference_wav_path: request.reference_wav_path,
+        cfg_value: request.cfg_value,
+        inference_timesteps: request.inference_timesteps,
+        min_len: request.min_len,
+        max_len: request.max_len,
+        retry_badcase: request.retry_badcase,
+        retry_badcase_max_times: request.retry_badcase_max_times,
+        retry_badcase_ratio_threshold: request.retry_badcase_ratio_threshold,
+        consolidate_n: request.consolidate_n,
     }
 }
 
@@ -374,115 +603,6 @@ fn browse_wav_file(app: AppHandle) -> Result<Option<String>, String> {
         .add_filter("WAV audio", &["wav"])
         .blocking_pick_file()
         .map(|path| path.to_string()))
-}
-
-fn spawn_generation(window: Window, shared: SharedAppCore, run: crate::app_core::GenerationRun) {
-    let event_item_id = run.item_id.clone();
-    let worker_window = window.clone();
-    if let Err(error) = spawn_background("voxui-generation", move || {
-        let progress_window = worker_window.clone();
-        let progress_shared = shared.clone();
-        let progress_item_id = run.item_id.clone();
-        let result = AppCore::execute_generation_run(run, |current, total| {
-            if let Ok(mut core) = progress_shared.lock() {
-                core.mark_generation_progress(&progress_item_id, current, total);
-            }
-            let _ = progress_window.emit(
-                "generation_progress",
-                GenerationProgressEvent {
-                    item_id: progress_item_id.clone(),
-                    current,
-                    total,
-                },
-            );
-        });
-
-        let (done, playback_run) = match result {
-            Ok((run, samples, duration_seconds)) => {
-                let item_id = run.item_id.clone();
-                let sample_rate = run.sample_rate;
-                let was_cancelled = run.cancel.load(Ordering::SeqCst);
-                let playback_run = if was_cancelled {
-                    if let Ok(mut core) = shared.lock() {
-                        core.finish_generation_canceled(run);
-                    }
-                    None
-                } else if let Ok(mut core) = shared.lock() {
-                    core.finish_generation_success(run, samples, duration_seconds);
-                    core.begin_or_queue_auto_playback(&item_id).ok().flatten()
-                } else {
-                    None
-                };
-                (
-                    GenerationDoneEvent {
-                        item_id,
-                        status: if was_cancelled {
-                            "canceled".to_string()
-                        } else {
-                            "ready".to_string()
-                        },
-                        error: None,
-                        sample_rate: (!was_cancelled).then_some(sample_rate),
-                        duration_seconds: (!was_cancelled).then_some(duration_seconds),
-                    },
-                    playback_run,
-                )
-            }
-            Err((run, error)) => {
-                let item_id = run.item_id.clone();
-                let is_cancelled =
-                    run.cancel.load(Ordering::SeqCst) || error.to_lowercase().contains("cancel");
-                let error = match shared.lock() {
-                    Ok(mut core) => {
-                        if is_cancelled {
-                            core.finish_generation_canceled(run);
-                            None
-                        } else {
-                            Some(core.finish_generation_failure(run, error))
-                        }
-                    }
-                    Err(_) => Some(error),
-                };
-                (
-                    GenerationDoneEvent {
-                        item_id,
-                        status: if is_cancelled {
-                            "canceled".to_string()
-                        } else {
-                            "failed".to_string()
-                        },
-                        error,
-                        sample_rate: None,
-                        duration_seconds: None,
-                    },
-                    None,
-                )
-            }
-        };
-        let _ = worker_window.emit("generation_done", done);
-        if let Some(playback_run) = playback_run {
-            let _ = worker_window.emit(
-                "playback_state",
-                PlaybackStateEvent {
-                    item_id: Some(playback_run.item_id.clone()),
-                    state: "playing".to_string(),
-                },
-            );
-            spawn_playback(worker_window.clone(), shared.clone(), playback_run);
-        }
-        kick_generation_queue(&worker_window, shared.clone());
-    }) {
-        let _ = window.emit(
-            "generation_done",
-            GenerationDoneEvent {
-                item_id: event_item_id,
-                status: "skipped".to_string(),
-                error: Some(error),
-                sample_rate: None,
-                duration_seconds: None,
-            },
-        );
-    }
 }
 
 fn spawn_playback(window: Window, shared: SharedAppCore, run: crate::app_core::PlaybackRun) {

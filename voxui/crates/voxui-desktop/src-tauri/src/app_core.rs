@@ -364,15 +364,9 @@ impl AppCore {
         F: Fn(usize, usize),
     {
         let run = self.begin_generation_run(item_id)?;
-        let result = Self::execute_generation_run(run, progress);
-        match result {
-            Ok((run, samples, duration_seconds)) => {
-                let sample_rate = run.sample_rate;
-                self.finish_generation_success(run, samples, duration_seconds);
-                Ok((sample_rate, duration_seconds))
-            }
-            Err((run, error)) => Err(self.finish_generation_failure(run, error)),
-        }
+        progress(0, 0);
+        let error = "generation execution is owned by the inference sidecar".to_string();
+        Err(self.finish_generation_failure(run, error))
     }
 
     pub fn begin_generation_run(&mut self, item_id: &str) -> Result<GenerationRun, String> {
@@ -486,11 +480,62 @@ impl AppCore {
         let _ = duration_seconds;
     }
 
+    pub fn append_generation_audio_chunk(
+        &mut self,
+        item_id: &str,
+        samples: Vec<f32>,
+        sample_rate: u32,
+    ) -> Result<()> {
+        if self.active_generation_item_id.as_deref() != Some(item_id) {
+            bail!("stale audio chunk for inactive item: {item_id}");
+        }
+        self.audio_cache
+            .append(item_id.to_string(), samples, sample_rate)?;
+        Ok(())
+    }
+
+    pub fn finish_generation_success_from_sidecar(
+        &mut self,
+        item_id: &str,
+        sample_rate: u32,
+        duration_seconds: f32,
+    ) -> Result<()> {
+        if self.active_generation_item_id.as_deref() != Some(item_id) {
+            bail!("stale generation completion for inactive item: {item_id}");
+        }
+        self.clear_active_generation(item_id);
+        if !self.audio_cache.contains(item_id) {
+            self.audio_cache.insert(
+                item_id.to_string(),
+                GeneratedAudio {
+                    samples: Vec::new(),
+                    sample_rate,
+                },
+            );
+        }
+        self.queue.mark_ready(item_id);
+        let _ = duration_seconds;
+        Ok(())
+    }
+
     pub fn finish_generation_failure(&mut self, run: GenerationRun, error: String) -> String {
         let item_id = run.item_id;
         self.clear_active_generation(&item_id);
         self.queue.mark_failed(&item_id, error.clone());
         error
+    }
+
+    pub fn finish_generation_failure_from_sidecar(
+        &mut self,
+        item_id: &str,
+        error: String,
+    ) -> Result<String> {
+        if self.active_generation_item_id.as_deref() != Some(item_id) {
+            bail!("stale generation failure for inactive item: {item_id}");
+        }
+        self.clear_active_generation(item_id);
+        self.queue.mark_failed(item_id, error.clone());
+        Ok(error)
     }
 
     pub fn finish_generation_canceled(&mut self, run: GenerationRun) {
@@ -501,17 +546,13 @@ impl AppCore {
         }
     }
 
-    pub fn execute_generation_run<F>(
-        run: GenerationRun,
-        _progress: F,
-    ) -> std::result::Result<(GenerationRun, Vec<f32>, f32), (GenerationRun, String)>
-    where
-        F: Fn(usize, usize),
-    {
-        Err((
-            run,
-            "generation execution is owned by the inference sidecar".to_string(),
-        ))
+    pub fn finish_generation_canceled_from_sidecar(&mut self, item_id: &str) -> Result<()> {
+        if self.active_generation_item_id.as_deref() != Some(item_id) {
+            bail!("stale generation cancellation for inactive item: {item_id}");
+        }
+        self.clear_active_generation(item_id);
+        let _ = self.queue.mark_canceled(item_id);
+        Ok(())
     }
 
     pub fn synthesis_request_for_test(
@@ -546,11 +587,14 @@ impl AppCore {
         })
     }
 
-    pub fn cancel_model_load_state(&mut self) {
+    pub fn cancel_model_load_state(&mut self) -> Option<u64> {
+        let mut canceled_load_id = None;
         if let Some(active_load) = self.active_load.take() {
+            canceled_load_id = Some(active_load.id);
             active_load.cancel.store(true, Ordering::SeqCst);
         }
         self.load_state = LoadUiState::Idle;
+        canceled_load_id
     }
 
     pub fn selected_choice(&self) -> Result<ModelChoice> {
@@ -874,6 +918,24 @@ mod tests {
 
         assert_eq!(run.item_id, item.id);
         assert_eq!(run.sample_rate, 16_000);
+    }
+
+    #[test]
+    fn streaming_audio_chunks_accumulate_until_done() {
+        let mut core = AppCore::from_config(AppConfig::default()).unwrap();
+        core.set_loaded_model_for_test("model".to_string());
+        let item = core.enqueue_generation("hello".to_string()).unwrap();
+        core.begin_generation_for_test(&item.id).unwrap();
+
+        core.append_generation_audio_chunk(&item.id, vec![0.1, 0.2], 16_000)
+            .unwrap();
+        core.append_generation_audio_chunk(&item.id, vec![0.3], 16_000)
+            .unwrap();
+        core.finish_generation_success_from_sidecar(&item.id, 16_000, 3.0 / 16_000.0)
+            .unwrap();
+
+        assert!(core.has_audio(&item.id));
+        assert_eq!(core.audio_cache.get(&item.id).unwrap().samples.len(), 3);
     }
 
     #[test]

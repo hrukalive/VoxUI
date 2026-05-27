@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+use anyhow::{bail, Result};
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct GeneratedAudio {
     pub samples: Vec<f32>,
@@ -14,6 +16,27 @@ pub struct GeneratedAudioCache {
 impl GeneratedAudioCache {
     pub fn insert(&mut self, id: String, audio: GeneratedAudio) {
         self.audios.insert(id, audio);
+    }
+
+    pub fn append(&mut self, id: String, samples: Vec<f32>, sample_rate: u32) -> Result<()> {
+        match self.audios.get_mut(&id) {
+            Some(audio) => {
+                if audio.sample_rate != sample_rate {
+                    bail!("sample rate changed for generated audio item {id}");
+                }
+                audio.samples.extend(samples);
+            }
+            None => {
+                self.audios.insert(
+                    id,
+                    GeneratedAudio {
+                        samples,
+                        sample_rate,
+                    },
+                );
+            }
+        }
+        Ok(())
     }
 
     pub fn contains(&self, id: &str) -> bool {
