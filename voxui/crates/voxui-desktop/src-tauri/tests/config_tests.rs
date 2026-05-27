@@ -34,6 +34,23 @@ fn tauri_config_exposes_global_tauri_api() {
 }
 
 #[test]
+fn tauri_config_uses_custom_icon_assets() {
+    let config_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tauri.conf.json");
+    let config_text = fs::read_to_string(config_path).unwrap();
+    let config: serde_json::Value = serde_json::from_str(&config_text).unwrap();
+
+    assert_eq!(
+        config["bundle"]["icon"],
+        serde_json::json!([
+            "icons/32x32.png",
+            "icons/128x128.png",
+            "icons/128x128@2x.png",
+            "icons/icon.ico"
+        ])
+    );
+}
+
+#[test]
 fn config_defaults_to_system_language_and_preferred_backend() {
     let config = AppConfig::default();
     let expected_backend = if cfg!(feature = "cuda") {

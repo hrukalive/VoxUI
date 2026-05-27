@@ -99,6 +99,19 @@ pub fn App() -> impl IntoView {
         .await;
     });
 
+    let commit_config_patch = move |patch: ConfigPatch| {
+        set_snapshot.update(|snapshot| {
+            if let Some(snapshot) = snapshot.as_mut() {
+                apply_optimistic_patch(snapshot, &patch);
+            }
+        });
+        spawn_local(async move {
+            if let Ok(next_snapshot) = crate::tauri_api::set_config_patch(patch).await {
+                set_snapshot.set(Some(next_snapshot));
+            }
+        });
+    };
+
     view! {
         <div
             class="app-shell"
@@ -121,8 +134,8 @@ pub fn App() -> impl IntoView {
                         labels=labels
                         models=snapshot.models
                         selected_model_id=snapshot.selected_model_id
-                        loaded_model_id=snapshot.loaded_model_id
                         load_disabled=load_disabled
+                        volume=snapshot.config.volume
                         on_model_select=move |model_id| {
                             spawn_local(async move {
                                 let selected_model_id = if model_id.is_empty() {
@@ -138,6 +151,12 @@ pub fn App() -> impl IntoView {
                                 {
                                     set_snapshot.set(Some(next_snapshot));
                                 }
+                            });
+                        }
+                        on_volume_change=move |volume| {
+                            commit_config_patch(ConfigPatch {
+                                volume: Some(volume),
+                                ..ConfigPatch::default()
                             });
                         }
                         on_load=move || {
@@ -221,18 +240,7 @@ pub fn App() -> impl IntoView {
                 active_page=move || settings_page.get()
                 on_close=move || set_settings_open.set(false)
                 on_page_select=move |page| set_settings_page.set(page)
-                on_config_patch=move |patch| {
-                    set_snapshot.update(|snapshot| {
-                        if let Some(snapshot) = snapshot.as_mut() {
-                            apply_optimistic_patch(snapshot, &patch);
-                        }
-                    });
-                    spawn_local(async move {
-                        if let Ok(next_snapshot) = crate::tauri_api::set_config_patch(patch).await {
-                            set_snapshot.set(Some(next_snapshot));
-                        }
-                    });
-                }
+                on_config_patch=commit_config_patch
                 on_browse_model_dir=move || {
                     spawn_local(async move {
                         if let Ok(Some(path)) = crate::tauri_api::browse_model_dir().await {

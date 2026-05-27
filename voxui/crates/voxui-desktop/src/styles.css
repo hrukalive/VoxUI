@@ -159,6 +159,32 @@ body {
   height: 34px;
 }
 
+.header-volume-control {
+  display: grid;
+  grid-template-columns: 42px 120px;
+  align-items: center;
+  gap: 8px;
+  height: 34px;
+  min-width: 170px;
+  border: 1px solid var(--control-border);
+  border-radius: 5px;
+  background: var(--control-bg-muted);
+  padding: 0 10px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.header-volume-control span {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.header-volume-control input[type="range"] {
+  width: 100%;
+  min-width: 0;
+  accent-color: var(--primary-bg);
+}
+
 .custom-select {
   position: relative;
   min-width: 0;

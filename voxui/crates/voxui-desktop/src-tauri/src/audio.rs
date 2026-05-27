@@ -74,12 +74,6 @@ pub fn resolve_output_device_name(
     default_device
 }
 
-pub fn apply_volume(samples: &[f32], volume: f32) -> Vec<f32> {
-    let volume = volume.clamp(0.0, 1.0);
-
-    samples.iter().map(|sample| sample * volume).collect()
-}
-
 pub fn sine_with_fades(
     sample_rate: u32,
     len_samples: usize,

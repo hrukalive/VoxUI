@@ -87,11 +87,15 @@ pub fn test_audio(state: State<'_, SharedAppCore>) -> Result<CommandResult, Stri
     )
     .map_err(|err| err.to_string())?;
     let sample_rate = 48_000;
-    let samples = crate::audio::sine_with_fades(sample_rate, 48_000, 440.0, config.volume);
+    let samples = crate::audio::sine_with_fades(sample_rate, 48_000, 440.0, 1.0);
     let mut player =
         AudioPlayer::new(&host, &device, sample_rate).map_err(|err| err.to_string())?;
     player
-        .play_blocking(samples)
+        .play_with_volume(samples, config.volume)
+        .and_then(|done| {
+            done.recv()
+                .map_err(|_| anyhow::anyhow!("playback channel closed unexpectedly"))
+        })
         .map_err(|err| err.to_string())?;
 
     Ok(CommandResult { ok: true })
@@ -517,8 +521,8 @@ fn spawn_playback(window: Window, shared: SharedAppCore, run: crate::app_core::P
             Ok(device) => {
                 match AudioPlayer::new(&host, &device, run.audio.sample_rate).and_then(
                     |mut player| {
-                        let samples = crate::audio::apply_volume(&run.audio.samples, config.volume);
-                        let done = player.play(samples)?;
+                        let done = player
+                            .play_with_volume_handle(run.audio.samples, run.volume.clone())?;
                         wait_for_playback(done, run.stop, &mut player);
                         Ok(())
                     },

@@ -629,6 +629,35 @@ fn canceling_an_active_generation_marks_it_canceled() {
 }
 
 #[test]
+fn volume_patch_updates_active_playback_handle() {
+    let mut core = AppCore::from_config(AppConfig {
+        volume: 0.25,
+        ..AppConfig::default()
+    })
+    .unwrap();
+    core.set_loaded_model_for_test("model".to_string());
+    let item = core.enqueue_generation("ready".to_string()).unwrap();
+    core.set_generated_audio_for_test(item.id.clone(), vec![0.0; 8], 16_000);
+
+    let playback = core.begin_playback(&item.id).unwrap();
+    core.apply_patch(ConfigPatch {
+        model_root: None,
+        selected_model_id: None,
+        language: None,
+        theme: None,
+        backend: None,
+        audio_host: None,
+        audio_device: None,
+        volume: Some(0.75),
+        max_input_chars: None,
+        generation: None,
+    })
+    .unwrap();
+
+    assert_eq!(playback.volume.get(), 0.75);
+}
+
+#[test]
 fn canceling_active_regeneration_keeps_previous_audio_playable() {
     let mut core = AppCore::from_config(AppConfig::default()).unwrap();
     core.set_loaded_model_for_test("model".to_string());

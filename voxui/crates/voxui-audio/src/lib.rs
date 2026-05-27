@@ -7,10 +7,12 @@ use ringbuf::{
     traits::{Consumer, Observer, Producer, Split},
     HeapRb,
 };
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 
 const PLAYBACK_CLEAR_AND_DRAIN_MS: usize = 50;
+const PLAYBACK_EDGE_FADE_MS: usize = 8;
+const VOLUME_TAPER_DB: f32 = 36.0;
 
 #[derive(Debug, Clone)]
 pub struct HostInfo {
@@ -89,6 +91,46 @@ pub struct AudioPlayer {
     stream: Option<cpal::Stream>,
 }
 
+#[derive(Clone, Debug)]
+pub struct VolumeHandle {
+    value: Arc<AtomicU32>,
+}
+
+impl VolumeHandle {
+    pub fn new(volume: f32) -> Self {
+        Self {
+            value: Arc::new(AtomicU32::new(volume.clamp(0.0, 1.0).to_bits())),
+        }
+    }
+
+    pub fn set(&self, volume: f32) {
+        self.value
+            .store(volume.clamp(0.0, 1.0).to_bits(), Ordering::SeqCst);
+    }
+
+    pub fn get(&self) -> f32 {
+        f32::from_bits(self.value.load(Ordering::SeqCst)).clamp(0.0, 1.0)
+    }
+
+    fn gain(&self) -> f32 {
+        volume_to_gain(self.get())
+    }
+}
+
+pub fn volume_to_gain(volume: f32) -> f32 {
+    let volume = volume.clamp(0.0, 1.0);
+    if volume <= 0.0 {
+        0.0
+    } else {
+        10.0_f32.powf(((volume - 1.0) * VOLUME_TAPER_DB) / 20.0)
+    }
+}
+
+pub fn apply_loudness_volume(samples: &[f32], volume: f32) -> Vec<f32> {
+    let gain = volume_to_gain(volume);
+    samples.iter().map(|sample| sample * gain).collect()
+}
+
 impl AudioPlayer {
     pub fn new(host_name: &str, device_name: &str, sample_rate: u32) -> Result<Self> {
         let host_id = cpal::available_hosts()
@@ -109,6 +151,22 @@ impl AudioPlayer {
     }
 
     pub fn play(&mut self, samples: Vec<f32>) -> Result<mpsc::Receiver<()>> {
+        self.play_with_volume_handle(samples, VolumeHandle::new(1.0))
+    }
+
+    pub fn play_with_volume(
+        &mut self,
+        samples: Vec<f32>,
+        volume: f32,
+    ) -> Result<mpsc::Receiver<()>> {
+        self.play_with_volume_handle(samples, VolumeHandle::new(volume))
+    }
+
+    pub fn play_with_volume_handle(
+        &mut self,
+        samples: Vec<f32>,
+        volume: VolumeHandle,
+    ) -> Result<mpsc::Receiver<()>> {
         self.stop();
 
         let (tx, rx) = mpsc::channel();
@@ -139,6 +197,7 @@ impl AudioPlayer {
         let buf = buffer.clone();
         let p = pos.clone();
         let s = stop.clone();
+        let v = volume.clone();
         let done_sent = Arc::new(Mutex::new(false));
         let done_sent2 = done_sent.clone();
 
@@ -149,13 +208,14 @@ impl AudioPlayer {
                 let mut current = p.lock().unwrap();
                 let stopped = s.load(Ordering::SeqCst);
                 let ch = channels as usize;
+                let gain = v.gain();
 
                 // Write mono samples to all channels
                 for frame in data.chunks_mut(ch) {
                     let val = if stopped || *current >= samples.len() {
                         0.0
                     } else {
-                        let v = samples[*current];
+                        let v = samples[*current] * gain;
                         *current += 1;
                         v
                     };
@@ -316,12 +376,38 @@ fn prepare_playback_samples(samples: Vec<f32>, sample_rate: u32) -> Vec<f32> {
         return samples;
     }
 
+    let mut samples = samples;
+    apply_edge_fades(&mut samples, sample_rate);
+
     let silence_len = ((sample_rate as usize * PLAYBACK_CLEAR_AND_DRAIN_MS) / 1_000).max(1);
     let mut prepared = Vec::with_capacity(samples.len() + silence_len * 2);
     prepared.resize(silence_len, 0.0);
     prepared.extend(samples);
     prepared.resize(prepared.len() + silence_len, 0.0);
     prepared
+}
+
+fn apply_edge_fades(samples: &mut [f32], sample_rate: u32) {
+    if samples.is_empty() || sample_rate == 0 {
+        return;
+    }
+
+    let fade_len = ((sample_rate as usize * PLAYBACK_EDGE_FADE_MS) / 1_000)
+        .max(1)
+        .min(samples.len());
+    let fade_in_len = fade_len.min(samples.len());
+    let fade_out_len = fade_len.min(samples.len());
+
+    for index in 0..fade_in_len {
+        let gain = index as f32 / fade_in_len as f32;
+        samples[index] *= gain;
+    }
+
+    for index in 0..fade_out_len {
+        let sample_index = samples.len() - 1 - index;
+        let gain = index as f32 / fade_out_len as f32;
+        samples[sample_index] *= gain;
+    }
 }
 
 /// Resample audio from `src_rate` to `dst_rate` using r8brain.
@@ -361,7 +447,9 @@ mod tests {
 
         assert!(prepared.len() > samples.len());
         assert_eq!(&prepared[..50], vec![0.0; 50].as_slice());
-        assert_eq!(&prepared[50..50 + samples.len()], samples.as_slice());
+        assert_eq!(prepared[50], 0.0);
+        assert!(prepared[51].abs() > 0.0);
+        assert_eq!(prepared[52], 0.0);
         assert_eq!(&prepared[50 + samples.len()..], vec![0.0; 50].as_slice());
     }
 
@@ -369,6 +457,27 @@ mod tests {
     fn playback_buffer_uses_at_least_one_silence_sample_for_low_rates() {
         let prepared = super::prepare_playback_samples(vec![1.0], 1);
 
-        assert_eq!(prepared, vec![0.0, 1.0, 0.0]);
+        assert_eq!(prepared, vec![0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn loudness_volume_uses_log_taper_and_clamps() {
+        assert_eq!(super::volume_to_gain(0.0), 0.0);
+        assert_eq!(super::volume_to_gain(-1.0), 0.0);
+        assert_eq!(super::volume_to_gain(1.0), 1.0);
+        assert_eq!(super::volume_to_gain(2.0), 1.0);
+        assert!(super::volume_to_gain(0.5) < 0.5);
+        assert!(super::volume_to_gain(0.5) > 0.0);
+    }
+
+    #[test]
+    fn shared_volume_handle_updates_later_reads() {
+        let volume = super::VolumeHandle::new(0.25);
+
+        assert_eq!(volume.get(), 0.25);
+        volume.set(2.0);
+        assert_eq!(volume.get(), 1.0);
+        volume.set(-1.0);
+        assert_eq!(volume.get(), 0.0);
     }
 }

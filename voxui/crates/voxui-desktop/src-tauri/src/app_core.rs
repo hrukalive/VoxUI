@@ -4,6 +4,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc};
 
 use anyhow::{bail, Context, Result};
+use voxui_audio::VolumeHandle;
 
 use crate::generation_queue::{GenerationQueue, HistoryItem, HistoryStatus};
 use crate::model_discovery::discover_models;
@@ -23,6 +24,7 @@ struct ActiveGeneration {
 
 struct ActivePlayback {
     item_id: String,
+    volume: VolumeHandle,
     stop: mpsc::Sender<()>,
 }
 
@@ -56,6 +58,7 @@ pub struct GenerationRun {
 pub struct PlaybackRun {
     pub item_id: String,
     pub audio: GeneratedAudio,
+    pub volume: VolumeHandle,
     pub stop: mpsc::Receiver<()>,
 }
 
@@ -139,6 +142,9 @@ impl AppCore {
         }
         if let Some(volume) = patch.volume {
             self.config.volume = volume.clamp(0.0, 1.0);
+            if let Some(active_playback) = self.active_playback.as_ref() {
+                active_playback.volume.set(self.config.volume);
+            }
         }
         if let Some(max_input_chars) = patch.max_input_chars {
             self.config.max_input_chars = max_input_chars.max(1);
@@ -266,14 +272,17 @@ impl AppCore {
         }
 
         let (stop_sender, stop_receiver) = mpsc::channel();
+        let volume = VolumeHandle::new(self.config.volume);
         self.active_playback = Some(ActivePlayback {
             item_id: item_id.to_string(),
+            volume: volume.clone(),
             stop: stop_sender,
         });
 
         Ok(PlaybackRun {
             item_id: item_id.to_string(),
             audio,
+            volume,
             stop: stop_receiver,
         })
     }
