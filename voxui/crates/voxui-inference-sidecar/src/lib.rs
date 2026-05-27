@@ -15,8 +15,8 @@ use voxui_sidecar_protocol::{
 #[derive(Default)]
 pub struct SidecarEngine {
     engine: Option<VoxCPMEngine>,
-    active_load_cancel: SharedCancel,
-    active_generation_cancel: SharedCancel,
+    load_cancel: SharedCancel<u64>,
+    generation_cancel: SharedCancel<String>,
 }
 
 impl SidecarEngine {
@@ -28,8 +28,8 @@ impl SidecarEngine {
         emit_frame(&mut writer, ready_frame())?;
         let commands = spawn_command_reader(
             reader,
-            self.active_load_cancel.clone(),
-            self.active_generation_cancel.clone(),
+            self.load_cancel.clone(),
+            self.generation_cancel.clone(),
         );
 
         while let Ok(command) = commands.recv() {
@@ -76,7 +76,7 @@ impl SidecarEngine {
                 self.cancel_active_generation();
                 self.cancel_active_load();
                 let cancel = Arc::new(AtomicBool::new(false));
-                set_active_cancel(&self.active_load_cancel, Some(cancel.clone()));
+                install_active_cancel(&self.load_cancel, load_id, cancel.clone());
                 let device = device_for_backend(backend);
 
                 let load_result = match device {
@@ -125,7 +125,7 @@ impl SidecarEngine {
                 };
 
                 let canceled = cancel.load(Ordering::Relaxed);
-                clear_matching_cancel(&self.active_load_cancel, &cancel);
+                clear_matching_cancel(&self.load_cancel, &cancel);
 
                 match load_result {
                     Ok(engine) if !canceled => {
@@ -161,9 +161,7 @@ impl SidecarEngine {
                 }
             }
             SidecarCommand::CancelLoad { load_id } => {
-                if let Some(cancel) = take_active_cancel(&self.active_load_cancel) {
-                    cancel.store(true, Ordering::Relaxed);
-                }
+                request_cancel(&self.load_cancel, load_id);
                 emit(model_load_done_canceled(load_id))?;
             }
             SidecarCommand::Synthesize {
@@ -187,7 +185,7 @@ impl SidecarEngine {
                 };
 
                 let cancel = Arc::new(AtomicBool::new(false));
-                set_active_cancel(&self.active_generation_cancel, Some(cancel.clone()));
+                install_active_cancel(&self.generation_cancel, item_id.clone(), cancel.clone());
                 let request = synthesis_request_from_dto(request);
 
                 let result = if streaming {
@@ -208,7 +206,7 @@ impl SidecarEngine {
                     )
                 };
                 let canceled = cancel.load(Ordering::Relaxed);
-                clear_matching_cancel(&self.active_generation_cancel, &cancel);
+                clear_matching_cancel(&self.generation_cancel, &cancel);
 
                 for frame in generation_done_for_result(item_id, result, canceled) {
                     emit(frame)?;
@@ -229,24 +227,30 @@ impl SidecarEngine {
     }
 
     fn cancel_active_load(&mut self) {
-        if let Some(cancel) = take_active_cancel(&self.active_load_cancel) {
+        if let Some(cancel) = take_active_cancel(&self.load_cancel) {
             cancel.store(true, Ordering::Relaxed);
         }
     }
 
     fn cancel_active_generation(&mut self) {
-        if let Some(cancel) = active_cancel(&self.active_generation_cancel) {
+        if let Some(cancel) = active_cancel(&self.generation_cancel) {
             cancel.store(true, Ordering::Relaxed);
         }
     }
 }
 
-type SharedCancel = Arc<Mutex<Option<Arc<AtomicBool>>>>;
+#[derive(Default)]
+struct CancelState<I> {
+    active: Option<(I, Arc<AtomicBool>)>,
+    pending: Vec<I>,
+}
+
+type SharedCancel<I> = Arc<Mutex<CancelState<I>>>;
 
 fn spawn_command_reader<R>(
     mut reader: R,
-    active_load_cancel: SharedCancel,
-    active_generation_cancel: SharedCancel,
+    load_cancel: SharedCancel<u64>,
+    generation_cancel: SharedCancel<String>,
 ) -> mpsc::Receiver<Result<SidecarCommand>>
 where
     R: Read + Send + 'static,
@@ -265,11 +269,9 @@ where
                 }
             };
 
-            if let Some(command) = handle_immediate_command(
-                frame.header,
-                &active_load_cancel,
-                &active_generation_cancel,
-            ) {
+            if let Some(command) =
+                handle_immediate_command(frame.header, &load_cancel, &generation_cancel)
+            {
                 if sender.send(Ok(command)).is_err() {
                     break;
                 }
@@ -281,27 +283,23 @@ where
 
 fn handle_immediate_command(
     command: SidecarCommand,
-    active_load_cancel: &SharedCancel,
-    active_generation_cancel: &SharedCancel,
+    load_cancel: &SharedCancel<u64>,
+    generation_cancel: &SharedCancel<String>,
 ) -> Option<SidecarCommand> {
     match command {
-        SidecarCommand::CancelLoad { .. } => {
-            if let Some(cancel) = active_cancel(active_load_cancel) {
-                cancel.store(true, Ordering::Relaxed);
-            }
-            Some(command)
+        SidecarCommand::CancelLoad { load_id } => {
+            request_cancel(load_cancel, load_id);
+            None
         }
-        SidecarCommand::CancelSynthesis { .. } => {
-            if let Some(cancel) = active_cancel(active_generation_cancel) {
-                cancel.store(true, Ordering::Relaxed);
-            }
-            Some(command)
+        SidecarCommand::CancelSynthesis { item_id } => {
+            request_cancel(generation_cancel, item_id);
+            None
         }
         SidecarCommand::Shutdown => {
-            if let Some(cancel) = active_cancel(active_load_cancel) {
+            if let Some(cancel) = active_cancel(load_cancel) {
                 cancel.store(true, Ordering::Relaxed);
             }
-            if let Some(cancel) = active_cancel(active_generation_cancel) {
+            if let Some(cancel) = active_cancel(generation_cancel) {
                 cancel.store(true, Ordering::Relaxed);
             }
             Some(SidecarCommand::Shutdown)
@@ -310,25 +308,58 @@ fn handle_immediate_command(
     }
 }
 
-fn set_active_cancel(slot: &SharedCancel, cancel: Option<Arc<AtomicBool>>) {
-    *slot.lock().expect("active cancel lock poisoned") = cancel;
+fn install_active_cancel<I>(slot: &SharedCancel<I>, id: I, cancel: Arc<AtomicBool>)
+where
+    I: Clone + Eq,
+{
+    let mut state = slot.lock().expect("active cancel lock poisoned");
+    if let Some(index) = state.pending.iter().position(|pending| pending == &id) {
+        state.pending.remove(index);
+        cancel.store(true, Ordering::Relaxed);
+    }
+    state.active = Some((id, cancel));
 }
 
-fn active_cancel(slot: &SharedCancel) -> Option<Arc<AtomicBool>> {
-    slot.lock().expect("active cancel lock poisoned").clone()
+fn request_cancel<I>(slot: &SharedCancel<I>, id: I)
+where
+    I: Clone + Eq,
+{
+    let mut state = slot.lock().expect("active cancel lock poisoned");
+    if let Some((active_id, cancel)) = state.active.as_ref() {
+        if active_id == &id {
+            cancel.store(true, Ordering::Relaxed);
+            return;
+        }
+    }
+    if !state.pending.iter().any(|pending| pending == &id) {
+        state.pending.push(id);
+    }
 }
 
-fn take_active_cancel(slot: &SharedCancel) -> Option<Arc<AtomicBool>> {
-    slot.lock().expect("active cancel lock poisoned").take()
-}
-
-fn clear_matching_cancel(slot: &SharedCancel, cancel: &Arc<AtomicBool>) {
-    let mut active = slot.lock().expect("active cancel lock poisoned");
-    if active
+fn active_cancel<I>(slot: &SharedCancel<I>) -> Option<Arc<AtomicBool>> {
+    slot.lock()
+        .expect("active cancel lock poisoned")
+        .active
         .as_ref()
-        .is_some_and(|current| Arc::ptr_eq(current, cancel))
+        .map(|(_, cancel)| cancel.clone())
+}
+
+fn take_active_cancel<I>(slot: &SharedCancel<I>) -> Option<Arc<AtomicBool>> {
+    slot.lock()
+        .expect("active cancel lock poisoned")
+        .active
+        .take()
+        .map(|(_, cancel)| cancel)
+}
+
+fn clear_matching_cancel<I>(slot: &SharedCancel<I>, cancel: &Arc<AtomicBool>) {
+    let mut state = slot.lock().expect("active cancel lock poisoned");
+    if state
+        .active
+        .as_ref()
+        .is_some_and(|(_, current)| Arc::ptr_eq(current, cancel))
     {
-        *active = None;
+        state.active = None;
     }
 }
 
@@ -577,7 +608,11 @@ mod tests {
     fn cancel_generation_sets_active_cancel_flag() {
         let cancel = Arc::new(AtomicBool::new(false));
         let mut sidecar = SidecarEngine::default();
-        set_active_cancel(&sidecar.active_generation_cancel, Some(cancel.clone()));
+        install_active_cancel(
+            &sidecar.generation_cancel,
+            "item-1".to_string(),
+            cancel.clone(),
+        );
         let mut events = Vec::new();
 
         sidecar
@@ -606,11 +641,11 @@ mod tests {
     }
 
     #[test]
-    fn immediate_cancel_synthesis_sets_flag_and_forwards_command() {
+    fn immediate_cancel_synthesis_sets_flag_without_forwarding_command() {
         let cancel = Arc::new(AtomicBool::new(false));
         let load_cancel = SharedCancel::default();
         let generation_cancel = SharedCancel::default();
-        set_active_cancel(&generation_cancel, Some(cancel.clone()));
+        install_active_cancel(&generation_cancel, "item-1".to_string(), cancel.clone());
 
         let forwarded = handle_immediate_command(
             SidecarCommand::CancelSynthesis {
@@ -620,12 +655,18 @@ mod tests {
             &generation_cancel,
         );
 
-        assert_eq!(
-            forwarded,
-            Some(SidecarCommand::CancelSynthesis {
-                item_id: "item-1".to_string(),
-            })
-        );
+        assert!(forwarded.is_none());
+        assert!(cancel.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn prequeued_cancel_applies_when_matching_generation_is_installed() {
+        let cancel = Arc::new(AtomicBool::new(false));
+        let generation_cancel = SharedCancel::default();
+
+        request_cancel(&generation_cancel, "item-1".to_string());
+        install_active_cancel(&generation_cancel, "item-1".to_string(), cancel.clone());
+
         assert!(cancel.load(Ordering::Relaxed));
     }
 
