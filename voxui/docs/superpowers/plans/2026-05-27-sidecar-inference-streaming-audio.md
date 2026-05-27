@@ -566,11 +566,16 @@ Modify `StreamingPlayer` so it stores selected host/device, volume, stop/drain s
 const STREAMING_MIN_BUFFER_MS: usize = 100;
 
 pub struct StreamingPlayer {
-    stream: cpal::Stream,
+    stream: Option<cpal::Stream>,
     producer: ringbuf::HeapProd<f32>,
     resampler: StreamingResampler,
     stop: Arc<AtomicBool>,
     done: Option<mpsc::Receiver<()>>,
+}
+
+pub struct StreamingDrain {
+    stream: cpal::Stream,
+    done: mpsc::Receiver<()>,
 }
 
 impl StreamingPlayer {
@@ -640,7 +645,7 @@ impl StreamingPlayer {
         stream.play()?;
 
         Ok(Self {
-            stream,
+            stream: Some(stream),
             producer,
             resampler: StreamingResampler::new(source_sample_rate, device_rate, 8192)?,
             stop,
@@ -654,13 +659,19 @@ impl StreamingPlayer {
         Ok(())
     }
 
-    pub fn finish(&mut self) -> Result<mpsc::Receiver<()>> {
+    pub fn finish(mut self) -> Result<StreamingDrain> {
         let tail = self.resampler.finish()?;
         self.push_resampled(&tail);
         self.stop.store(true, Ordering::SeqCst);
-        self.done
+        let stream = self
+            .stream
             .take()
-            .ok_or_else(|| anyhow!("streaming playback has already been finished"))
+            .ok_or_else(|| anyhow!("streaming playback stream is unavailable"))?;
+        let done = self
+            .done
+            .take()
+            .ok_or_else(|| anyhow!("streaming playback has already been finished"))?;
+        Ok(StreamingDrain { stream, done })
     }
 
     pub fn stop(&self) {
@@ -676,6 +687,16 @@ impl StreamingPlayer {
                 std::thread::sleep(std::time::Duration::from_millis(1));
             }
         }
+    }
+}
+
+impl StreamingDrain {
+    pub fn wait(self) -> Result<()> {
+        self.done
+            .recv()
+            .map_err(|_| anyhow!("streaming playback channel closed unexpectedly"))?;
+        drop(self.stream);
+        Ok(())
     }
 }
 
