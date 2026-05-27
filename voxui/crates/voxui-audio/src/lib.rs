@@ -13,6 +13,7 @@ use std::sync::{mpsc, Arc, Mutex};
 const PLAYBACK_CLEAR_AND_DRAIN_MS: usize = 50;
 const PLAYBACK_EDGE_FADE_MS: usize = 8;
 const RESAMPLER_FLUSH_INPUT_LEN: usize = 64;
+const STREAMING_MIN_BUFFER_MS: usize = 100;
 const VOLUME_TAPER_DB: f32 = 36.0;
 
 #[derive(Debug, Clone)]
@@ -364,19 +365,31 @@ impl StreamingResampler {
 pub struct StreamingPlayer {
     stream: cpal::Stream,
     producer: ringbuf::HeapProd<f32>,
-    resampler: Resampler,
-    resample_ratio: f64,
+    resampler: StreamingResampler,
+    stop: Arc<AtomicBool>,
+    done: mpsc::Receiver<()>,
 }
 
 impl StreamingPlayer {
-    /// Opens the default output device, creates a resampler from `source_sample_rate`
-    /// to the device native rate, and allocates a ring buffer sized for `pre_buffer_secs`
-    /// seconds of audio at the source rate.
-    pub fn new(source_sample_rate: u32, pre_buffer_secs: f32) -> Result<Self> {
-        let host = cpal::default_host();
+    /// Opens the named output device, creates a resampler from `source_sample_rate`
+    /// to the device native rate, and allocates a ring buffer sized for
+    /// `pre_buffer_secs` seconds of audio at the larger of the source/device rates.
+    pub fn new(
+        host_name: &str,
+        device_name: &str,
+        source_sample_rate: u32,
+        pre_buffer_secs: f32,
+        volume: VolumeHandle,
+    ) -> Result<Self> {
+        let host_id = cpal::available_hosts()
+            .into_iter()
+            .find(|id| format!("{:?}", id) == host_name)
+            .ok_or_else(|| anyhow!("unknown host: {host_name}"))?;
+        let host = cpal::host_from_id(host_id)?;
         let device = host
-            .default_output_device()
-            .ok_or_else(|| anyhow!("no default output device"))?;
+            .output_devices()?
+            .find(|d| d.name().map(|n| n == device_name).unwrap_or(false))
+            .ok_or_else(|| anyhow!("device not found: {device_name}"))?;
         let default_config = device.default_output_config()?;
         let channels = default_config.channels();
         if channels == 0 {
@@ -384,17 +397,17 @@ impl StreamingPlayer {
         }
         let device_rate = default_config.sample_rate().0;
 
-        let buffer_capacity = (source_sample_rate as f32 * pre_buffer_secs).ceil() as usize;
+        let buffer_capacity =
+            streaming_buffer_capacity(source_sample_rate, device_rate, pre_buffer_secs);
         let ring = HeapRb::<f32>::new(buffer_capacity);
         let (producer, mut consumer) = ring.split();
-
-        let resampler = Resampler::new(
-            source_sample_rate as f64,
-            device_rate as f64,
-            8192, // max input samples per process() call
-            2.0,
-            PrecisionProfile::Bits24,
-        );
+        let resampler = StreamingResampler::new(source_sample_rate, device_rate, 8192)?;
+        let stop = Arc::new(AtomicBool::new(false));
+        let (tx, done) = mpsc::channel();
+        let callback_stop = stop.clone();
+        let callback_volume = volume.clone();
+        let done_sent = Arc::new(AtomicBool::new(false));
+        let callback_done_sent = done_sent.clone();
 
         let config = cpal::StreamConfig {
             channels,
@@ -406,17 +419,19 @@ impl StreamingPlayer {
             &config,
             move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
                 let ch = channels as usize;
-                let available = consumer.occupied_len();
-                let want = data.len() / ch;
-                let to_read = want.min(available);
-                let mut buf = [0.0f32; 4096];
-                let actual = consumer.pop_slice(&mut buf[..to_read]);
-                let mut sample_iter = buf[..actual].iter().copied();
+                let gain = callback_volume.gain();
                 for frame in data.chunks_mut(ch) {
-                    let val = sample_iter.next().unwrap_or(0.0);
+                    let val = consumer.try_pop().unwrap_or(0.0) * gain;
                     for sample in frame.iter_mut() {
                         *sample = val;
                     }
+                }
+
+                if callback_stop.load(Ordering::SeqCst)
+                    && consumer.occupied_len() == 0
+                    && !callback_done_sent.swap(true, Ordering::SeqCst)
+                {
+                    let _ = tx.send(());
                 }
             },
             |err| eprintln!("audio stream error: {err}"),
@@ -429,41 +444,58 @@ impl StreamingPlayer {
             stream,
             producer,
             resampler,
-            resample_ratio: device_rate as f64 / source_sample_rate as f64,
+            stop,
+            done,
         })
     }
 
     /// Resample `samples` from the source rate to device rate and push into the
     /// ring buffer. Blocks only if the ring buffer is full (backpressure).
-    pub fn push(&mut self, samples: &[f32]) {
-        let input_f64: Vec<f64> = samples.iter().map(|&s| s as f64).collect();
-        let max_out = (input_f64.len() as f64 * self.resample_ratio * 1.1).ceil() as usize;
-        let mut buf = vec![0.0f64; max_out];
-        let n = self.resampler.process(&input_f64, &mut buf);
-        for &s in &buf[..n] {
-            // Spin-wait if ring buffer is full (backpressure)
-            while self.producer.try_push(s as f32).is_err() {
+    pub fn push(&mut self, samples: &[f32]) -> Result<()> {
+        let resampled = self.resampler.process(samples)?;
+        self.push_resampled(&resampled);
+        Ok(())
+    }
+
+    /// Flush any resampler tail, signal that no more samples will be pushed, and
+    /// return a receiver that fires when queued audio has drained.
+    pub fn finish(mut self) -> Result<mpsc::Receiver<()>> {
+        let tail = self.resampler.finish()?;
+        self.push_resampled(&tail);
+        self.stop.store(true, Ordering::SeqCst);
+
+        self.done
+            .recv()
+            .map_err(|_| anyhow!("streaming playback channel closed unexpectedly"))?;
+        let (tx, rx) = mpsc::channel();
+        let _ = tx.send(());
+
+        Ok(rx)
+    }
+
+    pub fn stop(&self) {
+        self.stop.store(true, Ordering::SeqCst);
+    }
+
+    fn push_resampled(&mut self, samples: &[f32]) {
+        for &sample in samples {
+            while !self.stop.load(Ordering::SeqCst) && self.producer.try_push(sample).is_err() {
                 std::thread::sleep(std::time::Duration::from_millis(1));
             }
-        }
-    }
 
-    /// Block until all enqueued audio has been consumed by the output device,
-    /// or until the optional cancel flag is set. Returns true if cancelled.
-    pub fn flush_until(&self, cancel: Option<&std::sync::atomic::AtomicBool>) -> bool {
-        while self.producer.occupied_len() > 0 {
-            if cancel.is_some_and(|c| c.load(std::sync::atomic::Ordering::SeqCst)) {
-                return true;
+            if self.stop.load(Ordering::SeqCst) {
+                break;
             }
-            std::thread::sleep(std::time::Duration::from_millis(10));
         }
-        false
     }
+}
 
-    /// Block until all enqueued audio has been consumed by the output device.
-    pub fn flush(&self) {
-        self.flush_until(None);
-    }
+fn streaming_buffer_capacity(source_rate: u32, device_rate: u32, pre_buffer_secs: f32) -> usize {
+    let rate = (source_rate as usize).max(device_rate as usize).max(1);
+    let requested = ((rate as f32) * pre_buffer_secs.max(0.0)).ceil() as usize;
+    let minimum = (rate * STREAMING_MIN_BUFFER_MS) / 1_000;
+
+    requested.max(minimum).max(1)
 }
 
 fn prepare_playback_samples(samples: Vec<f32>, sample_rate: u32) -> Vec<f32> {
@@ -621,10 +653,8 @@ mod tests {
         let len_delta = whole_out.len().abs_diff(chunked_out.len());
         assert!(len_delta <= 2, "length delta was {len_delta}");
 
-        for (index, (whole_sample, chunked_sample)) in whole_out
-            .iter()
-            .zip(chunked_out.iter())
-            .enumerate()
+        for (index, (whole_sample, chunked_sample)) in
+            whole_out.iter().zip(chunked_out.iter()).enumerate()
         {
             let delta = (whole_sample - chunked_sample).abs();
             assert!(
@@ -632,5 +662,22 @@ mod tests {
                 "sample {index} delta was {delta}: whole={whole_sample}, chunked={chunked_sample}"
             );
         }
+    }
+
+    #[test]
+    fn streaming_buffer_capacity_uses_device_rate() {
+        assert_eq!(
+            super::streaming_buffer_capacity(16_000, 48_000, 0.25),
+            12_000
+        );
+        assert_eq!(
+            super::streaming_buffer_capacity(48_000, 16_000, 0.25),
+            12_000
+        );
+    }
+
+    #[test]
+    fn streaming_buffer_capacity_has_minimum_size() {
+        assert_eq!(super::streaming_buffer_capacity(16_000, 48_000, 0.0), 4_800);
     }
 }
