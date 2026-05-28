@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 
@@ -17,6 +19,11 @@ export async function tauriListen(event, handler) {
   }
   return await listen(event, handler);
 }
+
+export function currentWindowLabel() {
+  const current = globalThis.__TAURI__?.webviewWindow?.getCurrentWebviewWindow?.();
+  return typeof current?.label === "string" ? current.label : "main";
+}
 "#)]
 extern "C" {
     #[wasm_bindgen(catch, js_name = tauriInvoke)]
@@ -24,6 +31,9 @@ extern "C" {
 
     #[wasm_bindgen(catch, js_name = tauriListen)]
     async fn listen(event: &str, handler: &Closure<dyn Fn(JsValue)>) -> Result<JsValue, JsValue>;
+
+    #[wasm_bindgen(js_name = currentWindowLabel)]
+    fn current_window_label_js() -> String;
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -50,6 +60,7 @@ pub struct AppConfig {
     pub volume: f32,
     pub max_input_chars: usize,
     pub generation: GenerationSettings,
+    pub live: LiveConfig,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -124,6 +135,11 @@ pub struct PlaybackStateEvent {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MainInputReplaceEvent {
+    pub text: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AudioHost {
     pub name: String,
 }
@@ -148,6 +164,111 @@ pub struct GenerationSettings {
     pub prompt_wav_path: Option<String>,
     pub prompt_text: Option<String>,
     pub reference_wav_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LiveStatus {
+    Disconnected,
+    Connecting,
+    Connected,
+    Disconnecting,
+    Error,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LiveMessageKind {
+    Danmu,
+    Gift,
+    Superchat,
+    Guard,
+    Like,
+    Enter,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReplacementRule {
+    pub enabled: bool,
+    pub from: String,
+    pub to: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TemplateConfig {
+    pub danmu: String,
+    pub gift_zh: String,
+    pub gift_en: String,
+    pub superchat_zh: String,
+    pub superchat_en: String,
+    pub guard_zh: String,
+    pub guard_en: String,
+    pub like_zh: String,
+    pub like_en: String,
+    pub enter_zh: String,
+    pub enter_en: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LiveConfig {
+    pub identity_code: String,
+    pub enable_ceve_server_heartbeat: bool,
+    pub show_danmu: bool,
+    pub show_gifts: bool,
+    pub show_superchats: bool,
+    pub show_guards: bool,
+    pub show_likes: bool,
+    pub show_enters: bool,
+    pub templates: TemplateConfig,
+    pub replacement_rules: Vec<ReplacementRule>,
+    pub mapped_unames: BTreeMap<String, String>,
+    pub original_unames: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct LiveConfigPatch {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub identity_code: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enable_ceve_server_heartbeat: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub show_danmu: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub show_gifts: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub show_superchats: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub show_guards: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub show_likes: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub show_enters: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub templates: Option<TemplateConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub replacement_rules: Option<Vec<ReplacementRule>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mapped_unames: Option<BTreeMap<String, String>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LiveMonitorItem {
+    pub id: String,
+    pub kind: LiveMessageKind,
+    pub paid: bool,
+    pub open_id: String,
+    pub uname: String,
+    pub mapped_uname: String,
+    pub suggestion: String,
+    pub raw_json: serde_json::Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LiveSnapshot {
+    pub status: LiveStatus,
+    pub status_message: Option<String>,
+    pub config: LiveConfig,
+    pub items: Vec<LiveMonitorItem>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
@@ -250,6 +371,19 @@ struct ItemArgs {
     item_id: String,
 }
 
+#[derive(Debug, Serialize)]
+struct ConnectOpenbliveArgs {
+    #[serde(rename = "identityCode")]
+    identity_code: String,
+}
+
+#[derive(Debug, Serialize)]
+struct LiveSuggestionArgs {
+    #[serde(rename = "itemId")]
+    item_id: String,
+    mode: String,
+}
+
 pub async fn get_app_state() -> Result<AppSnapshot, String> {
     let value = invoke("get_app_state", JsValue::NULL)
         .await
@@ -282,6 +416,57 @@ pub async fn set_config_patch(patch: ConfigPatch) -> Result<AppSnapshot, String>
     let args = serde_wasm_bindgen::to_value(&serde_json::json!({ "patch": patch }))
         .map_err(|err| err.to_string())?;
     let value = invoke("set_config_patch", args)
+        .await
+        .map_err(stringify_js_error)?;
+
+    serde_wasm_bindgen::from_value(value).map_err(|err| err.to_string())
+}
+
+pub async fn get_live_state() -> Result<LiveSnapshot, String> {
+    let value = invoke("get_live_state", JsValue::NULL)
+        .await
+        .map_err(stringify_js_error)?;
+
+    serde_wasm_bindgen::from_value(value).map_err(|err| err.to_string())
+}
+
+pub async fn set_live_config_patch(patch: LiveConfigPatch) -> Result<LiveSnapshot, String> {
+    let args = serde_wasm_bindgen::to_value(&serde_json::json!({ "patch": patch }))
+        .map_err(|err| err.to_string())?;
+    let value = invoke("set_live_config_patch", args)
+        .await
+        .map_err(stringify_js_error)?;
+
+    serde_wasm_bindgen::from_value(value).map_err(|err| err.to_string())
+}
+
+pub async fn connect_openblive(identity_code: String) -> Result<LiveSnapshot, String> {
+    let args = serde_wasm_bindgen::to_value(&ConnectOpenbliveArgs { identity_code })
+        .map_err(|err| err.to_string())?;
+    let value = invoke("connect_openblive", args)
+        .await
+        .map_err(stringify_js_error)?;
+
+    serde_wasm_bindgen::from_value(value).map_err(|err| err.to_string())
+}
+
+pub async fn disconnect_openblive() -> Result<LiveSnapshot, String> {
+    let value = invoke("disconnect_openblive", JsValue::NULL)
+        .await
+        .map_err(stringify_js_error)?;
+
+    serde_wasm_bindgen::from_value(value).map_err(|err| err.to_string())
+}
+
+pub async fn send_live_suggestion(item_id: String, mode: String) -> Result<CommandResult, String> {
+    let args = serde_wasm_bindgen::to_value(&LiveSuggestionArgs { item_id, mode })
+        .map_err(|err| err.to_string())?;
+
+    command_result("send_live_suggestion", args).await
+}
+
+pub async fn clear_live_items() -> Result<LiveSnapshot, String> {
+    let value = invoke("clear_live_items", JsValue::NULL)
         .await
         .map_err(stringify_js_error)?;
 
@@ -375,6 +560,10 @@ where
         .unwrap_or(value);
 
     serde_wasm_bindgen::from_value(payload).map_err(|err| err.to_string())
+}
+
+pub fn current_window_label() -> String {
+    current_window_label_js()
 }
 
 async fn browse_path(command: &str) -> Result<Option<String>, String> {

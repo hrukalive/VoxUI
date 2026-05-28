@@ -10,8 +10,9 @@ use crate::components::settings_modal::{SettingsModal, SettingsPage};
 use crate::i18n::{labels, UiLanguage};
 use crate::tauri_api::{
     AppConfig, AppSnapshot, AudioState, BackendKind, ConfigPatch, GenerationDoneEvent,
-    GenerationProgressEvent, GenerationSettings, HistoryStatus, LanguageMode, LoadUiState,
-    ModelLoadDoneEvent, ModelLoadProgressEvent, PlaybackStateEvent, ThemeMode,
+    GenerationProgressEvent, GenerationSettings, HistoryStatus, LanguageMode, LiveConfig,
+    LoadUiState, ModelLoadDoneEvent, ModelLoadProgressEvent, PlaybackStateEvent, ReplacementRule,
+    TemplateConfig, ThemeMode,
 };
 
 #[component]
@@ -23,6 +24,7 @@ pub fn App() -> impl IntoView {
     let (load_error, set_load_error) = signal(None::<String>);
     let (snapshot, set_snapshot) = signal(Some(fallback_snapshot()));
     let (audio_state, set_audio_state) = signal(AudioState::default());
+    let (input_replacement, set_input_replacement) = signal(None::<String>);
 
     // Root component is mounted once; Tauri event listeners intentionally live for the app lifetime.
     spawn_local(async move {
@@ -107,6 +109,16 @@ pub fn App() -> impl IntoView {
     spawn_local(async move {
         let _ = crate::tauri_api::listen_app_event("sidecar_capabilities", move |_| {
             refresh_snapshot();
+        })
+        .await;
+    });
+    spawn_local(async move {
+        let _ = crate::tauri_api::listen_app_event("main_input_replace", move |event| {
+            if let Ok(payload) =
+                crate::tauri_api::decode_app_event::<crate::tauri_api::MainInputReplaceEvent>(event)
+            {
+                set_input_replacement.set(Some(payload.text));
+            }
         })
         .await;
     });
@@ -238,6 +250,8 @@ pub fn App() -> impl IntoView {
                     let snapshot = current_snapshot();
                     snapshot.loaded_model_id.is_none() || matches!(snapshot.load_state, LoadUiState::Loading)
                 }
+                replacement_text=move || input_replacement.get()
+                on_replacement_consumed=move || set_input_replacement.set(None)
                 on_generate=move |text| {
                     spawn_local(async move {
                         if crate::tauri_api::enqueue_generation(text).await.is_ok() {
@@ -371,6 +385,7 @@ fn fallback_snapshot() -> AppSnapshot {
                 prompt_text: None,
                 reference_wav_path: None,
             },
+            live: fallback_live_config(),
         },
         system_language: LanguageMode::English,
         cuda_available: false,
@@ -379,6 +394,61 @@ fn fallback_snapshot() -> AppSnapshot {
         loaded_model_id: None,
         load_state: LoadUiState::Idle,
         history: Vec::new(),
+    }
+}
+
+fn fallback_live_config() -> LiveConfig {
+    LiveConfig {
+        identity_code: String::new(),
+        enable_ceve_server_heartbeat: false,
+        show_danmu: true,
+        show_gifts: true,
+        show_superchats: true,
+        show_guards: true,
+        show_likes: false,
+        show_enters: true,
+        templates: TemplateConfig {
+            danmu: "{msg}".to_string(),
+            gift_zh: "感谢{mapped_uname}送出的{gift_num}个{gift_name}".to_string(),
+            gift_en: "Thank you {mapped_uname} for {gift_num} {gift_name}".to_string(),
+            superchat_zh: "感谢{mapped_uname}的醒目留言：{message}".to_string(),
+            superchat_en: "Thank you {mapped_uname} for the superchat saying {message}".to_string(),
+            guard_zh: "感谢{mapped_uname}开通的{guard_label}".to_string(),
+            guard_en: "Thank you {mapped_uname} for joining as {guard_label}".to_string(),
+            like_zh: "感谢{mapped_uname}给直播间点赞".to_string(),
+            like_en: "Thank you {mapped_uname} for liking the stream".to_string(),
+            enter_zh: "欢迎{mapped_uname}进入直播间".to_string(),
+            enter_en: "Hi {mapped_uname}, welcome to the stream".to_string(),
+        },
+        replacement_rules: vec![
+            ReplacementRule {
+                enabled: true,
+                from: "我的".to_string(),
+                to: "你的".to_string(),
+            },
+            ReplacementRule {
+                enabled: true,
+                from: "我".to_string(),
+                to: "你".to_string(),
+            },
+            ReplacementRule {
+                enabled: true,
+                from: "I".to_string(),
+                to: "you".to_string(),
+            },
+            ReplacementRule {
+                enabled: true,
+                from: "me".to_string(),
+                to: "you".to_string(),
+            },
+            ReplacementRule {
+                enabled: true,
+                from: "my".to_string(),
+                to: "your".to_string(),
+            },
+        ],
+        mapped_unames: Default::default(),
+        original_unames: Default::default(),
     }
 }
 
