@@ -51,6 +51,35 @@ fn tauri_config_uses_custom_icon_assets() {
 }
 
 #[test]
+fn tauri_config_defines_hidden_live_monitor_window() {
+    let config_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tauri.conf.json");
+    let config_text = fs::read_to_string(config_path).unwrap();
+    let config: serde_json::Value = serde_json::from_str(&config_text).unwrap();
+    let windows = config["app"]["windows"].as_array().unwrap();
+    let live = windows
+        .iter()
+        .find(|window| window["label"] == "live-monitor")
+        .expect("live-monitor window config");
+
+    assert_eq!(live["title"], "Bilibili Live Monitor");
+    assert_eq!(live["create"], false);
+    assert_eq!(live["width"], 420);
+    assert_eq!(live["height"], 640);
+}
+
+#[test]
+fn default_capability_allows_main_and_live_monitor_windows() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("capabilities/default.json");
+    let text = fs::read_to_string(path).unwrap();
+    let capability: serde_json::Value = serde_json::from_str(&text).unwrap();
+
+    assert_eq!(
+        capability["windows"],
+        serde_json::json!(["main", "live-monitor"])
+    );
+}
+
+#[test]
 fn config_defaults_to_system_language_and_preferred_backend() {
     let config = AppConfig::default();
 
