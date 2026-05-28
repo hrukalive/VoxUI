@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context};
 use reqwest::blocking::Client;
-use reqwest::header::{HeaderMap, HeaderName, HeaderValue, CONTENT_TYPE};
+use reqwest::header::{HeaderMap, HeaderName, HeaderValue, ACCEPT, CONTENT_TYPE};
 use serde::Serialize;
 use serde_json::Value;
 use tungstenite::client::{uri_mode, IntoClientRequest};
@@ -219,6 +219,11 @@ fn run_openblive_worker_inner(
     on_status: &mut impl FnMut(crate::types::LiveStatus, Option<String>),
     should_stop: &mut impl FnMut() -> bool,
 ) -> anyhow::Result<()> {
+    tracing::debug!(
+        identity_code_len = identity_code.trim().len(),
+        enable_ceve_server_heartbeat,
+        "starting OpenLive worker"
+    );
     if identity_code.trim().is_empty() {
         bail!("OpenLive identity code is empty");
     }
@@ -355,6 +360,12 @@ fn connect_openlive_websocket(
     start: &StartAppResponse,
     should_stop: &mut impl FnMut() -> bool,
 ) -> anyhow::Result<Option<WebSocket<MaybeTlsStream<TcpStream>>>> {
+    tracing::debug!(
+        game_id = %start.game_id,
+        websocket_url = %start.websocket_url,
+        auth_body_len = start.auth_body.len(),
+        "connecting OpenLive websocket"
+    );
     let Some(mut websocket) =
         connect_openlive_websocket_with_timeout(&start.websocket_url, should_stop)?
     else {
@@ -370,6 +381,11 @@ fn connect_openlive_websocket(
             .pack(),
         ))
         .context("failed to send OpenLive websocket auth packet")?;
+    tracing::debug!(
+        game_id = %start.game_id,
+        websocket_url = %start.websocket_url,
+        "sent OpenLive websocket auth packet"
+    );
 
     loop {
         if should_stop() {
@@ -379,7 +395,18 @@ fn connect_openlive_websocket(
 
         match websocket.read() {
             Ok(Message::Binary(bytes)) => {
+                tracing::debug!(
+                    game_id = %start.game_id,
+                    websocket_url = %start.websocket_url,
+                    frame_len = bytes.len(),
+                    "received OpenLive websocket auth frame"
+                );
                 if handle_auth_binary(&bytes)? {
+                    tracing::debug!(
+                        game_id = %start.game_id,
+                        websocket_url = %start.websocket_url,
+                        "OpenLive websocket auth completed"
+                    );
                     return Ok(Some(websocket));
                 }
             }
@@ -547,12 +574,19 @@ pub fn handle_websocket_binary(
 }
 
 pub fn handle_auth_binary(bytes: &[u8]) -> anyhow::Result<bool> {
-    for packet in unpack_packets(bytes)? {
+    let packets = unpack_packets(bytes)?;
+    let mut saw_packet = false;
+    for packet in packets {
+        saw_packet = true;
         if packet.op != OP_AUTH_REPLY {
             continue;
         }
         validate_auth_reply(&packet.body)?;
+        tracing::debug!("OpenLive websocket auth reply accepted");
         return Ok(true);
+    }
+    if saw_packet {
+        tracing::debug!("OpenLive websocket auth frame did not contain an auth reply");
     }
     Ok(false)
 }
@@ -607,9 +641,15 @@ fn sign_body(client: &Client, body: &Value) -> anyhow::Result<HeaderMap> {
     let mut last_error = None;
 
     for url in SIGN_URLS {
+        tracing::debug!(
+            url,
+            request_body = %compact_body,
+            "requesting OpenLive signature"
+        );
         let response = match client
             .post(url)
             .header(CONTENT_TYPE, "application/json")
+            .header(ACCEPT, "application/json")
             .body(compact_body.clone())
             .send()
         {
@@ -622,19 +662,38 @@ fn sign_body(client: &Client, body: &Value) -> anyhow::Result<HeaderMap> {
             }
         };
 
-        if !response.status().is_success() {
+        let status = response.status();
+        let response_text = response
+            .text()
+            .with_context(|| format!("failed to read OpenLive signature response from {url}"))?;
+        tracing::debug!(
+            url,
+            status = %status,
+            response = %response_text,
+            "received OpenLive signature response"
+        );
+
+        if !status.is_success() {
             last_error = Some(anyhow!(
-                "OpenLive signature server {url} returned HTTP {}",
-                response.status()
+                "OpenLive signature server {url} returned HTTP {status}: {response_text}"
             ));
             continue;
         }
 
-        let value: Value = response
-            .json()
+        let value: Value = serde_json::from_str(&response_text)
             .with_context(|| format!("failed to decode OpenLive signature response from {url}"))?;
-        return signed_headers_from_response(&value)
+        let headers = signed_headers_from_response(&value)
             .with_context(|| format!("invalid OpenLive signature response from {url}"));
+        if let Ok(headers) = headers {
+            let header_names: Vec<_> = headers.keys().map(|name| name.as_str()).collect();
+            tracing::debug!(
+                url,
+                header_names = ?header_names,
+                "parsed OpenLive signature response"
+            );
+            return Ok(headers);
+        }
+        return headers;
     }
 
     Err(last_error.unwrap_or_else(|| anyhow!("no OpenLive signature servers configured")))
@@ -683,20 +742,39 @@ fn post_openlive(client: &Client, path: &str, body: &Value) -> anyhow::Result<Va
     let headers = sign_body(client, body)?;
     let compact_body = compact_json_body(body)?;
     let url = format!("{HOST}{path}");
+    let header_names: Vec<_> = headers.keys().map(|name| name.as_str()).collect();
+    tracing::debug!(
+        path,
+        url = %url,
+        request_body = %compact_body,
+        signed_header_names = ?header_names,
+        "posting OpenLive API request"
+    );
     let response = client
         .post(&url)
         .headers(headers)
+        .header(ACCEPT, "application/json")
         .header(CONTENT_TYPE, "application/json")
         .body(compact_body)
         .send()
         .with_context(|| format!("failed to post OpenLive API {path}"))?;
 
-    if !response.status().is_success() {
-        bail!("OpenLive API {path} returned HTTP {}", response.status());
+    let status = response.status();
+    let response_text = response
+        .text()
+        .with_context(|| format!("failed to read OpenLive API {path} response"))?;
+    tracing::debug!(
+        path,
+        status = %status,
+        response = %redact_openlive_response(path, &response_text),
+        "received OpenLive API response"
+    );
+
+    if !status.is_success() {
+        bail!("OpenLive API {path} returned HTTP {status}: {response_text}");
     }
 
-    let value: Value = response
-        .json()
+    let value: Value = serde_json::from_str(&response_text)
         .with_context(|| format!("failed to decode OpenLive API {path} response"))?;
     let code = value.get("code").and_then(Value::as_i64).unwrap_or(0);
     if code != 0 {
@@ -705,7 +783,7 @@ fn post_openlive(client: &Client, path: &str, body: &Value) -> anyhow::Result<Va
             .or_else(|| value.get("msg"))
             .and_then(Value::as_str)
             .unwrap_or("OpenLive API returned an error");
-        bail!("OpenLive API {path} failed with code {code}: {message}");
+        bail!("OpenLive API {path} failed with code {code}: {message}; response={response_text}");
     }
 
     Ok(value.get("data").cloned().unwrap_or(Value::Null))
@@ -739,6 +817,12 @@ fn parse_start_details(data: &Value, game_id: String) -> anyhow::Result<StartApp
     )?;
     let websocket_url = websocket_url(websocket_info)
         .context("OpenLive start response missing websocket wss_link")?;
+    tracing::debug!(
+        game_id = %game_id,
+        websocket_url = %websocket_url,
+        auth_body_len = auth_body.len(),
+        "parsed OpenLive start response"
+    );
 
     Ok(StartAppResponse {
         game_id,
@@ -748,6 +832,7 @@ fn parse_start_details(data: &Value, game_id: String) -> anyhow::Result<StartApp
 }
 
 fn heartbeat_app_once(client: &Client, game_id: &str) -> anyhow::Result<()> {
+    tracing::debug!(game_id, "sending OpenLive app heartbeat");
     post_openlive(
         client,
         "/v2/app/heartbeat",
@@ -757,8 +842,10 @@ fn heartbeat_app_once(client: &Client, game_id: &str) -> anyhow::Result<()> {
 }
 
 fn heartbeat_ceve_once(client: &Client, game_id: &str) -> anyhow::Result<()> {
+    tracing::debug!(game_id, "sending CEVE heartbeat");
     let response = client
         .post(CEVE_HEARTBEAT_URL)
+        .header(ACCEPT, "application/json")
         .json(&serde_json::json!({ "gameId": game_id }))
         .send()
         .context("failed to post CEVE heartbeat")?;
@@ -769,6 +856,7 @@ fn heartbeat_ceve_once(client: &Client, game_id: &str) -> anyhow::Result<()> {
 }
 
 fn end_app_once(client: &Client, game_id: &str) -> anyhow::Result<()> {
+    tracing::debug!(game_id, "ending OpenLive app");
     post_openlive(
         client,
         "/v2/app/end",
@@ -787,6 +875,22 @@ fn websocket_url(value: &Value) -> Option<String> {
             .map(str::to_string),
         _ => None,
     }
+}
+
+fn redact_openlive_response(path: &str, response_text: &str) -> String {
+    if path != "/v2/app/start" {
+        return response_text.to_string();
+    }
+
+    let Ok(mut value) = serde_json::from_str::<Value>(response_text) else {
+        return response_text.to_string();
+    };
+
+    if let Some(auth_body) = value.pointer_mut("/data/websocket_info/auth_body") {
+        *auth_body = Value::String("<redacted>".to_string());
+    }
+
+    serde_json::to_string(&value).unwrap_or_else(|_| response_text.to_string())
 }
 
 fn required_string(value: &Value, pointers: &[&str], message: &str) -> anyhow::Result<String> {
