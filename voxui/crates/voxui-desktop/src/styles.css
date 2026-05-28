@@ -787,6 +787,20 @@ body {
   padding: 0;
 }
 
+.error-modal {
+  width: 460px;
+  max-width: calc(100vw - 48px);
+  padding: 0;
+}
+
+.error-dialog-message {
+  margin: 0;
+  padding: 22px 24px 24px;
+  color: var(--text-primary);
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
 .progress-body {
   display: grid;
   gap: 14px;

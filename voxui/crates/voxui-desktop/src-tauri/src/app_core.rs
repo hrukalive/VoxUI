@@ -12,16 +12,19 @@ use crate::playback::{GeneratedAudio, GeneratedAudioCache};
 use crate::types::{AppConfig, AppSnapshot, ConfigPatch, LoadUiState, ModelChoice};
 use voxui_inference::SynthesisRequest;
 
+#[derive(Debug)]
 struct ActiveModelLoad {
     id: u64,
     cancel: Arc<AtomicBool>,
 }
 
+#[derive(Debug)]
 struct ActiveGeneration {
     item_id: String,
     cancel: Arc<AtomicBool>,
 }
 
+#[derive(Debug)]
 struct ActivePlayback {
     item_id: String,
     volume: VolumeHandle,
@@ -42,16 +45,31 @@ pub struct AppCore {
     audio_cache: GeneratedAudioCache,
     active_generation: Option<ActiveGeneration>,
     active_generation_item_id: Option<String>,
+    active_generation_audio_backup: Option<(String, GeneratedAudio)>,
     active_playback: Option<ActivePlayback>,
     pending_auto_playback: VecDeque<String>,
 }
 
+#[derive(Debug)]
 pub struct GenerationRun {
     pub item_id: String,
     pub request: SynthesisRequest,
     pub sample_rate: u32,
     pub streaming: bool,
     pub cancel: Arc<AtomicBool>,
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct SidecarExitRecovery {
+    pub failed_load: bool,
+    pub failed_generation_item_id: Option<String>,
+    pub stopped_generation_item_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SidecarGenerationOutcome {
+    Ready,
+    Canceled,
 }
 
 pub struct PlaybackRun {
@@ -68,6 +86,7 @@ pub struct PlaybackCompletion {
 
 impl AppCore {
     pub fn from_config(mut config: AppConfig) -> Result<Self> {
+        config.normalize_for_build();
         normalize_generation_settings(&mut config.generation);
         let models = match config.model_root.as_deref() {
             Some(root) => discover_models(root)?,
@@ -90,6 +109,7 @@ impl AppCore {
             audio_cache: GeneratedAudioCache::default(),
             active_generation: None,
             active_generation_item_id: None,
+            active_generation_audio_backup: None,
             active_playback: None,
             pending_auto_playback: VecDeque::new(),
         })
@@ -99,6 +119,7 @@ impl AppCore {
         AppSnapshot {
             config: self.config.clone(),
             system_language: crate::config::detect_system_language(),
+            cuda_available: crate::types::cuda_available(),
             models: self.models.clone(),
             selected_model_id: self.selected_model_id.clone(),
             loaded_model_id: self.loaded_model_id.clone(),
@@ -128,6 +149,7 @@ impl AppCore {
         }
         if let Some(backend) = patch.backend {
             self.config.backend = backend;
+            self.config.normalize_for_build();
         }
         if let Some(audio_host) = patch.audio_host {
             let audio_host = empty_string_as_none(audio_host);
@@ -373,6 +395,9 @@ impl AppCore {
         if self.active_load.is_some() || self.load_state == LoadUiState::Loading {
             return Err("model load already in progress".to_string());
         }
+        if self.loaded_model_id.is_none() {
+            return Err("no model loaded for generation".to_string());
+        }
         let item = self
             .queue
             .items()
@@ -413,6 +438,9 @@ impl AppCore {
     }
 
     pub fn begin_next_generation_run(&mut self) -> Result<Option<GenerationRun>, String> {
+        if self.loaded_model_id.is_none() {
+            return Err("no model loaded for generation".to_string());
+        }
         if self.active_generation_item_id.is_some() {
             return Ok(None);
         }
@@ -427,22 +455,36 @@ impl AppCore {
         item_id: &str,
         cancel: Arc<AtomicBool>,
     ) -> Result<(), String> {
-        let item = self
-            .queue
-            .items()
-            .iter()
-            .find(|item| item.id == item_id)
-            .ok_or_else(|| format!("unknown history item: {item_id}"))?;
-        if item.status != HistoryStatus::Queued {
-            return Err(format!(
-                "history item is not queued for generation: {item_id}"
-            ));
-        }
-        if self.active_generation_item_id.is_some() {
-            return Err("generation already in progress".to_string());
-        }
+        let active_generation_audio_backup = {
+            let item = self
+                .queue
+                .items()
+                .iter()
+                .find(|item| item.id == item_id)
+                .ok_or_else(|| format!("unknown history item: {item_id}"))?;
+            if item.status != HistoryStatus::Queued {
+                return Err(format!(
+                    "history item is not queued for generation: {item_id}"
+                ));
+            }
+            if self.active_generation_item_id.is_some() {
+                return Err("generation already in progress".to_string());
+            }
+            if item.has_audio {
+                self.audio_cache
+                    .get(item_id)
+                    .cloned()
+                    .map(|audio| (item_id.to_string(), audio))
+            } else {
+                None
+            }
+        };
         if !self.queue.mark_generating(item_id) {
             return Err(format!("unknown history item: {item_id}"));
+        }
+        self.active_generation_audio_backup = active_generation_audio_backup;
+        if self.active_generation_audio_backup.is_some() {
+            let _ = self.audio_cache.remove(item_id);
         }
         self.active_generation = Some(ActiveGeneration {
             item_id: item_id.to_string(),
@@ -458,6 +500,9 @@ impl AppCore {
         current: usize,
         total: usize,
     ) -> bool {
+        if !self.accepts_sidecar_generation_event(item_id, false) {
+            return false;
+        }
         self.queue.mark_progress(item_id, current, total)
     }
 
@@ -477,6 +522,7 @@ impl AppCore {
             },
         );
         self.queue.mark_ready(&item_id);
+        self.active_generation_audio_backup = None;
         let _ = duration_seconds;
     }
 
@@ -486,7 +532,7 @@ impl AppCore {
         samples: Vec<f32>,
         sample_rate: u32,
     ) -> Result<()> {
-        if self.active_generation_item_id.as_deref() != Some(item_id) {
+        if !self.accepts_sidecar_generation_event(item_id, false) {
             bail!("stale audio chunk for inactive item: {item_id}");
         }
         self.audio_cache
@@ -499,9 +545,16 @@ impl AppCore {
         item_id: &str,
         sample_rate: u32,
         duration_seconds: f32,
-    ) -> Result<()> {
-        if self.active_generation_item_id.as_deref() != Some(item_id) {
+    ) -> Result<SidecarGenerationOutcome> {
+        if !self.accepts_sidecar_generation_event(item_id, true) {
             bail!("stale generation completion for inactive item: {item_id}");
+        }
+        if self.active_generation_canceled(item_id) {
+            self.clear_active_generation(item_id);
+            let _ = self.queue.mark_canceled(item_id);
+            self.restore_generation_audio(item_id);
+            self.active_generation_audio_backup = None;
+            return Ok(SidecarGenerationOutcome::Canceled);
         }
         self.clear_active_generation(item_id);
         if !self.audio_cache.contains(item_id) {
@@ -514,14 +567,17 @@ impl AppCore {
             );
         }
         self.queue.mark_ready(item_id);
+        self.active_generation_audio_backup = None;
         let _ = duration_seconds;
-        Ok(())
+        Ok(SidecarGenerationOutcome::Ready)
     }
 
     pub fn finish_generation_failure(&mut self, run: GenerationRun, error: String) -> String {
         let item_id = run.item_id;
         self.clear_active_generation(&item_id);
         self.queue.mark_failed(&item_id, error.clone());
+        self.restore_generation_audio(&item_id);
+        self.active_generation_audio_backup = None;
         error
     }
 
@@ -530,11 +586,20 @@ impl AppCore {
         item_id: &str,
         error: String,
     ) -> Result<String> {
-        if self.active_generation_item_id.as_deref() != Some(item_id) {
+        if !self.accepts_sidecar_generation_event(item_id, true) {
             bail!("stale generation failure for inactive item: {item_id}");
+        }
+        if self.active_generation_canceled(item_id) {
+            self.clear_active_generation(item_id);
+            let _ = self.queue.mark_canceled(item_id);
+            self.restore_generation_audio(item_id);
+            self.active_generation_audio_backup = None;
+            return Ok(error);
         }
         self.clear_active_generation(item_id);
         self.queue.mark_failed(item_id, error.clone());
+        self.restore_generation_audio(item_id);
+        self.active_generation_audio_backup = None;
         Ok(error)
     }
 
@@ -544,15 +609,62 @@ impl AppCore {
         if !self.queue.mark_canceled(&item_id) {
             let _ = self.queue.mark_canceled(&item_id);
         }
+        self.restore_generation_audio(&item_id);
+        self.active_generation_audio_backup = None;
     }
 
     pub fn finish_generation_canceled_from_sidecar(&mut self, item_id: &str) -> Result<()> {
-        if self.active_generation_item_id.as_deref() != Some(item_id) {
+        if !self.accepts_sidecar_generation_event(item_id, true) {
             bail!("stale generation cancellation for inactive item: {item_id}");
         }
         self.clear_active_generation(item_id);
         let _ = self.queue.mark_canceled(item_id);
+        self.restore_generation_audio(item_id);
+        self.active_generation_audio_backup = None;
         Ok(())
+    }
+
+    pub fn accepts_sidecar_generation_event(&self, item_id: &str, terminal: bool) -> bool {
+        let Some(active_generation) = self.active_generation.as_ref() else {
+            return false;
+        };
+        if active_generation.item_id != item_id {
+            return false;
+        }
+        terminal || !active_generation.cancel.load(Ordering::SeqCst)
+    }
+
+    pub fn handle_sidecar_exit(&mut self, error: String) -> SidecarExitRecovery {
+        let failed_load =
+            self.active_load.take().is_some() || self.load_state == LoadUiState::Loading;
+        self.load_state = LoadUiState::Idle;
+        self.loaded_model_id = None;
+        self.loaded_sample_rate = None;
+
+        let stopped_generation_item_id = self.active_generation_item_id.clone();
+        let mut failed_generation_item_id = None;
+        if let Some(active_generation) = self.active_generation.take() {
+            self.active_generation_item_id = None;
+            let item_id = active_generation.item_id;
+            if active_generation.cancel.load(Ordering::SeqCst) {
+                self.restore_generation_audio(&item_id);
+                let _ = self.queue.mark_canceled(&item_id);
+            } else {
+                self.restore_generation_audio(&item_id);
+                self.queue.mark_failed(&item_id, error);
+                failed_generation_item_id = Some(item_id);
+            }
+        } else {
+            self.active_generation_item_id = None;
+            self.active_generation_audio_backup = None;
+        }
+        self.active_generation_audio_backup = None;
+
+        SidecarExitRecovery {
+            failed_load,
+            failed_generation_item_id,
+            stopped_generation_item_id,
+        }
     }
 
     pub fn synthesis_request_for_test(
@@ -690,6 +802,7 @@ impl AppCore {
             if let Some(active_generation) = self.active_generation.as_ref() {
                 active_generation.cancel.store(true, Ordering::SeqCst);
             }
+            self.restore_generation_audio(item_id);
             return self.queue.mark_canceled(item_id);
         }
 
@@ -721,6 +834,25 @@ impl AppCore {
         self.active_load
             .as_ref()
             .is_some_and(|active_load| active_load.id == load_id)
+    }
+
+    pub fn active_load_id(&self) -> Option<u64> {
+        self.active_load.as_ref().map(|active_load| active_load.id)
+    }
+
+    fn active_generation_canceled(&self, item_id: &str) -> bool {
+        self.active_generation
+            .as_ref()
+            .is_some_and(|active| active.item_id == item_id && active.cancel.load(Ordering::SeqCst))
+    }
+
+    fn restore_generation_audio(&mut self, item_id: &str) {
+        if let Some((backup_item_id, backup_audio)) = self.active_generation_audio_backup.as_ref() {
+            self.audio_cache
+                .insert(backup_item_id.clone(), backup_audio.clone());
+        } else {
+            let _ = self.audio_cache.remove(item_id);
+        }
     }
 
     fn clear_active_generation(&mut self, item_id: &str) {
@@ -816,7 +948,14 @@ mod tests {
         assert_eq!(snapshot.config.selected_model_id.as_deref(), Some("alpha"));
         assert_eq!(snapshot.config.language, LanguageMode::English);
         assert_eq!(snapshot.config.theme, ThemeMode::Light);
-        assert_eq!(snapshot.config.backend, BackendKind::Cuda);
+        assert_eq!(
+            snapshot.config.backend,
+            if cfg!(feature = "cuda") {
+                BackendKind::Cuda
+            } else {
+                BackendKind::Cpu
+            }
+        );
         assert_eq!(snapshot.config.audio_host.as_deref(), Some("host-a"));
         assert_eq!(snapshot.config.audio_device.as_deref(), Some("device-a"));
         assert_eq!(snapshot.config.volume, 1.0);

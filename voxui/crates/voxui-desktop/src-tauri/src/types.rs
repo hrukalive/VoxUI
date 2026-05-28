@@ -102,8 +102,20 @@ impl Default for AppConfig {
     }
 }
 
+impl AppConfig {
+    pub fn normalize_for_build(&mut self) {
+        if !cuda_available() {
+            self.backend = BackendKind::Cpu;
+        }
+    }
+}
+
+pub fn cuda_available() -> bool {
+    cfg!(feature = "cuda")
+}
+
 fn default_backend() -> BackendKind {
-    if cfg!(feature = "cuda") {
+    if cuda_available() {
         BackendKind::Cuda
     } else {
         BackendKind::Cpu
@@ -249,6 +261,7 @@ pub struct RequestSnapshot {
 pub struct AppSnapshot {
     pub config: AppConfig,
     pub system_language: LanguageMode,
+    pub cuda_available: bool,
     pub models: Vec<ModelChoice>,
     pub selected_model_id: Option<String>,
     pub loaded_model_id: Option<String>,

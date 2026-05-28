@@ -26,6 +26,7 @@ impl SidecarEngine {
         W: Write,
     {
         emit_frame(&mut writer, ready_frame())?;
+        tracing::debug!("sidecar emitted ready event");
         let commands = spawn_command_reader(
             reader,
             self.load_cancel.clone(),
@@ -34,6 +35,10 @@ impl SidecarEngine {
 
         while let Ok(command) = commands.recv() {
             let command = command?;
+            tracing::debug!(
+                command = sidecar_command_name(&command),
+                "sidecar received command"
+            );
             let shutdown = self.handle_command_write(command, &mut writer)?;
             if shutdown {
                 break;
@@ -73,6 +78,13 @@ impl SidecarEngine {
                 lora_path,
                 backend,
             } => {
+                tracing::info!(
+                    load_id,
+                    model_dir = %model_dir.display(),
+                    lora_path = lora_path.as_ref().map(|path| path.display().to_string()).as_deref().unwrap_or(""),
+                    backend = ?backend,
+                    "sidecar starting model load"
+                );
                 self.cancel_active_generation();
                 self.cancel_active_load();
                 let cancel = Arc::new(AtomicBool::new(false));
@@ -130,6 +142,7 @@ impl SidecarEngine {
                 match load_result {
                     Ok(engine) if !canceled => {
                         let sample_rate = engine.sample_rate();
+                        tracing::info!(load_id, sample_rate, "sidecar model load succeeded");
                         self.engine = Some(engine);
                         emit(Frame {
                             header: SidecarEvent::ModelLoadDone {
@@ -145,9 +158,11 @@ impl SidecarEngine {
                         emit(model_load_done_canceled(load_id))?;
                     }
                     Err(error) if canceled || is_cancel_error(&error) => {
+                        tracing::info!(load_id, error = %error, "sidecar model load canceled");
                         emit(model_load_done_canceled(load_id))?;
                     }
                     Err(error) => {
+                        tracing::error!(load_id, error = %error, "sidecar model load failed");
                         emit(Frame {
                             header: SidecarEvent::ModelLoadDone {
                                 load_id,
@@ -586,6 +601,16 @@ fn is_cancel_error(error: &anyhow::Error) -> bool {
 
 fn is_clean_eof(error: &anyhow::Error) -> bool {
     error.to_string().contains("sidecar protocol clean eof")
+}
+
+fn sidecar_command_name(command: &SidecarCommand) -> &'static str {
+    match command {
+        SidecarCommand::LoadModel { .. } => "load_model",
+        SidecarCommand::CancelLoad { .. } => "cancel_load",
+        SidecarCommand::Synthesize { .. } => "synthesize",
+        SidecarCommand::CancelSynthesis { .. } => "cancel_synthesis",
+        SidecarCommand::Shutdown => "shutdown",
+    }
 }
 
 #[cfg(test)]

@@ -165,6 +165,21 @@ fn load_config_returns_defaults_when_file_is_missing() {
     assert_eq!(config, AppConfig::default());
 }
 
+#[cfg(not(feature = "cuda"))]
+#[test]
+fn cpu_build_load_config_normalizes_saved_cuda_backend_to_cpu() {
+    let root = unique_temp_dir("cpu_backend");
+    let path = root.join("voxui_config.json");
+    fs::create_dir_all(&root).unwrap();
+    fs::write(&path, r#"{ "backend": "cuda" }"#).unwrap();
+
+    let config = load_config(&path).unwrap();
+
+    fs::remove_dir_all(root).unwrap();
+
+    assert_eq!(config.backend, BackendKind::Cpu);
+}
+
 #[test]
 fn save_config_creates_parent_directory_and_load_config_reads_written_json() {
     let root = unique_temp_dir("save_load");
@@ -189,5 +204,7 @@ fn save_config_creates_parent_directory_and_load_config_reads_written_json() {
 
     fs::remove_dir_all(root).unwrap();
 
-    assert_eq!(decoded, config);
+    let mut expected = config;
+    expected.normalize_for_build();
+    assert_eq!(decoded, expected);
 }

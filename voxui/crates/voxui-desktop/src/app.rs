@@ -1,6 +1,7 @@
 use leptos::prelude::*;
 use wasm_bindgen_futures::spawn_local;
 
+use crate::components::error_modal::ErrorModal;
 use crate::components::header::Header;
 use crate::components::history::HistoryList;
 use crate::components::input_box::InputBox;
@@ -19,6 +20,7 @@ pub fn App() -> impl IntoView {
     let (settings_page, set_settings_page) = signal(SettingsPage::General);
     let (load_open, set_load_open) = signal(false);
     let (load_percent, set_load_percent) = signal(0.0_f32);
+    let (load_error, set_load_error) = signal(None::<String>);
     let (snapshot, set_snapshot) = signal(Some(fallback_snapshot()));
     let (audio_state, set_audio_state) = signal(AudioState::default());
 
@@ -70,7 +72,11 @@ pub fn App() -> impl IntoView {
     });
     spawn_local(async move {
         let _ = crate::tauri_api::listen_app_event("model_load_done", move |event| {
-            let _ = crate::tauri_api::decode_app_event::<ModelLoadDoneEvent>(event);
+            if let Ok(done) = crate::tauri_api::decode_app_event::<ModelLoadDoneEvent>(event) {
+                if done.status != "success" && done.status != "canceled" {
+                    set_load_error.set(Some(done.error.unwrap_or_else(|| done.status)));
+                }
+            }
             set_load_percent.set(100.0);
             set_load_open.set(false);
             refresh_snapshot();
@@ -161,10 +167,12 @@ pub fn App() -> impl IntoView {
                         }
                         on_load=move || {
                             if let Some(choice_id) = current_snapshot().selected_model_id {
+                                set_load_error.set(None);
                                 set_load_percent.set(0.0);
                                 set_load_open.set(true);
                                 spawn_local(async move {
-                                    if crate::tauri_api::load_model(choice_id).await.is_err() {
+                                    if let Err(error) = crate::tauri_api::load_model(choice_id).await {
+                                        set_load_error.set(Some(error));
                                         set_load_open.set(false);
                                     }
                                     refresh_snapshot();
@@ -235,6 +243,7 @@ pub fn App() -> impl IntoView {
             <SettingsModal
                 labels=current_labels
                 config=move || current_snapshot().config
+                cuda_available=move || current_snapshot().cuda_available
                 audio_state=move || audio_state.get()
                 open=move || settings_open.get()
                 active_page=move || settings_page.get()
@@ -303,6 +312,18 @@ pub fn App() -> impl IntoView {
                     />
                 }
             }}
+            {move || {
+                let labels = current_labels();
+                view! {
+                    <ErrorModal
+                        labels=labels
+                        open=move || load_error.get().is_some()
+                        title=move || current_labels().model_load_failed.to_string()
+                        message=move || load_error.get().unwrap_or_default()
+                        on_close=move || set_load_error.set(None)
+                    />
+                }
+            }}
         </div>
     }
 }
@@ -325,7 +346,7 @@ fn fallback_snapshot() -> AppSnapshot {
             selected_model_id: None,
             language: LanguageMode::System,
             theme: ThemeMode::Dark,
-            backend: BackendKind::Cuda,
+            backend: BackendKind::Cpu,
             audio_host: None,
             audio_device: None,
             volume: 0.8,
@@ -346,6 +367,7 @@ fn fallback_snapshot() -> AppSnapshot {
             },
         },
         system_language: LanguageMode::English,
+        cuda_available: false,
         models: Vec::new(),
         selected_model_id: None,
         loaded_model_id: None,
@@ -369,7 +391,11 @@ fn apply_optimistic_patch(snapshot: &mut AppSnapshot, patch: &ConfigPatch) {
         snapshot.config.theme = theme;
     }
     if let Some(backend) = patch.backend {
-        snapshot.config.backend = backend;
+        snapshot.config.backend = if snapshot.cuda_available {
+            backend
+        } else {
+            BackendKind::Cpu
+        };
     }
     if let Some(audio_host) = patch.audio_host.as_ref() {
         let audio_host = empty_string_as_none(audio_host.clone());

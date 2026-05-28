@@ -21,6 +21,7 @@ const DEFAULT_AUDIO_CHOICE: &str = "__voxui_default_audio__";
 pub fn SettingsModal(
     labels: impl Fn() -> Labels + Send + Sync + 'static + Copy,
     config: impl Fn() -> AppConfig + Send + Sync + 'static + Copy,
+    cuda_available: impl Fn() -> bool + Send + Sync + 'static + Copy,
     audio_state: impl Fn() -> AudioState + Send + Sync + 'static + Copy,
     open: impl Fn() -> bool + Send + Sync + 'static + Copy,
     active_page: impl Fn() -> SettingsPage + Send + Sync + 'static + Copy,
@@ -139,7 +140,7 @@ pub fn SettingsModal(
                                                 class="settings-select-control"
                                                 aria_label=labels().backend
                                                 value=move || backend_value(config().backend).to_string()
-                                                options=move || backend_options(labels())
+                                                options=move || backend_options(labels(), cuda_available())
                                                 disabled=move || false
                                                 on_change=move |value| {
                                                     on_config_patch(ConfigPatch {
@@ -402,11 +403,12 @@ fn theme_options(labels: Labels) -> Vec<SelectOption> {
     ]
 }
 
-fn backend_options(labels: Labels) -> Vec<SelectOption> {
-    vec![
-        SelectOption::new("cpu", labels.cpu),
-        SelectOption::new("cuda", labels.cuda),
-    ]
+fn backend_options(labels: Labels, cuda_available: bool) -> Vec<SelectOption> {
+    let mut options = vec![SelectOption::new("cpu", labels.cpu)];
+    if cuda_available {
+        options.push(SelectOption::new("cuda", labels.cuda));
+    }
+    options
 }
 
 fn audio_host_options(

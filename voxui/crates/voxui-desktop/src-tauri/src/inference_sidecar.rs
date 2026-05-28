@@ -28,6 +28,10 @@ impl SidecarProcess {
     pub fn spawn(
         sidecar_path: impl AsRef<Path>,
     ) -> Result<(Self, mpsc::Receiver<SidecarReaderEvent>)> {
+        tracing::info!(
+            "spawning inference sidecar: {}",
+            sidecar_path.as_ref().display()
+        );
         let mut child = Command::new(sidecar_path.as_ref())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -50,6 +54,10 @@ impl SidecarProcess {
     }
 
     pub fn send(&mut self, command: SidecarCommand) -> Result<()> {
+        tracing::debug!(
+            command = sidecar_command_name(&command),
+            "sending sidecar command"
+        );
         let writer = self.writer.as_mut().context("sidecar stdin is closed")?;
         write_frame(
             writer,
@@ -140,6 +148,16 @@ pub fn read_sidecar_frames<R: Read>(mut reader: R, sender: mpsc::Sender<SidecarR
 
 fn is_clean_eof(error: &anyhow::Error) -> bool {
     error.to_string().contains("sidecar protocol clean eof")
+}
+
+fn sidecar_command_name(command: &SidecarCommand) -> &'static str {
+    match command {
+        SidecarCommand::LoadModel { .. } => "load_model",
+        SidecarCommand::CancelLoad { .. } => "cancel_load",
+        SidecarCommand::Synthesize { .. } => "synthesize",
+        SidecarCommand::CancelSynthesis { .. } => "cancel_synthesis",
+        SidecarCommand::Shutdown => "shutdown",
+    }
 }
 
 pub fn is_active_generation_event(active_item_id: Option<&str>, event: &SidecarEvent) -> bool {

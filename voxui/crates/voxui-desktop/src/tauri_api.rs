@@ -30,6 +30,7 @@ extern "C" {
 pub struct AppSnapshot {
     pub config: AppConfig,
     pub system_language: LanguageMode,
+    pub cuda_available: bool,
     pub models: Vec<ModelChoice>,
     pub selected_model_id: Option<String>,
     pub loaded_model_id: Option<String>,

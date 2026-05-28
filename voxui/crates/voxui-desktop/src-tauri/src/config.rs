@@ -27,7 +27,10 @@ pub fn load_config(path: &Path) -> Result<AppConfig> {
 
     let text =
         fs::read_to_string(path).with_context(|| format!("read config from {}", path.display()))?;
-    serde_json::from_str(&text).with_context(|| format!("parse config from {}", path.display()))
+    let mut config: AppConfig =
+        serde_json::from_str(&text).with_context(|| format!("parse config from {}", path.display()))?;
+    config.normalize_for_build();
+    Ok(config)
 }
 
 pub fn save_config(path: &Path, config: &AppConfig) -> Result<()> {
@@ -35,6 +38,8 @@ pub fn save_config(path: &Path, config: &AppConfig) -> Result<()> {
         fs::create_dir_all(parent)
             .with_context(|| format!("create config directory {}", parent.display()))?;
     }
-    let text = serde_json::to_string_pretty(config).context("serialize app config")?;
+    let mut config = config.clone();
+    config.normalize_for_build();
+    let text = serde_json::to_string_pretty(&config).context("serialize app config")?;
     fs::write(path, text).with_context(|| format!("write config to {}", path.display()))
 }

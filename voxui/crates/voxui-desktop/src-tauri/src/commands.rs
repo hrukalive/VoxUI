@@ -134,6 +134,13 @@ pub fn load_model(
     })?;
 
     let shared = state.inner().clone();
+    tracing::info!(
+        load_id,
+        choice_id = %choice.id,
+        model_dir = %choice.model_dir.display(),
+        backend = ?backend,
+        "requesting sidecar model load"
+    );
     let command = SidecarCommand::LoadModel {
         load_id,
         model_dir: choice.model_dir.clone(),
@@ -326,6 +333,10 @@ fn send_sidecar_command(
     shared: SharedAppCore,
     command: SidecarCommand,
 ) -> Result<(), String> {
+    tracing::debug!(
+        command = sidecar_command_name(&command),
+        "queueing sidecar command"
+    );
     ensure_sidecar(window, shared)?;
     let mut guard = sidecar_slot()
         .lock()
@@ -388,23 +399,26 @@ fn spawn_sidecar_reader(
         for event in receiver {
             match event {
                 SidecarReaderEvent::Frame(frame) => {
+                    tracing::debug!(
+                        event = sidecar_event_name(&frame.header),
+                        "received sidecar event"
+                    );
                     handle_sidecar_event(&window, shared.clone(), frame);
                 }
                 SidecarReaderEvent::Error(error) => {
                     tracing::error!("sidecar reader error: {error}");
-                    let _ = window.emit(
-                        "generation_done",
-                        GenerationDoneEvent {
-                            item_id: String::new(),
-                            status: "failed".to_string(),
-                            error: Some(error),
-                            sample_rate: None,
-                            duration_seconds: None,
-                        },
+                    handle_sidecar_exit(&window, shared.clone(), error);
+                    break;
+                }
+                SidecarReaderEvent::Eof => {
+                    tracing::warn!("sidecar stdout reached eof");
+                    handle_sidecar_exit(
+                        &window,
+                        shared.clone(),
+                        "sidecar exited unexpectedly".to_string(),
                     );
                     break;
                 }
-                SidecarReaderEvent::Eof => break,
             }
         }
         if let Ok(mut guard) = sidecar_slot().lock() {
@@ -417,6 +431,7 @@ fn handle_sidecar_event(window: &Window, shared: SharedAppCore, frame: Frame<Sid
     match frame.header {
         SidecarEvent::Ready => {}
         SidecarEvent::ModelLoadProgress {
+            load_id,
             phase,
             loaded_bytes,
             total_bytes,
@@ -425,17 +440,23 @@ fn handle_sidecar_event(window: &Window, shared: SharedAppCore, frame: Frame<Sid
             component_total,
             ..
         } => {
-            let _ = window.emit(
-                "model_load_progress",
-                crate::types::ModelLoadProgressEvent {
-                    phase,
-                    loaded_bytes,
-                    total_bytes,
-                    component,
-                    component_index,
-                    component_total,
-                },
-            );
+            let should_emit = shared
+                .lock()
+                .map(|core| core.active_load_id() == Some(load_id))
+                .unwrap_or(false);
+            if should_emit {
+                let _ = window.emit(
+                    "model_load_progress",
+                    crate::types::ModelLoadProgressEvent {
+                        phase,
+                        loaded_bytes,
+                        total_bytes,
+                        component,
+                        component_index,
+                        component_total,
+                    },
+                );
+            }
         }
         SidecarEvent::ModelLoadDone {
             load_id,
@@ -443,19 +464,31 @@ fn handle_sidecar_event(window: &Window, shared: SharedAppCore, frame: Frame<Sid
             sample_rate,
             error,
         } => {
+            tracing::info!(
+                load_id,
+                status = ?status,
+                sample_rate,
+                error = error.as_deref().unwrap_or(""),
+                "received model load completion"
+            );
             let done = match shared.lock() {
                 Ok(mut core) => {
-                    match status {
+                    let accepted = match status {
                         OperationStatus::Success => {
                             if let (Ok(choice), Some(sample_rate)) =
                                 (core.selected_choice(), sample_rate)
                             {
-                                core.mark_load_success(load_id, choice.id, sample_rate);
+                                core.mark_load_success(load_id, choice.id, sample_rate)
+                            } else {
+                                false
                             }
                         }
                         OperationStatus::Canceled | OperationStatus::Failed => {
-                            core.mark_load_finished_without_swap_for_load(load_id);
+                            core.mark_load_finished_without_swap_for_load(load_id)
                         }
+                    };
+                    if !accepted {
+                        return;
                     }
                     let snapshot = core.snapshot();
                     crate::types::ModelLoadDoneEvent {
@@ -479,8 +512,12 @@ fn handle_sidecar_event(window: &Window, shared: SharedAppCore, frame: Frame<Sid
             current,
             total,
         } => {
-            if let Ok(mut core) = shared.lock() {
-                core.mark_generation_progress(&item_id, current, total);
+            let accepted = shared
+                .lock()
+                .map(|mut core| core.mark_generation_progress(&item_id, current, total))
+                .unwrap_or(false);
+            if !accepted {
+                return;
             }
             let _ = window.emit(
                 "generation_progress",
@@ -499,6 +536,9 @@ fn handle_sidecar_event(window: &Window, shared: SharedAppCore, frame: Frame<Sid
             if let Ok(samples) =
                 crate::inference_sidecar::sidecar_samples_from_payload(&frame.payload)
             {
+                if !accepts_sidecar_generation_event(&shared, &item_id, false) {
+                    return;
+                }
                 handle_streaming_audio_chunk(window, shared.clone(), item_id, samples, sample_rate);
             }
         }
@@ -510,8 +550,34 @@ fn handle_sidecar_event(window: &Window, shared: SharedAppCore, frame: Frame<Sid
             if let Ok(samples) =
                 crate::inference_sidecar::sidecar_samples_from_payload(&frame.payload)
             {
-                if let Ok(mut core) = shared.lock() {
-                    let _ = core.append_generation_audio_chunk(&item_id, samples, sample_rate);
+                if !accepts_sidecar_generation_event(&shared, &item_id, false) {
+                    return;
+                }
+                let should_kick = if let Ok(mut core) = shared.lock() {
+                    if let Err(error) =
+                        core.append_generation_audio_chunk(&item_id, samples, sample_rate)
+                    {
+                        let _ = core
+                            .finish_generation_failure_from_sidecar(&item_id, error.to_string());
+                        let _ = window.emit(
+                            "generation_done",
+                            GenerationDoneEvent {
+                                item_id,
+                                status: "failed".to_string(),
+                                error: Some(error.to_string()),
+                                sample_rate: None,
+                                duration_seconds: None,
+                            },
+                        );
+                        true
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                };
+                if should_kick {
+                    kick_generation_queue(window, shared);
                 }
             }
         }
@@ -523,17 +589,47 @@ fn handle_sidecar_event(window: &Window, shared: SharedAppCore, frame: Frame<Sid
             error,
         } => {
             let mut playback_run = None;
+            let mut accepted = false;
+            let mut final_status = status;
+            let mut final_error = error.clone();
+            let mut final_sample_rate = sample_rate;
+            let mut final_duration_seconds = duration_seconds;
             let done = match shared.lock() {
                 Ok(mut core) => {
-                    match status {
+                    if !core.accepts_sidecar_generation_event(&item_id, true) {
+                        return;
+                    }
+                    accepted = true;
+                    match final_status {
                         OperationStatus::Success => {
                             if let (Some(rate), Some(duration)) = (sample_rate, duration_seconds) {
-                                let _ = core.finish_generation_success_from_sidecar(
+                                match core.finish_generation_success_from_sidecar(
                                     &item_id, rate, duration,
-                                );
-                                if !finish_streaming_playback(window, item_id.clone()) {
-                                    playback_run =
-                                        core.begin_or_queue_auto_playback(&item_id).ok().flatten();
+                                ) {
+                                    Ok(crate::app_core::SidecarGenerationOutcome::Ready) => {
+                                        if !finish_streaming_playback(window, item_id.clone()) {
+                                            playback_run = core
+                                                .begin_or_queue_auto_playback(&item_id)
+                                                .ok()
+                                                .flatten();
+                                        }
+                                    }
+                                    Ok(crate::app_core::SidecarGenerationOutcome::Canceled) => {
+                                        stop_streaming_playback(&item_id);
+                                        final_status = OperationStatus::Canceled;
+                                        final_error = None;
+                                        final_sample_rate = None;
+                                        final_duration_seconds = None;
+                                    }
+                                    Err(error) => {
+                                        stop_streaming_playback(&item_id);
+                                        let _ = core.finish_generation_failure_from_sidecar(
+                                            &item_id,
+                                            error.to_string(),
+                                        );
+                                        final_status = OperationStatus::Failed;
+                                        final_error = Some(error.to_string());
+                                    }
                                 }
                             }
                         }
@@ -553,10 +649,10 @@ fn handle_sidecar_event(window: &Window, shared: SharedAppCore, frame: Frame<Sid
                     }
                     GenerationDoneEvent {
                         item_id: item_id.clone(),
-                        status: operation_status_label(status).to_string(),
-                        error,
-                        sample_rate,
-                        duration_seconds,
+                        status: operation_status_label(final_status).to_string(),
+                        error: final_error,
+                        sample_rate: final_sample_rate,
+                        duration_seconds: final_duration_seconds,
                     }
                 }
                 Err(_) => GenerationDoneEvent {
@@ -567,6 +663,9 @@ fn handle_sidecar_event(window: &Window, shared: SharedAppCore, frame: Frame<Sid
                     duration_seconds: None,
                 },
             };
+            if !accepted {
+                return;
+            }
             let _ = window.emit("generation_done", done);
             if let Some(playback_run) = playback_run {
                 let _ = window.emit(
@@ -586,11 +685,81 @@ fn handle_sidecar_event(window: &Window, shared: SharedAppCore, frame: Frame<Sid
     }
 }
 
+fn accepts_sidecar_generation_event(shared: &SharedAppCore, item_id: &str, terminal: bool) -> bool {
+    shared
+        .lock()
+        .map(|core| core.accepts_sidecar_generation_event(item_id, terminal))
+        .unwrap_or(false)
+}
+
+fn handle_sidecar_exit(window: &Window, shared: SharedAppCore, error: String) {
+    let (recovery, snapshot) = match shared.lock() {
+        Ok(mut core) => {
+            let recovery = core.handle_sidecar_exit(error.clone());
+            let snapshot = core.snapshot();
+            (recovery, snapshot)
+        }
+        Err(_) => return,
+    };
+
+    if recovery.failed_load {
+        let _ = window.emit(
+            "model_load_done",
+            crate::types::ModelLoadDoneEvent {
+                status: "failed".to_string(),
+                selected_model_id: snapshot.selected_model_id,
+                loaded_model_id: snapshot.loaded_model_id,
+                error: Some(error.clone()),
+            },
+        );
+    }
+
+    if let Some(item_id) = recovery.stopped_generation_item_id.as_ref() {
+        stop_streaming_playback(item_id);
+    }
+
+    if let Some(item_id) = recovery.failed_generation_item_id {
+        let _ = window.emit(
+            "generation_done",
+            GenerationDoneEvent {
+                item_id,
+                status: "failed".to_string(),
+                error: Some(error),
+                sample_rate: None,
+                duration_seconds: None,
+            },
+        );
+    }
+}
+
 fn operation_status_label(status: OperationStatus) -> &'static str {
     match status {
         OperationStatus::Success => "success",
         OperationStatus::Canceled => "canceled",
         OperationStatus::Failed => "failed",
+    }
+}
+
+fn sidecar_command_name(command: &SidecarCommand) -> &'static str {
+    match command {
+        SidecarCommand::LoadModel { .. } => "load_model",
+        SidecarCommand::CancelLoad { .. } => "cancel_load",
+        SidecarCommand::Synthesize { .. } => "synthesize",
+        SidecarCommand::CancelSynthesis { .. } => "cancel_synthesis",
+        SidecarCommand::Shutdown => "shutdown",
+    }
+}
+
+fn sidecar_event_name(event: &SidecarEvent) -> &'static str {
+    match event {
+        SidecarEvent::Ready => "ready",
+        SidecarEvent::ModelLoadProgress { .. } => "model_load_progress",
+        SidecarEvent::ModelLoadDone { .. } => "model_load_done",
+        SidecarEvent::GenerationProgress { .. } => "generation_progress",
+        SidecarEvent::AudioChunk { .. } => "audio_chunk",
+        SidecarEvent::AudioFinal { .. } => "audio_final",
+        SidecarEvent::GenerationDone { .. } => "generation_done",
+        SidecarEvent::Error { .. } => "error",
     }
 }
 
@@ -622,8 +791,16 @@ fn handle_streaming_audio_chunk(
     samples: Vec<f32>,
     sample_rate: u32,
 ) {
-    if let Ok(mut core) = shared.lock() {
-        let _ = core.append_generation_audio_chunk(&item_id, samples.clone(), sample_rate);
+    match shared.lock() {
+        Ok(mut core) => {
+            if core
+                .append_generation_audio_chunk(&item_id, samples.clone(), sample_rate)
+                .is_err()
+            {
+                return;
+            }
+        }
+        Err(_) => return,
     }
 
     let mut players = match streaming_players().lock() {

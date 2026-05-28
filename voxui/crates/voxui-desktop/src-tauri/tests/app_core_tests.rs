@@ -109,6 +109,30 @@ fn changing_audio_host_clears_saved_audio_device() {
     assert_eq!(snapshot.config.audio_device, None);
 }
 
+#[cfg(not(feature = "cuda"))]
+#[test]
+fn cpu_build_ignores_cuda_backend_patch() {
+    let mut core = AppCore::from_config(AppConfig::default()).unwrap();
+
+    let snapshot = core
+        .apply_patch(ConfigPatch {
+            model_root: None,
+            selected_model_id: None,
+            language: None,
+            theme: None,
+            backend: Some(BackendKind::Cuda),
+            audio_host: None,
+            audio_device: None,
+            volume: None,
+            max_input_chars: None,
+            generation: None,
+        })
+        .unwrap();
+
+    assert_eq!(snapshot.config.backend, BackendKind::Cpu);
+    assert!(!snapshot.cuda_available);
+}
+
 #[test]
 fn clearing_audio_host_to_default_clears_host_and_device() {
     let mut core = AppCore::from_config(AppConfig {
@@ -675,4 +699,114 @@ fn canceling_active_regeneration_keeps_previous_audio_playable() {
 
     core.finish_generation_canceled(run);
     assert_eq!(core.snapshot().history[0].status, HistoryStatus::Ready);
+}
+
+#[test]
+fn canceled_active_generation_rejects_late_audio_chunks_but_accepts_completion() {
+    let mut core = AppCore::from_config(AppConfig::default()).unwrap();
+    core.set_loaded_model_for_test("model".to_string());
+    let item = core.enqueue_generation("hello".to_string()).unwrap();
+    core.begin_generation_for_test(&item.id).unwrap();
+
+    assert!(core.cancel_generation_item(&item.id));
+
+    assert!(!core.accepts_sidecar_generation_event(&item.id, false));
+    assert!(core.accepts_sidecar_generation_event(&item.id, true));
+    assert!(core
+        .append_generation_audio_chunk(&item.id, vec![0.1, 0.2], 16_000)
+        .is_err());
+    assert!(!core.has_audio(&item.id));
+}
+
+#[test]
+fn final_audio_failure_restores_previous_audio_and_keeps_item_failed() {
+    let mut core = AppCore::from_config(AppConfig::default()).unwrap();
+    core.set_loaded_model_for_test("model".to_string());
+    let item = core.enqueue_generation("hello".to_string()).unwrap();
+    core.set_generated_audio_for_test(item.id.clone(), vec![0.9; 2], 16_000);
+    core.regenerate_item(&item.id, &AppConfig::default())
+        .unwrap();
+    let _run = core.begin_generation_run(&item.id).unwrap();
+
+    assert!(!core.has_audio(&item.id));
+    core.append_generation_audio_chunk(&item.id, vec![0.1, 0.2], 16_000)
+        .unwrap();
+    let error = core
+        .finish_generation_failure_from_sidecar(&item.id, "sample rate changed".to_string())
+        .unwrap();
+
+    assert_eq!(error, "sample rate changed");
+    assert_eq!(core.snapshot().history[0].status, HistoryStatus::Failed);
+    assert!(core.has_audio(&item.id));
+}
+
+#[test]
+fn sidecar_exit_clears_loaded_model_and_fails_active_generation_without_consuming_queue() {
+    let mut core = AppCore::from_config(AppConfig::default()).unwrap();
+    core.set_loaded_model_for_test("model".to_string());
+    let active = core.enqueue_generation("active".to_string()).unwrap();
+    let queued = core.enqueue_generation("queued".to_string()).unwrap();
+    core.begin_generation_for_test(&active.id).unwrap();
+
+    let recovery = core.handle_sidecar_exit("sidecar exited unexpectedly".to_string());
+    let snapshot = core.snapshot();
+
+    assert_eq!(snapshot.loaded_model_id, None);
+    assert_eq!(snapshot.history[0].status, HistoryStatus::Failed);
+    assert_eq!(
+        snapshot.history[0].error.as_deref(),
+        Some("sidecar exited unexpectedly")
+    );
+    assert_eq!(snapshot.history[1].id, queued.id);
+    assert_eq!(snapshot.history[1].status, HistoryStatus::Queued);
+    assert_eq!(
+        recovery.failed_generation_item_id.as_deref(),
+        Some(active.id.as_str())
+    );
+    assert_eq!(
+        recovery.stopped_generation_item_id.as_deref(),
+        Some(active.id.as_str())
+    );
+    assert!(core
+        .begin_next_generation_run()
+        .unwrap_err()
+        .contains("no model loaded"));
+}
+
+#[test]
+fn sidecar_exit_after_local_cancel_keeps_item_canceled_and_releases_active_generation() {
+    let mut core = AppCore::from_config(AppConfig::default()).unwrap();
+    core.set_loaded_model_for_test("model".to_string());
+    let item = core.enqueue_generation("hello".to_string()).unwrap();
+    core.begin_generation_for_test(&item.id).unwrap();
+    assert!(core.cancel_generation_item(&item.id));
+
+    let recovery = core.handle_sidecar_exit("sidecar exited unexpectedly".to_string());
+    let snapshot = core.snapshot();
+
+    assert_eq!(snapshot.loaded_model_id, None);
+    assert_eq!(snapshot.history[0].status, HistoryStatus::Canceled);
+    assert_eq!(recovery.failed_generation_item_id, None);
+    assert_eq!(
+        recovery.stopped_generation_item_id.as_deref(),
+        Some(item.id.as_str())
+    );
+    assert!(core
+        .begin_next_generation_run()
+        .unwrap_err()
+        .contains("no model loaded"));
+}
+
+#[test]
+fn sidecar_exit_clears_loaded_model_and_finishes_active_load() {
+    let mut core = AppCore::from_config(AppConfig::default()).unwrap();
+    core.set_loaded_model_for_test("old-model".to_string());
+    let (_load_id, _cancel) = core.begin_model_load_for_test();
+
+    let recovery = core.handle_sidecar_exit("sidecar exited unexpectedly".to_string());
+    let snapshot = core.snapshot();
+
+    assert_eq!(snapshot.loaded_model_id, None);
+    assert_eq!(snapshot.load_state, LoadUiState::Idle);
+    assert!(recovery.failed_load);
 }

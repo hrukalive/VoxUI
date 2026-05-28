@@ -1,3 +1,5 @@
 [env]
 CUDA_COMPUTE_CAP = "89"
 NVCC_APPEND_FLAGS = "--allow-unsupported-compiler"
+RUST_LOG="voxui_desktop=debug,voxui_inference_sidecar=debug,voxui_inference=info,tauri=info"
+RUST_BACKTRACE="1"
