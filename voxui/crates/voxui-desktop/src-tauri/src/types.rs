@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
@@ -70,6 +71,140 @@ impl Default for GenerationSettings {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LiveMessageKind {
+    Danmu,
+    Gift,
+    Superchat,
+    Guard,
+    Like,
+    Enter,
+}
+
+impl LiveMessageKind {
+    pub fn is_paid(self) -> bool {
+        matches!(
+            self,
+            LiveMessageKind::Gift | LiveMessageKind::Superchat | LiveMessageKind::Guard
+        )
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ReplacementRule {
+    pub enabled: bool,
+    pub from: String,
+    pub to: String,
+}
+
+impl Default for ReplacementRule {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            from: String::new(),
+            to: String::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TemplateConfig {
+    pub danmu: String,
+    pub gift_zh: String,
+    pub gift_en: String,
+    pub superchat_zh: String,
+    pub superchat_en: String,
+    pub guard_zh: String,
+    pub guard_en: String,
+    pub like_zh: String,
+    pub like_en: String,
+    pub enter_zh: String,
+    pub enter_en: String,
+}
+
+impl Default for TemplateConfig {
+    fn default() -> Self {
+        Self {
+            danmu: "{msg}".to_string(),
+            gift_zh: "感谢{mapped_uname}送出的{gift_num}个{gift_name}".to_string(),
+            gift_en: "Thank you {mapped_uname} for {gift_num} {gift_name}".to_string(),
+            superchat_zh: "感谢{mapped_uname}的醒目留言：{message}".to_string(),
+            superchat_en: "Thank you {mapped_uname} for the superchat saying {message}".to_string(),
+            guard_zh: "感谢{mapped_uname}开通的{guard_label}".to_string(),
+            guard_en: "Thank you {mapped_uname} for joining as {guard_label}".to_string(),
+            like_zh: "感谢{mapped_uname}给直播间点赞".to_string(),
+            like_en: "Thank you {mapped_uname} for liking the stream".to_string(),
+            enter_zh: "欢迎{mapped_uname}进入直播间".to_string(),
+            enter_en: "Hi {mapped_uname}, welcome to the stream".to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct LiveConfig {
+    pub identity_code: String,
+    pub enable_ceve_server_heartbeat: bool,
+    pub show_danmu: bool,
+    pub show_gifts: bool,
+    pub show_superchats: bool,
+    pub show_guards: bool,
+    pub show_likes: bool,
+    pub show_enters: bool,
+    pub templates: TemplateConfig,
+    pub replacement_rules: Vec<ReplacementRule>,
+    pub mapped_unames: BTreeMap<String, String>,
+    pub original_unames: BTreeMap<String, String>,
+}
+
+impl Default for LiveConfig {
+    fn default() -> Self {
+        Self {
+            identity_code: String::new(),
+            enable_ceve_server_heartbeat: false,
+            show_danmu: true,
+            show_gifts: true,
+            show_superchats: true,
+            show_guards: true,
+            show_likes: false,
+            show_enters: true,
+            templates: TemplateConfig::default(),
+            replacement_rules: vec![
+                ReplacementRule {
+                    enabled: true,
+                    from: "我的".to_string(),
+                    to: "你的".to_string(),
+                },
+                ReplacementRule {
+                    enabled: true,
+                    from: "我".to_string(),
+                    to: "你".to_string(),
+                },
+                ReplacementRule {
+                    enabled: true,
+                    from: "I".to_string(),
+                    to: "you".to_string(),
+                },
+                ReplacementRule {
+                    enabled: true,
+                    from: "me".to_string(),
+                    to: "you".to_string(),
+                },
+                ReplacementRule {
+                    enabled: true,
+                    from: "my".to_string(),
+                    to: "your".to_string(),
+                },
+            ],
+            mapped_unames: BTreeMap::new(),
+            original_unames: BTreeMap::new(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AppConfig {
@@ -83,6 +218,7 @@ pub struct AppConfig {
     pub volume: f32,
     pub max_input_chars: usize,
     pub generation: GenerationSettings,
+    pub live: LiveConfig,
 }
 
 impl Default for AppConfig {
@@ -98,6 +234,7 @@ impl Default for AppConfig {
             volume: 0.8,
             max_input_chars: 280,
             generation: GenerationSettings::default(),
+            live: LiveConfig::default(),
         }
     }
 }
