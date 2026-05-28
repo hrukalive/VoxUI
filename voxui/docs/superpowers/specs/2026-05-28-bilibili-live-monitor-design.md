@@ -96,6 +96,8 @@ Use these OpenLive constants from `ws2.py`:
 - fallback signing endpoint: `https://bopen.ceve-market.org/sign`;
 - OpenLive host: `https://live-open.biliapi.com`;
 - heartbeat interval: `20` seconds.
+- ceve server heartbeat URL: `http://localhost.ceve-market.org:5218/heartbeat`;
+- ceve server heartbeat default: disabled.
 
 These should be treated as built-in defaults for the Bilibili integration rather than user-facing settings.
 
@@ -133,7 +135,7 @@ The implementation should mirror `ws2.py`:
 9. Open/show the live monitor window.
 10. Run websocket heartbeat loop using packet `op=2`.
 11. Run signed OpenLive app heartbeat loop with `/v2/app/heartbeat`.
-12. Optionally retain the ceve-market local heartbeat behavior if needed by the signing service, but keep it internal and non-blocking.
+12. If the Live setting for ceve server heartbeat is enabled, send the non-signed local heartbeat to `http://localhost.ceve-market.org:5218/heartbeat` with body `{"gameId": game_id}`. Keep this heartbeat non-blocking: failures are logged and surfaced as auxiliary status, but they do not disconnect the Bilibili session.
 13. On monitor window close, disconnect command, or whole app shutdown, send `/v2/app/end` when `game_id` exists.
 
 Cleanup should be idempotent. Multiple close paths must not panic or send duplicate state transitions.
@@ -231,6 +233,7 @@ Fields:
 
 - identity code text input labelled `身份码` in Chinese and `Identity code` in English;
 - connect/disconnect button with status text;
+- ceve server heartbeat checkbox, disabled by default;
 - message-type checkboxes for danmu, paid gifts, superchats, guard purchases, likes, and viewer enters;
 - template editor for each message type;
 - replacement-rule editor for danmu switch mode;
