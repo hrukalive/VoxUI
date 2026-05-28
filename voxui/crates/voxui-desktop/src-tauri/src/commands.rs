@@ -114,9 +114,7 @@ pub fn set_config_patch(
 pub fn get_live_state(
     state: State<'_, SharedAppCore>,
 ) -> Result<crate::types::LiveSnapshot, String> {
-    with_core(state, |core| {
-        Ok(core.live_snapshot(crate::live::LiveLanguage::English))
-    })
+    with_core(state, |core| Ok(core.live_snapshot_for_current_language()))
 }
 
 #[tauri::command]
@@ -137,7 +135,7 @@ pub fn clear_live_items(
 ) -> Result<crate::types::LiveSnapshot, String> {
     let snapshot = with_core(state, |core| {
         core.clear_live_items();
-        Ok(core.live_snapshot(crate::live::LiveLanguage::English))
+        Ok(core.live_snapshot_for_current_language())
     })?;
     emit_live_snapshot(&app, "live_items_changed", &snapshot);
     Ok(snapshot)
@@ -156,7 +154,7 @@ pub fn connect_openblive(
     if guard.is_some() {
         return shared
             .lock()
-            .map(|core| core.live_snapshot(crate::live::LiveLanguage::English))
+            .map(|core| core.live_snapshot_for_current_language())
             .map_err(|_| "app state lock poisoned".to_string());
     }
 
@@ -248,7 +246,7 @@ pub fn connect_openblive(
 
     shared
         .lock()
-        .map(|core| core.live_snapshot(crate::live::LiveLanguage::English))
+        .map(|core| core.live_snapshot_for_current_language())
         .map_err(|_| "app state lock poisoned".to_string())
 }
 
@@ -283,7 +281,7 @@ pub fn send_live_suggestion(
         other => return Err(format!("unsupported live suggestion mode: {other}")),
     };
     let text = with_core(state, |core| {
-        core.live_suggestion_for_item(&item_id, crate::live::LiveLanguage::English, mode)
+        core.live_suggestion_for_item_current_language(&item_id, mode)
             .ok_or_else(|| anyhow::anyhow!("live item is unavailable or filtered: {item_id}"))
     })?;
     let event = MainInputReplaceEvent { text };
@@ -671,7 +669,7 @@ fn handle_openblive_event(app: &AppHandle, shared: SharedAppCore, raw: serde_jso
 
     let snapshot = match shared.lock() {
         Ok(mut core) => match core.add_live_event(event) {
-            Ok(_) => core.live_snapshot(crate::live::LiveLanguage::English),
+            Ok(_) => core.live_snapshot_for_current_language(),
             Err(error) => {
                 tracing::warn!("failed to add OpenLive event: {error}");
                 return;

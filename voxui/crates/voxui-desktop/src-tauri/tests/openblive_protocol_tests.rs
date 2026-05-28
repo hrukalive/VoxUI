@@ -1,6 +1,7 @@
 use voxui_desktop::openblive::{
-    compact_json_body, unpack_packet, LiveWorkerState, OpenBlivePacket, WorkerCommand, APP_ID,
-    CEVE_HEARTBEAT_URL, HEARTBEAT_INTERVAL_SECS, HOST, SIGN_URLS,
+    compact_json_body, handle_auth_binary, handle_websocket_binary, unpack_packet, unpack_packets,
+    LiveWorkerState, OpenBlivePacket, WorkerCommand, APP_ID, CEVE_HEARTBEAT_URL,
+    HEARTBEAT_INTERVAL_SECS, HOST, SIGN_URLS,
 };
 
 #[test]
@@ -38,6 +39,61 @@ fn packet_pack_round_trips_auth_body() {
 
     assert_eq!(decoded.op, 7);
     assert_eq!(decoded.body, br#"{"roomid":1}"#);
+}
+
+#[test]
+fn unpack_packets_decodes_concatenated_packets() {
+    let first = OpenBlivePacket {
+        op: 3,
+        body: br#"{"count":1}"#.to_vec(),
+    };
+    let second = OpenBlivePacket {
+        op: 8,
+        body: br#"{"code":0}"#.to_vec(),
+    };
+    let mut batched = first.pack();
+    batched.extend_from_slice(&second.pack());
+
+    let decoded = unpack_packets(&batched).unwrap();
+
+    assert_eq!(decoded, vec![first, second]);
+}
+
+#[test]
+fn handle_websocket_binary_processes_all_messages_in_batched_frame() {
+    let first = OpenBlivePacket {
+        op: 5,
+        body: br#"{"cmd":"LIVE_OPEN_PLATFORM_DM","data":{"msg":"one"}}"#.to_vec(),
+    };
+    let second = OpenBlivePacket {
+        op: 5,
+        body: br#"{"cmd":"LIVE_OPEN_PLATFORM_DM","data":{"msg":"two"}}"#.to_vec(),
+    };
+    let mut batched = first.pack();
+    batched.extend_from_slice(&second.pack());
+    let mut events = Vec::new();
+
+    handle_websocket_binary(&batched, &mut |event| events.push(event)).unwrap();
+
+    assert_eq!(events.len(), 2);
+    assert_eq!(events[0]["data"]["msg"], "one");
+    assert_eq!(events[1]["data"]["msg"], "two");
+}
+
+#[test]
+fn handle_auth_binary_accepts_auth_reply_after_heartbeat_reply_in_batched_frame() {
+    let heartbeat = OpenBlivePacket {
+        op: 3,
+        body: br#"{"count":1}"#.to_vec(),
+    };
+    let auth = OpenBlivePacket {
+        op: 8,
+        body: br#"{"code":0}"#.to_vec(),
+    };
+    let mut batched = heartbeat.pack();
+    batched.extend_from_slice(&auth.pack());
+
+    assert!(handle_auth_binary(&batched).unwrap());
 }
 
 #[test]

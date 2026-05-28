@@ -11,8 +11,8 @@ use crate::live::{LiveEvent, LiveLanguage, LiveState, SuggestionMode};
 use crate::model_discovery::discover_models;
 use crate::playback::{GeneratedAudio, GeneratedAudioCache};
 use crate::types::{
-    AppConfig, AppSnapshot, ConfigPatch, LiveConfigPatch, LiveSnapshot, LiveStatus, LoadUiState,
-    ModelChoice, SidecarCapabilities,
+    AppConfig, AppSnapshot, ConfigPatch, LanguageMode, LiveConfigPatch, LiveSnapshot, LiveStatus,
+    LoadUiState, ModelChoice, SidecarCapabilities,
 };
 use voxui_inference::SynthesisRequest;
 
@@ -259,11 +259,22 @@ impl AppCore {
         }
 
         self.persist_config()?;
-        Ok(self.live_snapshot(LiveLanguage::English))
+        Ok(self.live_snapshot_for_current_language())
     }
 
     pub fn live_snapshot(&self, language: LiveLanguage) -> LiveSnapshot {
         self.live.snapshot(&self.config.live, language)
+    }
+
+    pub fn live_language(&self) -> LiveLanguage {
+        live_language_for_modes(
+            self.config.language,
+            crate::config::detect_system_language(),
+        )
+    }
+
+    pub fn live_snapshot_for_current_language(&self) -> LiveSnapshot {
+        self.live_snapshot(self.live_language())
     }
 
     pub fn set_live_status(
@@ -272,7 +283,7 @@ impl AppCore {
         status_message: Option<String>,
     ) -> LiveSnapshot {
         self.live.set_status(status, status_message);
-        self.live_snapshot(LiveLanguage::English)
+        self.live_snapshot_for_current_language()
     }
 
     pub fn clear_live_items(&mut self) {
@@ -287,6 +298,14 @@ impl AppCore {
     ) -> Option<String> {
         self.live
             .suggestion_for_item(item_id, &self.config.live, language, mode)
+    }
+
+    pub fn live_suggestion_for_item_current_language(
+        &self,
+        item_id: &str,
+        mode: SuggestionMode,
+    ) -> Option<String> {
+        self.live_suggestion_for_item(item_id, self.live_language(), mode)
     }
 
     pub fn add_live_event_for_test(&mut self, event: LiveEvent) -> Result<String> {
@@ -1045,6 +1064,17 @@ fn initialize_uname_mapping(
     }
 }
 
+fn live_language_for_modes(configured: LanguageMode, detected: LanguageMode) -> LiveLanguage {
+    match configured {
+        LanguageMode::Chinese => LiveLanguage::Chinese,
+        LanguageMode::English => LiveLanguage::English,
+        LanguageMode::System => match detected {
+            LanguageMode::Chinese => LiveLanguage::Chinese,
+            LanguageMode::System | LanguageMode::English => LiveLanguage::English,
+        },
+    }
+}
+
 fn normalize_generation_settings(generation: &mut crate::types::GenerationSettings) {
     generation.stream_consolidate_n = generation.stream_consolidate_n.max(1);
 }
@@ -1071,6 +1101,30 @@ mod tests {
 
     use super::*;
     use crate::types::{BackendKind, ConfigPatch, GenerationSettings, LanguageMode, ThemeMode};
+
+    #[test]
+    fn live_language_resolves_system_language_from_detected_language() {
+        assert_eq!(
+            live_language_for_modes(LanguageMode::Chinese, LanguageMode::English),
+            LiveLanguage::Chinese
+        );
+        assert_eq!(
+            live_language_for_modes(LanguageMode::English, LanguageMode::Chinese),
+            LiveLanguage::English
+        );
+        assert_eq!(
+            live_language_for_modes(LanguageMode::System, LanguageMode::Chinese),
+            LiveLanguage::Chinese
+        );
+        assert_eq!(
+            live_language_for_modes(LanguageMode::System, LanguageMode::English),
+            LiveLanguage::English
+        );
+        assert_eq!(
+            live_language_for_modes(LanguageMode::System, LanguageMode::System),
+            LiveLanguage::English
+        );
+    }
 
     #[test]
     fn apply_patch_rescans_model_root_and_clamps_values() {

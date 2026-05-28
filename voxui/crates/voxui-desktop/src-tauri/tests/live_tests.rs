@@ -6,7 +6,8 @@ use voxui_desktop::live::{
     parse_live_event, render_suggestion, switch_text, LiveLanguage, SuggestionMode,
 };
 use voxui_desktop::types::{
-    AppConfig, LiveConfigPatch, LiveMessageKind, LiveStatus, ReplacementRule, TemplateConfig,
+    AppConfig, LanguageMode, LiveConfigPatch, LiveMessageKind, LiveStatus, ReplacementRule,
+    TemplateConfig,
 };
 
 #[test]
@@ -437,11 +438,19 @@ fn live_status_defaults_to_disconnected() {
 }
 
 #[test]
-fn setting_live_status_returns_english_snapshot() {
-    let mut core = voxui_desktop::app_core::AppCore::from_config(AppConfig::default()).unwrap();
+fn setting_live_status_uses_configured_live_language() {
+    let mut live = AppConfig::default().live;
+    live.templates.gift_zh = "ZH {mapped_uname} {gift_num} {gift_name}".to_string();
+    live.templates.gift_en = "EN {mapped_uname} {gift_num} {gift_name}".to_string();
+    let mut core = voxui_desktop::app_core::AppCore::from_config(AppConfig {
+        language: LanguageMode::Chinese,
+        live,
+        ..AppConfig::default()
+    })
+    .unwrap();
     let event = parse_live_event(json!({
         "cmd": "LIVE_OPEN_PLATFORM_SEND_GIFT",
-        "data": { "paid": true, "gift_name": "flower", "gift_num": 2, "open_id": "u1", "uname": "Alice" }
+        "data": { "paid": true, "gift_name": "èŠ±", "gift_num": 2, "open_id": "u1", "uname": "Alice" }
     })).unwrap().unwrap();
     core.add_live_event_for_test(event).unwrap();
 
@@ -449,7 +458,34 @@ fn setting_live_status_returns_english_snapshot() {
 
     assert_eq!(snapshot.status, LiveStatus::Connected);
     assert_eq!(snapshot.status_message.as_deref(), Some("ready"));
-    assert_eq!(snapshot.items[0].suggestion, "Thank you Alice for 2 flower");
+    assert_eq!(snapshot.items[0].suggestion, "ZH Alice 2 èŠ±");
+}
+
+#[test]
+fn applying_live_patch_returns_snapshot_in_configured_live_language() {
+    let mut live = AppConfig::default().live;
+    live.templates.gift_zh = "ZH {mapped_uname} {gift_num} {gift_name}".to_string();
+    live.templates.gift_en = "EN {mapped_uname} {gift_num} {gift_name}".to_string();
+    let mut core = voxui_desktop::app_core::AppCore::from_config(AppConfig {
+        language: LanguageMode::Chinese,
+        live,
+        ..AppConfig::default()
+    })
+    .unwrap();
+    let event = parse_live_event(json!({
+        "cmd": "LIVE_OPEN_PLATFORM_SEND_GIFT",
+        "data": { "paid": true, "gift_name": "èŠ±", "gift_num": 2, "open_id": "u1", "uname": "Alice" }
+    })).unwrap().unwrap();
+    core.add_live_event_for_test(event).unwrap();
+
+    let snapshot = core
+        .apply_live_patch(LiveConfigPatch {
+            show_gifts: Some(true),
+            ..LiveConfigPatch::default()
+        })
+        .unwrap();
+
+    assert_eq!(snapshot.items[0].suggestion, "ZH Alice 2 èŠ±");
 }
 
 #[test]

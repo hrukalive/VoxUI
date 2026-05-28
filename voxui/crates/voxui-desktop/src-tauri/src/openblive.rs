@@ -143,6 +143,49 @@ pub fn unpack_packet(bytes: &[u8]) -> anyhow::Result<OpenBlivePacket> {
     Ok(OpenBlivePacket { op, body })
 }
 
+pub fn unpack_packets(bytes: &[u8]) -> anyhow::Result<Vec<OpenBlivePacket>> {
+    let mut packets = Vec::new();
+    let mut offset = 0;
+
+    while offset < bytes.len() {
+        let remaining = bytes.len() - offset;
+        if remaining < HEADER_LEN as usize {
+            bail!(
+                "OpenLive packet too short at offset {}: {} bytes, expected at least {}",
+                offset,
+                remaining,
+                HEADER_LEN
+            );
+        }
+
+        let packet_len = u32::from_be_bytes(bytes[offset..offset + 4].try_into()?) as usize;
+        if packet_len < HEADER_LEN as usize {
+            bail!(
+                "OpenLive packet length too small at offset {}: header says {}, expected at least {}",
+                offset,
+                packet_len,
+                HEADER_LEN
+            );
+        }
+        let end = offset
+            .checked_add(packet_len)
+            .ok_or_else(|| anyhow!("OpenLive packet length overflow at offset {offset}"))?;
+        if end > bytes.len() {
+            bail!(
+                "OpenLive packet length mismatch at offset {}: header says {}, remaining {}",
+                offset,
+                packet_len,
+                remaining
+            );
+        }
+
+        packets.push(unpack_packet(&bytes[offset..end])?);
+        offset = end;
+    }
+
+    Ok(packets)
+}
+
 pub fn compact_json_body(value: &Value) -> anyhow::Result<String> {
     serde_json::to_string(&SortedJsonValue::from(value))
         .map_err(|error| anyhow!("failed to serialize compact OpenLive JSON body: {error}"))
@@ -336,12 +379,9 @@ fn connect_openlive_websocket(
 
         match websocket.read() {
             Ok(Message::Binary(bytes)) => {
-                let packet = unpack_packet(&bytes)?;
-                if packet.op != OP_AUTH_REPLY {
-                    continue;
+                if handle_auth_binary(&bytes)? {
+                    return Ok(Some(websocket));
                 }
-                validate_auth_reply(&packet.body)?;
-                return Ok(Some(websocket));
             }
             Ok(Message::Ping(bytes)) => {
                 websocket
@@ -488,21 +528,33 @@ fn tungstenite_handshake_error(
     }
 }
 
-fn handle_websocket_binary(
+pub fn handle_websocket_binary(
     bytes: &[u8],
     on_event: &mut impl FnMut(serde_json::Value),
 ) -> anyhow::Result<()> {
-    let packet = unpack_packet(bytes)?;
-    match packet.op {
-        OP_MESSAGE => {
-            let value: Value = serde_json::from_slice(&packet.body)
-                .context("failed to decode OpenLive event JSON")?;
-            on_event(value);
+    for packet in unpack_packets(bytes)? {
+        match packet.op {
+            OP_MESSAGE => {
+                let value: Value = serde_json::from_slice(&packet.body)
+                    .context("failed to decode OpenLive event JSON")?;
+                on_event(value);
+            }
+            OP_HEARTBEAT_REPLY | OP_AUTH_REPLY => {}
+            op => tracing::debug!(op, "ignoring OpenLive websocket packet"),
         }
-        OP_HEARTBEAT_REPLY | OP_AUTH_REPLY => {}
-        op => tracing::debug!(op, "ignoring OpenLive websocket packet"),
     }
     Ok(())
+}
+
+pub fn handle_auth_binary(bytes: &[u8]) -> anyhow::Result<bool> {
+    for packet in unpack_packets(bytes)? {
+        if packet.op != OP_AUTH_REPLY {
+            continue;
+        }
+        validate_auth_reply(&packet.body)?;
+        return Ok(true);
+    }
+    Ok(false)
 }
 
 fn validate_auth_reply(body: &[u8]) -> anyhow::Result<()> {
