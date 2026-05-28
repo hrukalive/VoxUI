@@ -104,6 +104,12 @@ pub fn App() -> impl IntoView {
         })
         .await;
     });
+    spawn_local(async move {
+        let _ = crate::tauri_api::listen_app_event("sidecar_capabilities", move |_| {
+            refresh_snapshot();
+        })
+        .await;
+    });
 
     let commit_config_patch = move |patch: ConfigPatch| {
         set_snapshot.update(|snapshot| {
@@ -356,7 +362,7 @@ fn fallback_snapshot() -> AppSnapshot {
                 inference_timesteps: 10,
                 min_len: 2,
                 max_len: 2000,
-                streaming: true,
+                streaming: false,
                 stream_consolidate_n: 10,
                 retry_badcase: true,
                 retry_badcase_max_times: 3,

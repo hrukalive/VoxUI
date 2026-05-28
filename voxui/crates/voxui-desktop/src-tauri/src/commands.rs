@@ -3,7 +3,7 @@ use std::sync::mpsc;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 
-use tauri::{AppHandle, Emitter, State, Window};
+use tauri::{AppHandle, Emitter, Manager, State, Window};
 use tauri_plugin_dialog::DialogExt;
 use voxui_audio::{AudioPlayer, AudioSystem, StreamingPlayer, VolumeHandle};
 use voxui_sidecar_protocol::{
@@ -16,7 +16,7 @@ use crate::generation_queue::HistoryItem;
 use crate::inference_sidecar::{SidecarProcess, SidecarReaderEvent};
 use crate::types::{
     AppSnapshot, AudioStateDto, BackendKind, CommandResult, ConfigPatch, GenerationDoneEvent,
-    GenerationProgressEvent, ModelChoice, PlaybackStateEvent,
+    GenerationProgressEvent, ModelChoice, PlaybackStateEvent, SidecarCapabilities,
 };
 
 pub type SharedAppCore = Arc<Mutex<AppCore>>;
@@ -147,7 +147,7 @@ pub fn load_model(
         lora_path: choice.lora_path.clone(),
         backend: protocol_backend(backend),
     };
-    if let Err(error) = send_sidecar_command(&window, shared, command) {
+    if let Err(error) = send_sidecar_command(window.app_handle(), shared, command) {
         let _ = with_core(state, |core| {
             core.mark_load_finished_without_swap_for_load(load_id);
             Ok(())
@@ -168,7 +168,7 @@ pub fn enqueue_generation(
     text: String,
 ) -> Result<HistoryItem, String> {
     let item = with_core(state.clone(), |core| core.enqueue_generation(text))?;
-    kick_generation_queue(&window, state.inner().clone());
+    kick_generation_queue(window.app_handle(), state.inner().clone());
     Ok(item)
 }
 
@@ -193,7 +193,7 @@ pub fn regenerate(
             )
             .map_err(|err| err.to_string())?;
     }
-    kick_generation_queue(&window, state.inner().clone());
+    kick_generation_queue(window.app_handle(), state.inner().clone());
     Ok(CommandResult { ok: true })
 }
 
@@ -205,7 +205,7 @@ pub fn cancel_model_load(
     let load_id = with_core(state.clone(), |core| Ok(core.cancel_model_load_state()))?;
     if let Some(load_id) = load_id {
         let _ = send_sidecar_command(
-            &window,
+            window.app_handle(),
             state.inner().clone(),
             SidecarCommand::CancelLoad { load_id },
         );
@@ -227,7 +227,7 @@ pub fn cancel_generation(
     if canceled.ok {
         stop_streaming_playback(&item_id);
         let _ = send_sidecar_command(
-            &window,
+            window.app_handle(),
             state.inner().clone(),
             SidecarCommand::CancelSynthesis { item_id },
         );
@@ -252,7 +252,7 @@ pub fn play_audio(
             },
         )
         .map_err(|err| err.to_string())?;
-    spawn_playback(window, state.inner().clone(), run);
+    spawn_playback(window.app_handle().clone(), state.inner().clone(), run);
     Ok(CommandResult { ok: true })
 }
 
@@ -274,7 +274,7 @@ pub fn stop_audio(
     Ok(CommandResult { ok: true })
 }
 
-fn kick_generation_queue(window: &Window, shared: SharedAppCore) {
+fn kick_generation_queue(app: &AppHandle, shared: SharedAppCore) {
     let next_run = match shared.lock() {
         Ok(mut core) => core.begin_next_generation_run(),
         Err(_) => return,
@@ -288,7 +288,7 @@ fn kick_generation_queue(window: &Window, shared: SharedAppCore) {
                 request: synthesis_request_dto(run.request.clone()),
                 streaming: run.streaming,
             };
-            if let Err(error) = send_sidecar_command(window, shared.clone(), command) {
+            if let Err(error) = send_sidecar_command(app, shared.clone(), command) {
                 let done = match shared.lock() {
                     Ok(mut core) => {
                         let error = core.finish_generation_failure(run, error);
@@ -308,8 +308,8 @@ fn kick_generation_queue(window: &Window, shared: SharedAppCore) {
                         duration_seconds: None,
                     },
                 };
-                let _ = window.emit("generation_done", done);
-                kick_generation_queue(window, shared);
+                let _ = app.emit("generation_done", done);
+                kick_generation_queue(app, shared);
             }
         }
         Ok(None) => {}
@@ -324,12 +324,19 @@ fn protocol_backend(backend: BackendKind) -> ProtocolBackendKind {
     }
 }
 
+fn desktop_backend(backend: ProtocolBackendKind) -> BackendKind {
+    match backend {
+        ProtocolBackendKind::Cpu => BackendKind::Cpu,
+        ProtocolBackendKind::Cuda => BackendKind::Cuda,
+    }
+}
+
 fn sidecar_slot() -> &'static Mutex<Option<SidecarProcess>> {
     SIDECAR_PROCESS.get_or_init(|| Mutex::new(None))
 }
 
 fn send_sidecar_command(
-    window: &Window,
+    app: &AppHandle,
     shared: SharedAppCore,
     command: SidecarCommand,
 ) -> Result<(), String> {
@@ -337,7 +344,7 @@ fn send_sidecar_command(
         command = sidecar_command_name(&command),
         "queueing sidecar command"
     );
-    ensure_sidecar(window, shared)?;
+    ensure_sidecar(app, shared)?;
     let mut guard = sidecar_slot()
         .lock()
         .map_err(|_| "sidecar process lock poisoned".to_string())?;
@@ -352,7 +359,11 @@ fn send_sidecar_command(
     Ok(())
 }
 
-fn ensure_sidecar(window: &Window, shared: SharedAppCore) -> Result<(), String> {
+pub fn initialize_sidecar(app: &AppHandle, shared: SharedAppCore) -> Result<(), String> {
+    ensure_sidecar(app, shared)
+}
+
+fn ensure_sidecar(app: &AppHandle, shared: SharedAppCore) -> Result<(), String> {
     let mut guard = sidecar_slot()
         .lock()
         .map_err(|_| "sidecar process lock poisoned".to_string())?;
@@ -362,7 +373,7 @@ fn ensure_sidecar(window: &Window, shared: SharedAppCore) -> Result<(), String> 
 
     let path = resolve_sidecar_path()?;
     let (process, receiver) = SidecarProcess::spawn(&path).map_err(|error| error.to_string())?;
-    spawn_sidecar_reader(window.clone(), shared, receiver)?;
+    spawn_sidecar_reader(app.clone(), shared, receiver)?;
     *guard = Some(process);
     Ok(())
 }
@@ -391,7 +402,7 @@ fn resolve_sidecar_path() -> Result<std::path::PathBuf, String> {
 }
 
 fn spawn_sidecar_reader(
-    window: Window,
+    app: AppHandle,
     shared: SharedAppCore,
     receiver: mpsc::Receiver<SidecarReaderEvent>,
 ) -> Result<(), String> {
@@ -403,17 +414,17 @@ fn spawn_sidecar_reader(
                         event = sidecar_event_name(&frame.header),
                         "received sidecar event"
                     );
-                    handle_sidecar_event(&window, shared.clone(), frame);
+                    handle_sidecar_event(&app, shared.clone(), frame);
                 }
                 SidecarReaderEvent::Error(error) => {
                     tracing::error!("sidecar reader error: {error}");
-                    handle_sidecar_exit(&window, shared.clone(), error);
+                    handle_sidecar_exit(&app, shared.clone(), error);
                     break;
                 }
                 SidecarReaderEvent::Eof => {
                     tracing::warn!("sidecar stdout reached eof");
                     handle_sidecar_exit(
-                        &window,
+                        &app,
                         shared.clone(),
                         "sidecar exited unexpectedly".to_string(),
                     );
@@ -427,9 +438,25 @@ fn spawn_sidecar_reader(
     })
 }
 
-fn handle_sidecar_event(window: &Window, shared: SharedAppCore, frame: Frame<SidecarEvent>) {
+fn handle_sidecar_event(app: &AppHandle, shared: SharedAppCore, frame: Frame<SidecarEvent>) {
     match frame.header {
-        SidecarEvent::Ready => {}
+        SidecarEvent::Ready {
+            cuda_available,
+            default_backend,
+        } => {
+            let capabilities = SidecarCapabilities {
+                cuda_available,
+                default_backend: desktop_backend(default_backend),
+            };
+            tracing::debug!(
+                cuda_available = cuda_available,
+                "received sidecar capabilities"
+            );
+            if let Ok(mut core) = shared.lock() {
+                core.apply_sidecar_capabilities(capabilities);
+            }
+            let _ = app.emit("sidecar_capabilities", capabilities);
+        }
         SidecarEvent::ModelLoadProgress {
             load_id,
             phase,
@@ -445,7 +472,7 @@ fn handle_sidecar_event(window: &Window, shared: SharedAppCore, frame: Frame<Sid
                 .map(|core| core.active_load_id() == Some(load_id))
                 .unwrap_or(false);
             if should_emit {
-                let _ = window.emit(
+                let _ = app.emit(
                     "model_load_progress",
                     crate::types::ModelLoadProgressEvent {
                         phase,
@@ -505,7 +532,7 @@ fn handle_sidecar_event(window: &Window, shared: SharedAppCore, frame: Frame<Sid
                     error: Some("app state lock poisoned".to_string()),
                 },
             };
-            let _ = window.emit("model_load_done", done);
+            let _ = app.emit("model_load_done", done);
         }
         SidecarEvent::GenerationProgress {
             item_id,
@@ -519,7 +546,7 @@ fn handle_sidecar_event(window: &Window, shared: SharedAppCore, frame: Frame<Sid
             if !accepted {
                 return;
             }
-            let _ = window.emit(
+            let _ = app.emit(
                 "generation_progress",
                 GenerationProgressEvent {
                     item_id,
@@ -539,7 +566,7 @@ fn handle_sidecar_event(window: &Window, shared: SharedAppCore, frame: Frame<Sid
                 if !accepts_sidecar_generation_event(&shared, &item_id, false) {
                     return;
                 }
-                handle_streaming_audio_chunk(window, shared.clone(), item_id, samples, sample_rate);
+                handle_streaming_audio_chunk(app, shared.clone(), item_id, samples, sample_rate);
             }
         }
         SidecarEvent::AudioFinal {
@@ -559,7 +586,7 @@ fn handle_sidecar_event(window: &Window, shared: SharedAppCore, frame: Frame<Sid
                     {
                         let _ = core
                             .finish_generation_failure_from_sidecar(&item_id, error.to_string());
-                        let _ = window.emit(
+                        let _ = app.emit(
                             "generation_done",
                             GenerationDoneEvent {
                                 item_id,
@@ -577,7 +604,7 @@ fn handle_sidecar_event(window: &Window, shared: SharedAppCore, frame: Frame<Sid
                     false
                 };
                 if should_kick {
-                    kick_generation_queue(window, shared);
+                    kick_generation_queue(app, shared);
                 }
             }
         }
@@ -607,7 +634,7 @@ fn handle_sidecar_event(window: &Window, shared: SharedAppCore, frame: Frame<Sid
                                     &item_id, rate, duration,
                                 ) {
                                     Ok(crate::app_core::SidecarGenerationOutcome::Ready) => {
-                                        if !finish_streaming_playback(window, item_id.clone()) {
+                                        if !finish_streaming_playback(app, item_id.clone()) {
                                             playback_run = core
                                                 .begin_or_queue_auto_playback(&item_id)
                                                 .ok()
@@ -666,18 +693,18 @@ fn handle_sidecar_event(window: &Window, shared: SharedAppCore, frame: Frame<Sid
             if !accepted {
                 return;
             }
-            let _ = window.emit("generation_done", done);
+            let _ = app.emit("generation_done", done);
             if let Some(playback_run) = playback_run {
-                let _ = window.emit(
+                let _ = app.emit(
                     "playback_state",
                     PlaybackStateEvent {
                         item_id: Some(playback_run.item_id.clone()),
                         state: "playing".to_string(),
                     },
                 );
-                spawn_playback(window.clone(), shared.clone(), playback_run);
+                spawn_playback(app.clone(), shared.clone(), playback_run);
             }
-            kick_generation_queue(window, shared);
+            kick_generation_queue(app, shared);
         }
         SidecarEvent::Error { message } => {
             tracing::error!("sidecar error: {message}");
@@ -692,7 +719,7 @@ fn accepts_sidecar_generation_event(shared: &SharedAppCore, item_id: &str, termi
         .unwrap_or(false)
 }
 
-fn handle_sidecar_exit(window: &Window, shared: SharedAppCore, error: String) {
+fn handle_sidecar_exit(app: &AppHandle, shared: SharedAppCore, error: String) {
     let (recovery, snapshot) = match shared.lock() {
         Ok(mut core) => {
             let recovery = core.handle_sidecar_exit(error.clone());
@@ -703,7 +730,7 @@ fn handle_sidecar_exit(window: &Window, shared: SharedAppCore, error: String) {
     };
 
     if recovery.failed_load {
-        let _ = window.emit(
+        let _ = app.emit(
             "model_load_done",
             crate::types::ModelLoadDoneEvent {
                 status: "failed".to_string(),
@@ -719,7 +746,7 @@ fn handle_sidecar_exit(window: &Window, shared: SharedAppCore, error: String) {
     }
 
     if let Some(item_id) = recovery.failed_generation_item_id {
-        let _ = window.emit(
+        let _ = app.emit(
             "generation_done",
             GenerationDoneEvent {
                 item_id,
@@ -752,7 +779,7 @@ fn sidecar_command_name(command: &SidecarCommand) -> &'static str {
 
 fn sidecar_event_name(event: &SidecarEvent) -> &'static str {
     match event {
-        SidecarEvent::Ready => "ready",
+        SidecarEvent::Ready { .. } => "ready",
         SidecarEvent::ModelLoadProgress { .. } => "model_load_progress",
         SidecarEvent::ModelLoadDone { .. } => "model_load_done",
         SidecarEvent::GenerationProgress { .. } => "generation_progress",
@@ -785,7 +812,7 @@ fn streaming_players() -> &'static Mutex<HashMap<String, mpsc::Sender<StreamingP
 }
 
 fn handle_streaming_audio_chunk(
-    window: &Window,
+    app: &AppHandle,
     shared: SharedAppCore,
     item_id: String,
     samples: Vec<f32>,
@@ -808,11 +835,10 @@ fn handle_streaming_audio_chunk(
         Err(_) => return,
     };
     if !players.contains_key(&item_id) {
-        match start_streaming_playback_worker(window.clone(), shared, item_id.clone(), sample_rate)
-        {
+        match start_streaming_playback_worker(app.clone(), shared, item_id.clone(), sample_rate) {
             Ok(sender) => {
                 players.insert(item_id.clone(), sender);
-                let _ = window.emit(
+                let _ = app.emit(
                     "playback_state",
                     PlaybackStateEvent {
                         item_id: Some(item_id.clone()),
@@ -835,7 +861,7 @@ fn handle_streaming_audio_chunk(
 }
 
 fn start_streaming_playback_worker(
-    window: Window,
+    app: AppHandle,
     shared: SharedAppCore,
     item_id: String,
     sample_rate: u32,
@@ -849,7 +875,7 @@ fn start_streaming_playback_worker(
     let worker_item_id = item_id.clone();
     spawn_background("voxui-streaming-playback", move || {
         let state = run_streaming_playback_worker(config, sample_rate, receiver);
-        let _ = window.emit(
+        let _ = app.emit(
             "playback_state",
             PlaybackStateEvent {
                 item_id: Some(worker_item_id),
@@ -920,7 +946,7 @@ fn create_streaming_player(
     .map_err(|error| error.to_string())
 }
 
-fn finish_streaming_playback(window: &Window, item_id: String) -> bool {
+fn finish_streaming_playback(app: &AppHandle, item_id: String) -> bool {
     let sender = match streaming_players().lock() {
         Ok(mut players) => players.remove(&item_id),
         Err(_) => None,
@@ -930,7 +956,7 @@ fn finish_streaming_playback(window: &Window, item_id: String) -> bool {
     };
     if let Err(error) = sender.send(StreamingPlaybackCommand::Finish) {
         tracing::warn!("failed to finish streaming playback for {item_id}: {error}");
-        let _ = window.emit(
+        let _ = app.emit(
             "playback_state",
             PlaybackStateEvent {
                 item_id: Some(item_id),
@@ -960,15 +986,15 @@ fn browse_wav_file(app: AppHandle) -> Result<Option<String>, String> {
         .map(|path| path.to_string()))
 }
 
-fn spawn_playback(window: Window, shared: SharedAppCore, run: crate::app_core::PlaybackRun) {
+fn spawn_playback(app: AppHandle, shared: SharedAppCore, run: crate::app_core::PlaybackRun) {
     let event_item_id = run.item_id.clone();
-    let worker_window = window.clone();
+    let worker_app = app.clone();
     let worker_shared = shared.clone();
     if let Err(error) = spawn_background("voxui-playback", move || {
         let config = match worker_shared.lock() {
             Ok(core) => core.snapshot().config,
             Err(_) => {
-                let _ = worker_window.emit(
+                let _ = worker_app.emit(
                     "playback_state",
                     PlaybackStateEvent {
                         item_id: Some(run.item_id),
@@ -1017,7 +1043,7 @@ fn spawn_playback(window: Window, shared: SharedAppCore, run: crate::app_core::P
                 next_run: None,
             },
         };
-        let _ = worker_window.emit(
+        let _ = worker_app.emit(
             "playback_state",
             PlaybackStateEvent {
                 item_id: completion.stopped_item_id,
@@ -1025,21 +1051,21 @@ fn spawn_playback(window: Window, shared: SharedAppCore, run: crate::app_core::P
             },
         );
         if let Some(next_run) = completion.next_run {
-            let _ = worker_window.emit(
+            let _ = worker_app.emit(
                 "playback_state",
                 PlaybackStateEvent {
                     item_id: Some(next_run.item_id.clone()),
                     state: "playing".to_string(),
                 },
             );
-            spawn_playback(worker_window.clone(), worker_shared.clone(), next_run);
+            spawn_playback(worker_app.clone(), worker_shared.clone(), next_run);
         }
     }) {
         let item_id = match shared.lock() {
             Ok(mut core) => core.finish_playback(&event_item_id),
             Err(_) => None,
         };
-        let _ = window.emit(
+        let _ = app.emit(
             "playback_state",
             PlaybackStateEvent {
                 item_id,

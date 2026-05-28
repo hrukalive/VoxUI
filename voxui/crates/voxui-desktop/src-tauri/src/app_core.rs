@@ -9,7 +9,9 @@ use voxui_audio::VolumeHandle;
 use crate::generation_queue::{GenerationQueue, HistoryItem, HistoryStatus};
 use crate::model_discovery::discover_models;
 use crate::playback::{GeneratedAudio, GeneratedAudioCache};
-use crate::types::{AppConfig, AppSnapshot, ConfigPatch, LoadUiState, ModelChoice};
+use crate::types::{
+    AppConfig, AppSnapshot, ConfigPatch, LoadUiState, ModelChoice, SidecarCapabilities,
+};
 use voxui_inference::SynthesisRequest;
 
 #[derive(Debug)]
@@ -33,6 +35,8 @@ struct ActivePlayback {
 
 pub struct AppCore {
     config: AppConfig,
+    backend_saved: bool,
+    sidecar_capabilities: SidecarCapabilities,
     models: Vec<ModelChoice>,
     selected_model_id: Option<String>,
     loaded_model_id: Option<String>,
@@ -85,8 +89,13 @@ pub struct PlaybackCompletion {
 }
 
 impl AppCore {
-    pub fn from_config(mut config: AppConfig) -> Result<Self> {
-        config.normalize_for_build();
+    pub fn from_config(config: AppConfig) -> Result<Self> {
+        Self::from_loaded_config(config, true)
+    }
+
+    pub fn from_loaded_config(mut config: AppConfig, backend_saved: bool) -> Result<Self> {
+        let sidecar_capabilities = SidecarCapabilities::default();
+        normalize_backend_for_sidecar(&mut config, backend_saved, sidecar_capabilities);
         normalize_generation_settings(&mut config.generation);
         let models = match config.model_root.as_deref() {
             Some(root) => discover_models(root)?,
@@ -97,6 +106,8 @@ impl AppCore {
 
         Ok(Self {
             config,
+            backend_saved,
+            sidecar_capabilities,
             models,
             selected_model_id,
             loaded_model_id: None,
@@ -119,13 +130,19 @@ impl AppCore {
         AppSnapshot {
             config: self.config.clone(),
             system_language: crate::config::detect_system_language(),
-            cuda_available: crate::types::cuda_available(),
+            cuda_available: self.sidecar_capabilities.cuda_available,
             models: self.models.clone(),
             selected_model_id: self.selected_model_id.clone(),
             loaded_model_id: self.loaded_model_id.clone(),
             load_state: self.load_state,
             history: self.queue.items().to_vec(),
         }
+    }
+
+    pub fn apply_sidecar_capabilities(&mut self, capabilities: SidecarCapabilities) -> AppSnapshot {
+        self.sidecar_capabilities = capabilities;
+        normalize_backend_for_sidecar(&mut self.config, self.backend_saved, capabilities);
+        self.snapshot()
     }
 
     pub fn apply_patch(&mut self, patch: ConfigPatch) -> Result<AppSnapshot> {
@@ -149,7 +166,8 @@ impl AppCore {
         }
         if let Some(backend) = patch.backend {
             self.config.backend = backend;
-            self.config.normalize_for_build();
+            self.backend_saved = true;
+            self.config.normalize_for_sidecar(self.sidecar_capabilities);
         }
         if let Some(audio_host) = patch.audio_host {
             let audio_host = empty_string_as_none(audio_host);
@@ -909,6 +927,19 @@ fn normalize_generation_settings(generation: &mut crate::types::GenerationSettin
     generation.stream_consolidate_n = generation.stream_consolidate_n.max(1);
 }
 
+fn normalize_backend_for_sidecar(
+    config: &mut AppConfig,
+    backend_saved: bool,
+    capabilities: SidecarCapabilities,
+) {
+    if backend_saved {
+        config.normalize_for_sidecar(capabilities);
+    } else {
+        config.backend = capabilities.default_backend;
+        config.normalize_for_sidecar(capabilities);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -948,14 +979,7 @@ mod tests {
         assert_eq!(snapshot.config.selected_model_id.as_deref(), Some("alpha"));
         assert_eq!(snapshot.config.language, LanguageMode::English);
         assert_eq!(snapshot.config.theme, ThemeMode::Light);
-        assert_eq!(
-            snapshot.config.backend,
-            if cfg!(feature = "cuda") {
-                BackendKind::Cuda
-            } else {
-                BackendKind::Cpu
-            }
-        );
+        assert_eq!(snapshot.config.backend, BackendKind::Cpu);
         assert_eq!(snapshot.config.audio_host.as_deref(), Some("host-a"));
         assert_eq!(snapshot.config.audio_device.as_deref(), Some("device-a"));
         assert_eq!(snapshot.config.volume, 1.0);

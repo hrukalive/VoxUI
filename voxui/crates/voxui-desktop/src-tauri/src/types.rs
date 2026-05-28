@@ -58,7 +58,7 @@ impl Default for GenerationSettings {
             inference_timesteps: 10,
             min_len: 2,
             max_len: 2000,
-            streaming: true,
+            streaming: false,
             stream_consolidate_n: 10,
             retry_badcase: true,
             retry_badcase_max_times: 3,
@@ -103,22 +103,29 @@ impl Default for AppConfig {
 }
 
 impl AppConfig {
-    pub fn normalize_for_build(&mut self) {
-        if !cuda_available() {
+    pub fn normalize_for_sidecar(&mut self, capabilities: SidecarCapabilities) {
+        if !capabilities.cuda_available && self.backend == BackendKind::Cuda {
             self.backend = BackendKind::Cpu;
         }
     }
 }
 
-pub fn cuda_available() -> bool {
-    cfg!(feature = "cuda")
+fn default_backend() -> BackendKind {
+    BackendKind::Cpu
 }
 
-fn default_backend() -> BackendKind {
-    if cuda_available() {
-        BackendKind::Cuda
-    } else {
-        BackendKind::Cpu
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SidecarCapabilities {
+    pub cuda_available: bool,
+    pub default_backend: BackendKind,
+}
+
+impl Default for SidecarCapabilities {
+    fn default() -> Self {
+        Self {
+            cuda_available: false,
+            default_backend: BackendKind::Cpu,
+        }
     }
 }
 

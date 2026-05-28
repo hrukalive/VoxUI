@@ -5,7 +5,8 @@ use tempfile::TempDir;
 use voxui_desktop::app_core::{load_button_enabled, AppCore};
 use voxui_desktop::generation_queue::HistoryStatus;
 use voxui_desktop::types::{
-    AppConfig, BackendKind, ConfigPatch, GenerationSettings, LanguageMode, LoadUiState, ThemeMode,
+    AppConfig, BackendKind, ConfigPatch, GenerationSettings, LanguageMode, LoadUiState,
+    SidecarCapabilities, ThemeMode,
 };
 
 #[test]
@@ -109,9 +110,64 @@ fn changing_audio_host_clears_saved_audio_device() {
     assert_eq!(snapshot.config.audio_device, None);
 }
 
-#[cfg(not(feature = "cuda"))]
 #[test]
-fn cpu_build_ignores_cuda_backend_patch() {
+fn sidecar_capabilities_choose_cuda_for_missing_saved_backend() {
+    let mut core = AppCore::from_loaded_config(AppConfig::default(), false).unwrap();
+
+    core.apply_sidecar_capabilities(SidecarCapabilities {
+        cuda_available: true,
+        default_backend: BackendKind::Cuda,
+    });
+
+    let snapshot = core.snapshot();
+    assert!(snapshot.cuda_available);
+    assert_eq!(snapshot.config.backend, BackendKind::Cuda);
+}
+
+#[test]
+fn sidecar_capabilities_keep_saved_cpu_when_cuda_is_supported() {
+    let mut core = AppCore::from_loaded_config(
+        AppConfig {
+            backend: BackendKind::Cpu,
+            ..AppConfig::default()
+        },
+        true,
+    )
+    .unwrap();
+
+    core.apply_sidecar_capabilities(SidecarCapabilities {
+        cuda_available: true,
+        default_backend: BackendKind::Cuda,
+    });
+
+    let snapshot = core.snapshot();
+    assert!(snapshot.cuda_available);
+    assert_eq!(snapshot.config.backend, BackendKind::Cpu);
+}
+
+#[test]
+fn sidecar_capabilities_normalize_unsupported_saved_cuda_to_cpu() {
+    let mut core = AppCore::from_loaded_config(
+        AppConfig {
+            backend: BackendKind::Cuda,
+            ..AppConfig::default()
+        },
+        true,
+    )
+    .unwrap();
+
+    core.apply_sidecar_capabilities(SidecarCapabilities {
+        cuda_available: false,
+        default_backend: BackendKind::Cpu,
+    });
+
+    let snapshot = core.snapshot();
+    assert!(!snapshot.cuda_available);
+    assert_eq!(snapshot.config.backend, BackendKind::Cpu);
+}
+
+#[test]
+fn unsupported_cuda_backend_patch_is_ignored_until_sidecar_reports_cuda() {
     let mut core = AppCore::from_config(AppConfig::default()).unwrap();
 
     let snapshot = core
@@ -131,6 +187,27 @@ fn cpu_build_ignores_cuda_backend_patch() {
 
     assert_eq!(snapshot.config.backend, BackendKind::Cpu);
     assert!(!snapshot.cuda_available);
+
+    core.apply_sidecar_capabilities(SidecarCapabilities {
+        cuda_available: true,
+        default_backend: BackendKind::Cuda,
+    });
+    let snapshot = core
+        .apply_patch(ConfigPatch {
+            model_root: None,
+            selected_model_id: None,
+            language: None,
+            theme: None,
+            backend: Some(BackendKind::Cuda),
+            audio_host: None,
+            audio_device: None,
+            volume: None,
+            max_input_chars: None,
+            generation: None,
+        })
+        .unwrap();
+
+    assert_eq!(snapshot.config.backend, BackendKind::Cuda);
 }
 
 #[test]

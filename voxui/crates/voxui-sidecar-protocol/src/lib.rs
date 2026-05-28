@@ -33,7 +33,10 @@ pub enum SidecarCommand {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum SidecarEvent {
-    Ready,
+    Ready {
+        cuda_available: bool,
+        default_backend: BackendKind,
+    },
     ModelLoadProgress {
         load_id: u64,
         phase: String,
@@ -211,6 +214,23 @@ mod tests {
                 is_final: false,
             },
             payload: vec![1, 2, 3, 4],
+        };
+        let mut bytes = Vec::new();
+        write_frame(&mut bytes, &frame).unwrap();
+
+        let decoded: Frame<SidecarEvent> = read_frame(&mut bytes.as_slice()).unwrap();
+
+        assert_eq!(decoded, frame);
+    }
+
+    #[test]
+    fn ready_event_reports_sidecar_capabilities() {
+        let frame = Frame {
+            header: SidecarEvent::Ready {
+                cuda_available: true,
+                default_backend: BackendKind::Cuda,
+            },
+            payload: Vec::new(),
         };
         let mut bytes = Vec::new();
         write_frame(&mut bytes, &frame).unwrap();

@@ -22,6 +22,7 @@ features = [
   "HtmlInputElement",
   "HtmlSelectElement",
   "HtmlTextAreaElement",
+  "MediaQueryList",
   "Navigator",
   "Window",
 ]

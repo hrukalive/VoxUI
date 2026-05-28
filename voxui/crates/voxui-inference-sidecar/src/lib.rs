@@ -555,9 +555,28 @@ where
 }
 
 fn ready_frame() -> Frame<SidecarEvent> {
+    let cuda_available = sidecar_cuda_available();
     Frame {
-        header: SidecarEvent::Ready,
+        header: SidecarEvent::Ready {
+            cuda_available,
+            default_backend: if cuda_available {
+                BackendKind::Cuda
+            } else {
+                BackendKind::Cpu
+            },
+        },
         payload: Vec::new(),
+    }
+}
+
+fn sidecar_cuda_available() -> bool {
+    #[cfg(feature = "cuda")]
+    {
+        Device::new_cuda(0).is_ok()
+    }
+    #[cfg(not(feature = "cuda"))]
+    {
+        false
     }
 }
 

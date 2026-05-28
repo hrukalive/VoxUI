@@ -358,6 +358,7 @@ body {
   min-height: 0;
   overflow: auto;
   padding: 18px;
+  scroll-behavior: smooth;
 }
 
 .loaded-pill {
@@ -391,6 +392,7 @@ body {
   border-radius: 6px;
   background: var(--history-bg);
   padding: 14px;
+  animation: history-item-enter 180ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .history-main {
@@ -419,7 +421,75 @@ body {
 
 .history-actions {
   display: flex;
-  gap: 8px;
+  gap: 6px;
+}
+
+.history-action-button {
+  width: 32px;
+  height: 32px;
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 auto;
+  border: 1px solid var(--control-border);
+  border-radius: 6px;
+  background: var(--control-bg);
+  color: var(--text-muted);
+  padding: 0;
+  cursor: pointer;
+  transition:
+    transform 120ms cubic-bezier(0.16, 1, 0.3, 1),
+    border-color 120ms ease,
+    color 120ms ease,
+    background 120ms ease;
+}
+
+.history-action-button:hover:not(:disabled) {
+  transform: translateY(-1px);
+  border-color: var(--primary);
+  color: var(--text);
+}
+
+.history-action-button:disabled {
+  cursor: default;
+  opacity: 0.42;
+}
+
+.history-action-icon {
+  width: 17px;
+  height: 17px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+@keyframes history-item-enter {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.992);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .history-panel {
+    scroll-behavior: auto;
+  }
+
+  .history-item,
+  .history-action-button {
+    animation: none;
+    transition: none;
+  }
+
+  .history-action-button:hover:not(:disabled) {
+    transform: none;
+  }
 }
 
 .composer-panel {

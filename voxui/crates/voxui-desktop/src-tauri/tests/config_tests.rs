@@ -3,8 +3,8 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use voxui_desktop::config::{
-    default_config_path, detect_language_from_locale, load_config, save_config, AppConfig,
-    BackendKind, LanguageMode, ThemeMode,
+    default_config_path, detect_language_from_locale, load_config, load_config_with_metadata,
+    save_config, AppConfig, BackendKind, LanguageMode, ThemeMode,
 };
 
 fn unique_temp_dir(test_name: &str) -> PathBuf {
@@ -53,20 +53,15 @@ fn tauri_config_uses_custom_icon_assets() {
 #[test]
 fn config_defaults_to_system_language_and_preferred_backend() {
     let config = AppConfig::default();
-    let expected_backend = if cfg!(feature = "cuda") {
-        BackendKind::Cuda
-    } else {
-        BackendKind::Cpu
-    };
 
     assert_eq!(config.language, LanguageMode::System);
     assert_eq!(config.theme, ThemeMode::Dark);
-    assert_eq!(config.backend, expected_backend);
+    assert_eq!(config.backend, BackendKind::Cpu);
     assert_eq!(config.volume, 0.8);
     assert_eq!(config.max_input_chars, 280);
     assert_eq!(config.generation.inference_timesteps, 10);
     assert_eq!(config.generation.cfg_value, 2.0);
-    assert!(config.generation.streaming);
+    assert!(!config.generation.streaming);
     assert_eq!(config.generation.stream_consolidate_n, 10);
     assert!(config.generation.retry_badcase);
 }
@@ -141,7 +136,7 @@ fn partial_generation_json_preserves_values_and_defaults_missing_fields() {
 
     assert_eq!(decoded.generation.cfg_value, 3.5);
     assert_eq!(decoded.generation.inference_timesteps, 10);
-    assert!(decoded.generation.streaming);
+    assert!(!decoded.generation.streaming);
     assert!(decoded.generation.retry_badcase);
     assert_eq!(decoded.language, LanguageMode::System);
     assert_eq!(decoded.theme, ThemeMode::Dark);
@@ -165,19 +160,28 @@ fn load_config_returns_defaults_when_file_is_missing() {
     assert_eq!(config, AppConfig::default());
 }
 
-#[cfg(not(feature = "cuda"))]
 #[test]
-fn cpu_build_load_config_normalizes_saved_cuda_backend_to_cpu() {
-    let root = unique_temp_dir("cpu_backend");
+fn load_config_reports_whether_backend_was_saved() {
+    let root = unique_temp_dir("backend_metadata");
     let path = root.join("voxui_config.json");
     fs::create_dir_all(&root).unwrap();
+
+    fs::write(&path, r#"{ "generation": { "streaming": true } }"#).unwrap();
+
+    let loaded = load_config_with_metadata(&path).unwrap();
+
+    assert!(!loaded.backend_saved);
+    assert_eq!(loaded.config.backend, BackendKind::Cpu);
+    assert!(loaded.config.generation.streaming);
+
     fs::write(&path, r#"{ "backend": "cuda" }"#).unwrap();
 
-    let config = load_config(&path).unwrap();
+    let loaded = load_config_with_metadata(&path).unwrap();
 
     fs::remove_dir_all(root).unwrap();
 
-    assert_eq!(config.backend, BackendKind::Cpu);
+    assert!(loaded.backend_saved);
+    assert_eq!(loaded.config.backend, BackendKind::Cuda);
 }
 
 #[test]
@@ -204,7 +208,5 @@ fn save_config_creates_parent_directory_and_load_config_reads_written_json() {
 
     fs::remove_dir_all(root).unwrap();
 
-    let mut expected = config;
-    expected.normalize_for_build();
-    assert_eq!(decoded, expected);
+    assert_eq!(decoded, config);
 }

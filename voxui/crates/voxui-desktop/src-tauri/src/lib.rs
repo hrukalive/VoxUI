@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use app_core::AppCore;
+use tauri::Manager;
 use types::AppConfig;
 
 pub mod app_core;
@@ -16,14 +17,21 @@ pub mod types;
 
 pub fn run() {
     init_tracing();
-    let (config, config_path) = startup_config();
-    let mut core = AppCore::from_config(config)
+    let (config, backend_saved, config_path) = startup_config();
+    let mut core = AppCore::from_loaded_config(config, backend_saved)
         .expect("persisted app config should initialize desktop app core");
     core.set_config_path(config_path);
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .manage(Arc::new(Mutex::new(core)))
+        .setup(|app| {
+            let shared = app.state::<Arc<Mutex<AppCore>>>().inner().clone();
+            if let Err(error) = commands::initialize_sidecar(app.handle(), shared) {
+                tracing::warn!("failed to initialize inference sidecar: {error}");
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             commands::get_app_state,
             commands::set_config_patch,
@@ -54,21 +62,24 @@ fn init_tracing() {
     let _ = tracing_subscriber::fmt().with_env_filter(filter).try_init();
 }
 
-fn startup_config() -> (AppConfig, PathBuf) {
+fn startup_config() -> (AppConfig, bool, PathBuf) {
     let config_dir = dirs::config_dir()
         .unwrap_or_else(|| std::env::temp_dir())
         .join("AhanSays");
     let config_path = crate::config::default_config_path(&config_dir);
-    let config = match crate::config::load_config(&config_path) {
-        Ok(config) => config,
+    let loaded = match crate::config::load_config_with_metadata(&config_path) {
+        Ok(loaded) => loaded,
         Err(error) => {
             tracing::warn!(
                 "failed to load desktop config from {}: {error}",
                 config_path.display()
             );
-            AppConfig::default()
+            crate::config::LoadedConfig {
+                config: AppConfig::default(),
+                backend_saved: false,
+            }
         }
     };
 
-    (config, config_path)
+    (loaded.config, loaded.backend_saved, config_path)
 }

@@ -4,7 +4,9 @@ use voxui_desktop::inference_sidecar::{
     is_active_generation_event, read_sidecar_frames, sidecar_samples_from_payload,
     SidecarReaderEvent,
 };
-use voxui_sidecar_protocol::{f32_samples_to_le_bytes, write_frame, Frame, SidecarEvent};
+use voxui_sidecar_protocol::{
+    f32_samples_to_le_bytes, write_frame, BackendKind, Frame, SidecarEvent,
+};
 
 #[test]
 fn stale_generation_event_is_rejected() {
@@ -29,7 +31,10 @@ fn audio_payload_decodes_pcm_samples() {
 #[test]
 fn reader_emits_frames_and_clean_eof() {
     let frame = Frame {
-        header: SidecarEvent::Ready,
+        header: SidecarEvent::Ready {
+            cuda_available: false,
+            default_backend: BackendKind::Cpu,
+        },
         payload: Vec::new(),
     };
     let mut bytes = Vec::new();
