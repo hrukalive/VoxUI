@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use app_core::AppCore;
-use tauri::Manager;
+use tauri::{Manager, RunEvent, WindowEvent};
 use types::AppConfig;
 
 pub mod app_core;
@@ -34,9 +34,22 @@ pub fn run() {
             }
             Ok(())
         })
+        .on_window_event(|window, event| {
+            if window.label() == "live-monitor"
+                && matches!(event, WindowEvent::CloseRequested { .. })
+            {
+                commands::disconnect_live_worker_for_window_close(window.app_handle());
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             commands::get_app_state,
             commands::set_config_patch,
+            commands::get_live_state,
+            commands::set_live_config_patch,
+            commands::clear_live_items,
+            commands::connect_openblive,
+            commands::disconnect_openblive,
+            commands::send_live_suggestion,
             commands::discover_models,
             commands::get_audio_state,
             commands::browse_model_dir,
@@ -51,8 +64,13 @@ pub fn run() {
             commands::play_audio,
             commands::stop_audio,
         ])
-        .run(tauri::generate_context!())
-        .expect("failed to run AhanSays desktop app");
+        .build(tauri::generate_context!())
+        .expect("failed to build AhanSays desktop app")
+        .run(|_, event| {
+            if matches!(event, RunEvent::ExitRequested { .. } | RunEvent::Exit) {
+                commands::shutdown_live_worker_for_app_exit();
+            }
+        });
 }
 
 fn init_tracing() {

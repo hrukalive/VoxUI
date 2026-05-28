@@ -1,9 +1,10 @@
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 
-use tauri::{AppHandle, Emitter, Manager, State, Window};
+use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder, Window};
 use tauri_plugin_dialog::DialogExt;
 use voxui_audio::{AudioPlayer, AudioSystem, StreamingPlayer, VolumeHandle};
 use voxui_sidecar_protocol::{
@@ -16,14 +17,69 @@ use crate::generation_queue::HistoryItem;
 use crate::inference_sidecar::{SidecarProcess, SidecarReaderEvent};
 use crate::types::{
     AppSnapshot, AudioStateDto, BackendKind, CommandResult, ConfigPatch, GenerationDoneEvent,
-    GenerationProgressEvent, ModelChoice, PlaybackStateEvent, SidecarCapabilities,
+    GenerationProgressEvent, MainInputReplaceEvent, ModelChoice, PlaybackStateEvent,
+    SidecarCapabilities,
 };
 
 pub type SharedAppCore = Arc<Mutex<AppCore>>;
 
 static SIDECAR_PROCESS: OnceLock<Mutex<Option<SidecarProcess>>> = OnceLock::new();
+static LIVE_WORKER: OnceLock<Mutex<Option<LiveWorkerHandle>>> = OnceLock::new();
+static LIVE_MONITOR_CLOSE_GUARD: OnceLock<Mutex<LiveMonitorCloseGuard>> = OnceLock::new();
 static STREAMING_PLAYERS: OnceLock<Mutex<HashMap<String, mpsc::Sender<StreamingPlaybackCommand>>>> =
     OnceLock::new();
+
+struct LiveWorkerHandle {
+    stop: Arc<AtomicBool>,
+    done: mpsc::Receiver<()>,
+    start: mpsc::Sender<()>,
+}
+
+impl LiveWorkerHandle {
+    fn request_stop(&self) {
+        self.stop.store(true, Ordering::SeqCst);
+    }
+
+    fn request_stop_and_wait(self) {
+        self.request_stop();
+        let _ = self.done.recv();
+    }
+
+    fn start_worker(&self) -> Result<(), String> {
+        self.start
+            .send(())
+            .map_err(|_| "OpenLive worker stopped before start signal".to_string())
+    }
+}
+
+#[derive(Debug, Default)]
+struct LiveMonitorCloseGuard {
+    generation: u64,
+    suppress_generation: Option<u64>,
+}
+
+impl LiveMonitorCloseGuard {
+    fn mark_monitor_shown(&mut self) {
+        self.generation = self.generation.saturating_add(1);
+        self.suppress_generation = None;
+    }
+
+    fn suppress_current_close(&mut self) {
+        self.suppress_generation = Some(self.generation);
+    }
+
+    fn should_disconnect_on_close(&mut self) -> bool {
+        if self.suppress_generation == Some(self.generation) {
+            self.suppress_generation = None;
+            return false;
+        }
+        true
+    }
+
+    fn clear_suppression(&mut self) {
+        self.suppress_generation = None;
+    }
+}
 
 enum StreamingPlaybackCommand {
     Push(Vec<f32>),
@@ -52,6 +108,193 @@ pub fn set_config_patch(
     patch: ConfigPatch,
 ) -> Result<AppSnapshot, String> {
     with_core(state, |core| core.apply_patch(patch))
+}
+
+#[tauri::command]
+pub fn get_live_state(
+    state: State<'_, SharedAppCore>,
+) -> Result<crate::types::LiveSnapshot, String> {
+    with_core(state, |core| {
+        Ok(core.live_snapshot(crate::live::LiveLanguage::English))
+    })
+}
+
+#[tauri::command]
+pub fn set_live_config_patch(
+    app: AppHandle,
+    state: State<'_, SharedAppCore>,
+    patch: crate::types::LiveConfigPatch,
+) -> Result<crate::types::LiveSnapshot, String> {
+    let snapshot = with_core(state, |core| core.apply_live_patch(patch))?;
+    emit_live_snapshot(&app, "live_items_changed", &snapshot);
+    Ok(snapshot)
+}
+
+#[tauri::command]
+pub fn clear_live_items(
+    app: AppHandle,
+    state: State<'_, SharedAppCore>,
+) -> Result<crate::types::LiveSnapshot, String> {
+    let snapshot = with_core(state, |core| {
+        core.clear_live_items();
+        Ok(core.live_snapshot(crate::live::LiveLanguage::English))
+    })?;
+    emit_live_snapshot(&app, "live_items_changed", &snapshot);
+    Ok(snapshot)
+}
+
+#[tauri::command]
+pub fn connect_openblive(
+    app: AppHandle,
+    state: State<'_, SharedAppCore>,
+    identity_code: String,
+) -> Result<crate::types::LiveSnapshot, String> {
+    let shared = state.inner().clone();
+    let mut guard = live_worker_slot()
+        .lock()
+        .map_err(|_| "OpenLive worker lock poisoned".to_string())?;
+    if guard.is_some() {
+        return shared
+            .lock()
+            .map(|core| core.live_snapshot(crate::live::LiveLanguage::English))
+            .map_err(|_| "app state lock poisoned".to_string());
+    }
+
+    let (identity_code, enable_ceve_server_heartbeat, snapshot) = {
+        let mut core = shared
+            .lock()
+            .map_err(|_| "app state lock poisoned".to_string())?;
+        let identity_code = identity_code.trim().to_string();
+        if identity_code.is_empty() {
+            return Err("OpenLive identity code is empty".to_string());
+        }
+        let config = core
+            .apply_live_patch(crate::types::LiveConfigPatch {
+                identity_code: Some(identity_code),
+                ..crate::types::LiveConfigPatch::default()
+            })
+            .map_err(|error| error.to_string())?
+            .config;
+        let snapshot = core.set_live_status(crate::types::LiveStatus::Connecting, None);
+        (
+            config.identity_code.clone(),
+            config.enable_ceve_server_heartbeat,
+            snapshot,
+        )
+    };
+    emit_live_snapshot(&app, "live_status_changed", &snapshot);
+
+    let stop = Arc::new(AtomicBool::new(false));
+    let worker_stop = stop.clone();
+    let (done_sender, done_receiver) = mpsc::channel();
+    let (start_sender, start_receiver) = mpsc::channel();
+    let worker_app = app.clone();
+    let worker_shared = shared.clone();
+    let spawn_result = thread::Builder::new()
+        .name("voxui-openblive".to_string())
+        .spawn(move || {
+            if start_receiver.recv().is_ok() {
+                crate::openblive::run_openblive_worker(
+                    identity_code,
+                    enable_ceve_server_heartbeat,
+                    {
+                        let app = worker_app.clone();
+                        let shared = worker_shared.clone();
+                        move |raw| handle_openblive_event(&app, shared.clone(), raw)
+                    },
+                    {
+                        let app = worker_app.clone();
+                        let shared = worker_shared.clone();
+                        move |status, message| {
+                            handle_openblive_status(&app, shared.clone(), status, message)
+                        }
+                    },
+                    move || worker_stop.load(Ordering::SeqCst),
+                );
+            }
+            let _ = done_sender.send(());
+            clear_live_worker_slot();
+        });
+    if let Err(error) = spawn_result {
+        let snapshot = match shared.lock() {
+            Ok(mut core) => core.set_live_status(
+                crate::types::LiveStatus::Error,
+                Some(format!("spawn OpenLive worker: {error}")),
+            ),
+            Err(_) => return Err("app state lock poisoned".to_string()),
+        };
+        emit_live_snapshot(&app, "live_status_changed", &snapshot);
+        return Err(format!("spawn OpenLive worker: {error}"));
+    }
+
+    *guard = Some(LiveWorkerHandle {
+        stop,
+        done: done_receiver,
+        start: start_sender,
+    });
+    if let Some(handle) = guard.as_ref() {
+        if let Err(error) = handle.start_worker() {
+            *guard = None;
+            let snapshot = match shared.lock() {
+                Ok(mut core) => {
+                    core.set_live_status(crate::types::LiveStatus::Error, Some(error.clone()))
+                }
+                Err(_) => return Err("app state lock poisoned".to_string()),
+            };
+            emit_live_snapshot(&app, "live_status_changed", &snapshot);
+            return Err(error);
+        }
+    }
+
+    shared
+        .lock()
+        .map(|core| core.live_snapshot(crate::live::LiveLanguage::English))
+        .map_err(|_| "app state lock poisoned".to_string())
+}
+
+#[tauri::command]
+pub fn disconnect_openblive(
+    app: AppHandle,
+    state: State<'_, SharedAppCore>,
+) -> Result<crate::types::LiveSnapshot, String> {
+    let stopping = signal_live_worker_stop()?;
+    let snapshot = with_core(state, |core| {
+        let status = if stopping {
+            crate::types::LiveStatus::Disconnecting
+        } else {
+            crate::types::LiveStatus::Disconnected
+        };
+        Ok(core.set_live_status(status, None))
+    })?;
+    emit_live_snapshot(&app, "live_status_changed", &snapshot);
+    Ok(snapshot)
+}
+
+#[tauri::command]
+pub fn send_live_suggestion(
+    app: AppHandle,
+    state: State<'_, SharedAppCore>,
+    item_id: String,
+    mode: String,
+) -> Result<CommandResult, String> {
+    let mode = match mode.as_str() {
+        "normal" => crate::live::SuggestionMode::Normal,
+        "switch" => crate::live::SuggestionMode::Switch,
+        other => return Err(format!("unsupported live suggestion mode: {other}")),
+    };
+    let text = with_core(state, |core| {
+        core.live_suggestion_for_item(&item_id, crate::live::LiveLanguage::English, mode)
+            .ok_or_else(|| anyhow::anyhow!("live item is unavailable or filtered: {item_id}"))
+    })?;
+    let event = MainInputReplaceEvent { text };
+    if let Some(main) = app.get_webview_window("main") {
+        main.emit("main_input_replace", event)
+            .map_err(|error| error.to_string())?;
+    } else {
+        app.emit("main_input_replace", event)
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(CommandResult { ok: true })
 }
 
 #[tauri::command]
@@ -333,6 +576,147 @@ fn desktop_backend(backend: ProtocolBackendKind) -> BackendKind {
 
 fn sidecar_slot() -> &'static Mutex<Option<SidecarProcess>> {
     SIDECAR_PROCESS.get_or_init(|| Mutex::new(None))
+}
+
+fn live_worker_slot() -> &'static Mutex<Option<LiveWorkerHandle>> {
+    LIVE_WORKER.get_or_init(|| Mutex::new(None))
+}
+
+fn live_monitor_close_guard() -> &'static Mutex<LiveMonitorCloseGuard> {
+    LIVE_MONITOR_CLOSE_GUARD.get_or_init(|| Mutex::new(LiveMonitorCloseGuard::default()))
+}
+
+fn signal_live_worker_stop() -> Result<bool, String> {
+    let guard = live_worker_slot()
+        .lock()
+        .map_err(|_| "OpenLive worker lock poisoned".to_string())?;
+    let Some(handle) = guard.as_ref() else {
+        return Ok(false);
+    };
+    handle.request_stop();
+    Ok(true)
+}
+
+fn clear_live_worker_slot() {
+    if let Ok(mut guard) = live_worker_slot().lock() {
+        *guard = None;
+    }
+}
+
+pub fn disconnect_live_worker_for_window_close(app: &AppHandle) {
+    let should_disconnect = live_monitor_close_guard()
+        .lock()
+        .map(|mut guard| guard.should_disconnect_on_close())
+        .unwrap_or(true);
+    if !should_disconnect {
+        return;
+    }
+
+    if signal_live_worker_stop().unwrap_or(false) {
+        if let Some(state) = app.try_state::<SharedAppCore>() {
+            let shared = state.inner().clone();
+            let snapshot = match shared.lock() {
+                Ok(mut core) => core.set_live_status(crate::types::LiveStatus::Disconnecting, None),
+                Err(_) => return,
+            };
+            emit_live_snapshot(app, "live_status_changed", &snapshot);
+        }
+    }
+}
+
+pub fn shutdown_live_worker_for_app_exit() {
+    let handle = match live_worker_slot().lock() {
+        Ok(mut guard) => guard.take(),
+        Err(_) => return,
+    };
+    if let Some(handle) = handle {
+        handle.request_stop_and_wait();
+    }
+}
+
+fn handle_openblive_status(
+    app: &AppHandle,
+    shared: SharedAppCore,
+    status: crate::types::LiveStatus,
+    status_message: Option<String>,
+) {
+    let snapshot = match shared.lock() {
+        Ok(mut core) => core.set_live_status(status, status_message),
+        Err(_) => return,
+    };
+    emit_live_snapshot(app, "live_status_changed", &snapshot);
+
+    match status {
+        crate::types::LiveStatus::Connected => {
+            if let Err(error) = show_live_monitor(app) {
+                tracing::warn!("failed to show live monitor window: {error}");
+            }
+        }
+        crate::types::LiveStatus::Disconnected | crate::types::LiveStatus::Error => {
+            close_live_monitor(app);
+        }
+        crate::types::LiveStatus::Connecting | crate::types::LiveStatus::Disconnecting => {}
+    }
+}
+
+fn handle_openblive_event(app: &AppHandle, shared: SharedAppCore, raw: serde_json::Value) {
+    let event = match crate::live::parse_live_event(raw) {
+        Ok(Some(event)) => event,
+        Ok(None) => return,
+        Err(error) => {
+            tracing::warn!("failed to parse OpenLive event: {error}");
+            return;
+        }
+    };
+
+    let snapshot = match shared.lock() {
+        Ok(mut core) => match core.add_live_event(event) {
+            Ok(_) => core.live_snapshot(crate::live::LiveLanguage::English),
+            Err(error) => {
+                tracing::warn!("failed to add OpenLive event: {error}");
+                return;
+            }
+        },
+        Err(_) => return,
+    };
+    emit_live_snapshot(app, "live_items_changed", &snapshot);
+}
+
+fn emit_live_snapshot(app: &AppHandle, event: &str, snapshot: &crate::types::LiveSnapshot) {
+    let _ = app.emit(event, snapshot.clone());
+}
+
+fn show_live_monitor(app: &AppHandle) -> Result<(), String> {
+    if let Ok(mut guard) = live_monitor_close_guard().lock() {
+        guard.mark_monitor_shown();
+    }
+
+    if let Some(window) = app.get_webview_window("live-monitor") {
+        window.show().map_err(|error| error.to_string())?;
+        window.set_focus().map_err(|error| error.to_string())?;
+        return Ok(());
+    }
+
+    WebviewWindowBuilder::new(app, "live-monitor", WebviewUrl::App("index.html".into()))
+        .title("Live Monitor")
+        .inner_size(480.0, 640.0)
+        .min_inner_size(360.0, 420.0)
+        .build()
+        .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+fn close_live_monitor(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window("live-monitor") {
+        if let Ok(mut guard) = live_monitor_close_guard().lock() {
+            guard.suppress_current_close();
+        }
+        if window.close().is_err() {
+            if let Ok(mut guard) = live_monitor_close_guard().lock() {
+                guard.clear_suppression();
+            }
+        }
+    }
 }
 
 fn send_sidecar_command(
@@ -1101,18 +1485,109 @@ fn spawn_background(
 
 #[cfg(test)]
 mod tests {
+    use super::{spawn_background, LiveMonitorCloseGuard, LiveWorkerHandle};
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::mpsc;
+    use std::sync::Arc;
     use std::time::Duration;
 
     #[test]
     fn background_tasks_do_not_require_tokio_runtime() {
         let (sender, receiver) = mpsc::channel();
 
-        super::spawn_background("voxui-test-background", move || {
+        spawn_background("voxui-test-background", move || {
             sender.send(42).unwrap();
         })
         .unwrap();
 
         assert_eq!(receiver.recv_timeout(Duration::from_secs(2)).unwrap(), 42);
+    }
+
+    #[test]
+    fn live_worker_handle_stop_waits_for_completion_ack() {
+        let stop = Arc::new(AtomicBool::new(false));
+        let worker_stop = stop.clone();
+        let (done_sender, done_receiver) = mpsc::channel();
+        let (start_sender, _start_receiver) = mpsc::channel();
+        let handle = LiveWorkerHandle {
+            stop,
+            done: done_receiver,
+            start: start_sender,
+        };
+
+        let worker = std::thread::spawn(move || {
+            while !worker_stop.load(Ordering::SeqCst) {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            done_sender.send(()).unwrap();
+        });
+
+        handle.request_stop_and_wait();
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn live_worker_handle_treats_completion_disconnect_as_done() {
+        let stop = Arc::new(AtomicBool::new(false));
+        let (done_sender, done_receiver) = mpsc::channel();
+        let (start_sender, _start_receiver) = mpsc::channel();
+        let handle = LiveWorkerHandle {
+            stop: stop.clone(),
+            done: done_receiver,
+            start: start_sender,
+        };
+        drop(done_sender);
+
+        handle.request_stop_and_wait();
+
+        assert!(stop.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn live_worker_start_gate_blocks_until_slot_registration_signal() {
+        let (start_sender, start_receiver) = mpsc::channel();
+        let (entered_sender, entered_receiver) = mpsc::channel();
+
+        let worker = std::thread::spawn(move || {
+            start_receiver.recv().unwrap();
+            entered_sender.send(()).unwrap();
+        });
+
+        assert!(entered_receiver
+            .recv_timeout(Duration::from_millis(20))
+            .is_err());
+        start_sender.send(()).unwrap();
+        assert_eq!(
+            entered_receiver.recv_timeout(Duration::from_secs(1)),
+            Ok(())
+        );
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn live_monitor_close_guard_suppresses_only_programmatic_close() {
+        let mut guard = LiveMonitorCloseGuard::default();
+
+        assert!(guard.should_disconnect_on_close());
+
+        guard.mark_monitor_shown();
+        guard.suppress_current_close();
+        assert!(!guard.should_disconnect_on_close());
+        assert!(guard.should_disconnect_on_close());
+
+        guard.suppress_current_close();
+        guard.clear_suppression();
+        assert!(guard.should_disconnect_on_close());
+    }
+
+    #[test]
+    fn live_monitor_close_guard_does_not_suppress_after_reconnect_generation() {
+        let mut guard = LiveMonitorCloseGuard::default();
+
+        guard.mark_monitor_shown();
+        guard.suppress_current_close();
+        guard.mark_monitor_shown();
+
+        assert!(guard.should_disconnect_on_close());
     }
 }

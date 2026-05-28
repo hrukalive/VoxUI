@@ -1,6 +1,6 @@
 use voxui_desktop::openblive::{
-    compact_json_body, unpack_packet, OpenBlivePacket, APP_ID, CEVE_HEARTBEAT_URL,
-    HEARTBEAT_INTERVAL_SECS, HOST, SIGN_URLS,
+    compact_json_body, unpack_packet, LiveWorkerState, OpenBlivePacket, WorkerCommand, APP_ID,
+    CEVE_HEARTBEAT_URL, HEARTBEAT_INTERVAL_SECS, HOST, SIGN_URLS,
 };
 
 #[test]
@@ -80,4 +80,38 @@ fn unpack_packet_rejects_invalid_header_length() {
     packed[4..6].copy_from_slice(&15_u16.to_be_bytes());
 
     assert!(unpack_packet(&packed).is_err());
+}
+
+#[test]
+fn worker_state_disconnect_is_idempotent() {
+    let mut state = LiveWorkerState::for_test(Some("game-1".to_string()));
+
+    assert_eq!(
+        state.mark_disconnect_requested(),
+        Some(WorkerCommand::EndApp {
+            game_id: "game-1".to_string()
+        })
+    );
+    assert_eq!(state.mark_disconnect_requested(), None);
+}
+
+#[test]
+fn worker_state_disconnect_cleanup_runs_once() {
+    let mut state = LiveWorkerState::for_test(Some("game-1".to_string()));
+    let mut cleaned_game_ids = Vec::new();
+
+    state
+        .run_disconnect_cleanup(|game_id| {
+            cleaned_game_ids.push(game_id.to_string());
+            Ok::<(), ()>(())
+        })
+        .unwrap();
+    state
+        .run_disconnect_cleanup(|game_id| {
+            cleaned_game_ids.push(game_id.to_string());
+            Ok::<(), ()>(())
+        })
+        .unwrap();
+
+    assert_eq!(cleaned_game_ids, vec!["game-1".to_string()]);
 }
