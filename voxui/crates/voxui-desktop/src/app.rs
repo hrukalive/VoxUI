@@ -5,6 +5,7 @@ use crate::components::error_modal::ErrorModal;
 use crate::components::header::Header;
 use crate::components::history::HistoryList;
 use crate::components::input_box::InputBox;
+use crate::components::live_monitor::LiveMonitor;
 use crate::components::load_progress_modal::LoadProgressModal;
 use crate::components::settings_modal::{SettingsModal, SettingsPage};
 use crate::i18n::{labels, UiLanguage};
@@ -165,6 +166,35 @@ pub fn App() -> impl IntoView {
             }
         });
     };
+
+    let is_live_monitor_window = crate::tauri_api::current_window_label() == "live-monitor";
+    if is_live_monitor_window {
+        return view! {
+            <div
+                class:theme-light=move || current_snapshot().config.theme == ThemeMode::Light
+                class:theme-dark=move || current_snapshot().config.theme == ThemeMode::Dark
+            >
+                <LiveMonitor
+                    labels=current_labels
+                    snapshot=move || live_snapshot.get()
+                    on_send=move |item_id, switch| {
+                        spawn_local(async move {
+                            let mode = if switch { "switch" } else { "normal" }.to_string();
+                            let _ = crate::tauri_api::send_live_suggestion(item_id, mode).await;
+                        });
+                    }
+                    on_clear=move || {
+                        spawn_local(async move {
+                            if let Ok(next_snapshot) = crate::tauri_api::clear_live_items().await {
+                                set_live_snapshot.set(next_snapshot);
+                            }
+                        });
+                    }
+                />
+            </div>
+        }
+        .into_any();
+    }
 
     view! {
         <div
@@ -393,6 +423,7 @@ pub fn App() -> impl IntoView {
             }}
         </div>
     }
+    .into_any()
 }
 
 fn ui_language(language: LanguageMode, system_language: LanguageMode) -> UiLanguage {
