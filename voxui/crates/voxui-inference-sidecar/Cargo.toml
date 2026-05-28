@@ -1,0 +1,20 @@
+[package]
+name = "voxui-inference-sidecar"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "voxui-inference-sidecar"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+candle-core.workspace = true
+voxui-inference = { path = "../voxui-inference" }
+voxui-sidecar-protocol = { path = "../voxui-sidecar-protocol" }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[features]
+default = []
+cuda = ["voxui-inference/cuda"]

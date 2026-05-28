@@ -1,13 +1,14 @@
-use voxui_desktop::audio::{apply_volume, sine_with_fades};
+use voxui_audio::{apply_loudness_volume, volume_to_gain};
+use voxui_desktop::audio::sine_with_fades;
 use voxui_desktop::playback::{GeneratedAudio, GeneratedAudioCache};
 
 #[test]
-fn volume_scales_samples_and_clamps_volume() {
+fn volume_uses_loudness_curve_and_clamps_volume() {
     let samples = [-0.5, 0.25, 1.0];
 
-    assert_eq!(apply_volume(&samples, 0.5), vec![-0.25, 0.125, 0.5]);
-    assert_eq!(apply_volume(&samples, 2.0), samples);
-    assert_eq!(apply_volume(&samples, -1.0), vec![0.0, 0.0, 0.0]);
+    assert_eq!(apply_loudness_volume(&samples, 2.0), samples);
+    assert_eq!(apply_loudness_volume(&samples, -1.0), vec![0.0, 0.0, 0.0]);
+    assert!(volume_to_gain(0.5) < 0.5);
 }
 
 #[test]

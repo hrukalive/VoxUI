@@ -45,6 +45,14 @@ if (-not $SkipBuild) {
     $env:NVCC_APPEND_FLAGS = "--allow-unsupported-compiler"
 
     cargo build --release -p voxui-cli --features cuda
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to build voxui-cli"
+    }
+
+    cargo build --release -p voxui-inference-sidecar --features cuda
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to build voxui-inference-sidecar"
+    }
 }
 
 $exePath = "target\release\voxui-cli.exe"
@@ -52,12 +60,26 @@ if (-not (Test-Path -LiteralPath $exePath)) {
     throw "Release executable not found: $exePath"
 }
 
+$sidecarExePath = "target\release\voxui-inference-sidecar.exe"
+if (-not (Test-Path -LiteralPath $sidecarExePath)) {
+    throw "Release sidecar executable not found: $sidecarExePath"
+}
+$sidecarTauriExePath = "target\release\voxui-inference-sidecar-x86_64-pc-windows-msvc.exe"
+Copy-Item -LiteralPath $sidecarExePath -Destination $sidecarTauriExePath -Force
+
 New-Item -ItemType Directory -Force -Path $PackageDir | Out-Null
 Copy-Item -LiteralPath $exePath -Destination $PackageDir -Force
+Copy-Item -LiteralPath $sidecarExePath -Destination $PackageDir -Force
+Copy-Item -LiteralPath $sidecarTauriExePath -Destination $PackageDir -Force
 
 $pdbPath = "target\release\voxui_cli.pdb"
 if (Test-Path -LiteralPath $pdbPath) {
     Copy-Item -LiteralPath $pdbPath -Destination $PackageDir -Force
+}
+
+$sidecarPdbPath = "target\release\voxui_inference_sidecar.pdb"
+if (Test-Path -LiteralPath $sidecarPdbPath) {
+    Copy-Item -LiteralPath $sidecarPdbPath -Destination $PackageDir -Force
 }
 
 foreach ($dll in $cudaDlls) {

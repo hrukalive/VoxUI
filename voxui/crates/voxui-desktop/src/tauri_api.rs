@@ -29,6 +29,8 @@ extern "C" {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AppSnapshot {
     pub config: AppConfig,
+    pub system_language: LanguageMode,
+    pub cuda_available: bool,
     pub models: Vec<ModelChoice>,
     pub selected_model_id: Option<String>,
     pub loaded_model_id: Option<String>,
@@ -41,6 +43,7 @@ pub struct AppConfig {
     pub model_root: Option<String>,
     pub selected_model_id: Option<String>,
     pub language: LanguageMode,
+    pub theme: ThemeMode,
     pub backend: BackendKind,
     pub audio_host: Option<String>,
     pub audio_device: Option<String>,
@@ -54,6 +57,7 @@ pub struct AudioState {
     pub hosts: Vec<AudioHost>,
     pub devices: Vec<AudioDevice>,
     pub default_host: Option<String>,
+    pub default_devices: Vec<AudioDevice>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -136,6 +140,8 @@ pub struct GenerationSettings {
     pub inference_timesteps: usize,
     pub min_len: usize,
     pub max_len: usize,
+    pub streaming: bool,
+    pub stream_consolidate_n: usize,
     pub retry_badcase: bool,
     pub retry_badcase_max_times: usize,
     pub retry_badcase_ratio_threshold: f32,
@@ -152,6 +158,8 @@ pub struct ConfigPatch {
     pub selected_model_id: Option<Option<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub language: Option<LanguageMode>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub theme: Option<ThemeMode>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub backend: Option<BackendKind>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -209,6 +217,13 @@ pub enum LanguageMode {
 pub enum BackendKind {
     Cpu,
     Cuda,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ThemeMode {
+    Dark,
+    Light,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

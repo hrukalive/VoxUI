@@ -1,6 +1,7 @@
 use leptos::prelude::*;
 use wasm_bindgen_futures::spawn_local;
 
+use crate::components::error_modal::ErrorModal;
 use crate::components::header::Header;
 use crate::components::history::HistoryList;
 use crate::components::input_box::InputBox;
@@ -10,15 +11,16 @@ use crate::i18n::{labels, UiLanguage};
 use crate::tauri_api::{
     AppConfig, AppSnapshot, AudioState, BackendKind, ConfigPatch, GenerationDoneEvent,
     GenerationProgressEvent, GenerationSettings, HistoryStatus, LanguageMode, LoadUiState,
-    ModelLoadDoneEvent, ModelLoadProgressEvent, PlaybackStateEvent,
+    ModelLoadDoneEvent, ModelLoadProgressEvent, PlaybackStateEvent, ThemeMode,
 };
 
 #[component]
 pub fn App() -> impl IntoView {
     let (settings_open, set_settings_open) = signal(false);
-    let (settings_page, set_settings_page) = signal(SettingsPage::Models);
+    let (settings_page, set_settings_page) = signal(SettingsPage::General);
     let (load_open, set_load_open) = signal(false);
     let (load_percent, set_load_percent) = signal(0.0_f32);
+    let (load_error, set_load_error) = signal(None::<String>);
     let (snapshot, set_snapshot) = signal(Some(fallback_snapshot()));
     let (audio_state, set_audio_state) = signal(AudioState::default());
 
@@ -35,7 +37,13 @@ pub fn App() -> impl IntoView {
     });
 
     let current_snapshot = move || snapshot.get().unwrap_or_else(fallback_snapshot);
-    let current_labels = move || labels(ui_language(current_snapshot().config.language));
+    let current_labels = move || {
+        let snapshot = current_snapshot();
+        labels(ui_language(
+            snapshot.config.language,
+            snapshot.system_language,
+        ))
+    };
     let refresh_snapshot = move || {
         spawn_local(async move {
             if let Ok(next_snapshot) = crate::tauri_api::get_app_state().await {
@@ -64,7 +72,11 @@ pub fn App() -> impl IntoView {
     });
     spawn_local(async move {
         let _ = crate::tauri_api::listen_app_event("model_load_done", move |event| {
-            let _ = crate::tauri_api::decode_app_event::<ModelLoadDoneEvent>(event);
+            if let Ok(done) = crate::tauri_api::decode_app_event::<ModelLoadDoneEvent>(event) {
+                if done.status != "success" && done.status != "canceled" {
+                    set_load_error.set(Some(done.error.unwrap_or_else(|| done.status)));
+                }
+            }
             set_load_percent.set(100.0);
             set_load_open.set(false);
             refresh_snapshot();
@@ -93,11 +105,31 @@ pub fn App() -> impl IntoView {
         .await;
     });
 
+    let commit_config_patch = move |patch: ConfigPatch| {
+        set_snapshot.update(|snapshot| {
+            if let Some(snapshot) = snapshot.as_mut() {
+                apply_optimistic_patch(snapshot, &patch);
+            }
+        });
+        spawn_local(async move {
+            if let Ok(next_snapshot) = crate::tauri_api::set_config_patch(patch).await {
+                set_snapshot.set(Some(next_snapshot));
+            }
+        });
+    };
+
     view! {
-        <div class="app-shell">
+        <div
+            class="app-shell"
+            class:theme-light=move || current_snapshot().config.theme == ThemeMode::Light
+            class:theme-dark=move || current_snapshot().config.theme == ThemeMode::Dark
+        >
             {move || {
                 let snapshot = current_snapshot();
-                let labels = labels(ui_language(snapshot.config.language));
+                let labels = labels(ui_language(
+                    snapshot.config.language,
+                    snapshot.system_language,
+                ));
                 let selected_model_id = snapshot.selected_model_id.clone();
                 let loaded_model_id = snapshot.loaded_model_id.clone();
                 let load_disabled = selected_model_id.is_none()
@@ -108,8 +140,8 @@ pub fn App() -> impl IntoView {
                         labels=labels
                         models=snapshot.models
                         selected_model_id=snapshot.selected_model_id
-                        loaded_model_id=snapshot.loaded_model_id
                         load_disabled=load_disabled
+                        volume=snapshot.config.volume
                         on_model_select=move |model_id| {
                             spawn_local(async move {
                                 let selected_model_id = if model_id.is_empty() {
@@ -127,12 +159,20 @@ pub fn App() -> impl IntoView {
                                 }
                             });
                         }
+                        on_volume_change=move |volume| {
+                            commit_config_patch(ConfigPatch {
+                                volume: Some(volume),
+                                ..ConfigPatch::default()
+                            });
+                        }
                         on_load=move || {
                             if let Some(choice_id) = current_snapshot().selected_model_id {
+                                set_load_error.set(None);
                                 set_load_percent.set(0.0);
                                 set_load_open.set(true);
                                 spawn_local(async move {
-                                    if crate::tauri_api::load_model(choice_id).await.is_err() {
+                                    if let Err(error) = crate::tauri_api::load_model(choice_id).await {
+                                        set_load_error.set(Some(error));
                                         set_load_open.set(false);
                                     }
                                     refresh_snapshot();
@@ -145,7 +185,10 @@ pub fn App() -> impl IntoView {
             }}
             {move || {
                 let snapshot = current_snapshot();
-                let labels = labels(ui_language(snapshot.config.language));
+                let labels = labels(ui_language(
+                    snapshot.config.language,
+                    snapshot.system_language,
+                ));
                 view! {
                     <HistoryList
                         labels=labels
@@ -200,23 +243,13 @@ pub fn App() -> impl IntoView {
             <SettingsModal
                 labels=current_labels
                 config=move || current_snapshot().config
+                cuda_available=move || current_snapshot().cuda_available
                 audio_state=move || audio_state.get()
                 open=move || settings_open.get()
                 active_page=move || settings_page.get()
                 on_close=move || set_settings_open.set(false)
                 on_page_select=move |page| set_settings_page.set(page)
-                on_config_patch=move |patch| {
-                    set_snapshot.update(|snapshot| {
-                        if let Some(snapshot) = snapshot.as_mut() {
-                            apply_optimistic_patch(snapshot, &patch);
-                        }
-                    });
-                    spawn_local(async move {
-                        if let Ok(next_snapshot) = crate::tauri_api::set_config_patch(patch).await {
-                            set_snapshot.set(Some(next_snapshot));
-                        }
-                    });
-                }
+                on_config_patch=commit_config_patch
                 on_browse_model_dir=move || {
                     spawn_local(async move {
                         if let Ok(Some(path)) = crate::tauri_api::browse_model_dir().await {
@@ -279,14 +312,30 @@ pub fn App() -> impl IntoView {
                     />
                 }
             }}
+            {move || {
+                let labels = current_labels();
+                view! {
+                    <ErrorModal
+                        labels=labels
+                        open=move || load_error.get().is_some()
+                        title=move || current_labels().model_load_failed.to_string()
+                        message=move || load_error.get().unwrap_or_default()
+                        on_close=move || set_load_error.set(None)
+                    />
+                }
+            }}
         </div>
     }
 }
 
-fn ui_language(language: LanguageMode) -> UiLanguage {
+fn ui_language(language: LanguageMode, system_language: LanguageMode) -> UiLanguage {
     match language {
         LanguageMode::English => UiLanguage::English,
-        LanguageMode::Chinese | LanguageMode::System => UiLanguage::Chinese,
+        LanguageMode::Chinese => UiLanguage::Chinese,
+        LanguageMode::System => match system_language {
+            LanguageMode::Chinese => UiLanguage::Chinese,
+            LanguageMode::English | LanguageMode::System => UiLanguage::English,
+        },
     }
 }
 
@@ -296,6 +345,7 @@ fn fallback_snapshot() -> AppSnapshot {
             model_root: None,
             selected_model_id: None,
             language: LanguageMode::System,
+            theme: ThemeMode::Dark,
             backend: BackendKind::Cpu,
             audio_host: None,
             audio_device: None,
@@ -306,6 +356,8 @@ fn fallback_snapshot() -> AppSnapshot {
                 inference_timesteps: 10,
                 min_len: 2,
                 max_len: 2000,
+                streaming: true,
+                stream_consolidate_n: 10,
                 retry_badcase: true,
                 retry_badcase_max_times: 3,
                 retry_badcase_ratio_threshold: 6.0,
@@ -314,6 +366,8 @@ fn fallback_snapshot() -> AppSnapshot {
                 reference_wav_path: None,
             },
         },
+        system_language: LanguageMode::English,
+        cuda_available: false,
         models: Vec::new(),
         selected_model_id: None,
         loaded_model_id: None,
@@ -333,17 +387,25 @@ fn apply_optimistic_patch(snapshot: &mut AppSnapshot, patch: &ConfigPatch) {
     if let Some(language) = patch.language {
         snapshot.config.language = language;
     }
+    if let Some(theme) = patch.theme {
+        snapshot.config.theme = theme;
+    }
     if let Some(backend) = patch.backend {
-        snapshot.config.backend = backend;
+        snapshot.config.backend = if snapshot.cuda_available {
+            backend
+        } else {
+            BackendKind::Cpu
+        };
     }
     if let Some(audio_host) = patch.audio_host.as_ref() {
-        if snapshot.config.audio_host != *audio_host {
+        let audio_host = empty_string_as_none(audio_host.clone());
+        if snapshot.config.audio_host != audio_host {
             snapshot.config.audio_device = None;
         }
-        snapshot.config.audio_host = audio_host.clone();
+        snapshot.config.audio_host = audio_host;
     }
     if let Some(audio_device) = patch.audio_device.as_ref() {
-        snapshot.config.audio_device = audio_device.clone();
+        snapshot.config.audio_device = empty_string_as_none(audio_device.clone());
     }
     if let Some(volume) = patch.volume {
         snapshot.config.volume = volume.clamp(0.0, 1.0);
@@ -354,4 +416,8 @@ fn apply_optimistic_patch(snapshot: &mut AppSnapshot, patch: &ConfigPatch) {
     if let Some(generation) = patch.generation.as_ref() {
         snapshot.config.generation = generation.clone();
     }
+}
+
+fn empty_string_as_none(value: Option<String>) -> Option<String> {
+    value.filter(|value| !value.is_empty())
 }

@@ -9,12 +9,13 @@ pub mod audio;
 pub mod commands;
 pub mod config;
 pub mod generation_queue;
+pub mod inference_sidecar;
 pub mod model_discovery;
 pub mod playback;
 pub mod types;
 
 pub fn run() {
-    let _ = tracing_subscriber::fmt().try_init();
+    init_tracing();
     let (config, config_path) = startup_config();
     let mut core = AppCore::from_config(config)
         .expect("persisted app config should initialize desktop app core");
@@ -42,6 +43,15 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("failed to run AhanSays desktop app");
+}
+
+fn init_tracing() {
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+        tracing_subscriber::EnvFilter::new(
+            "info,voxui_desktop=debug,voxui_inference_sidecar=debug,voxui_inference=info",
+        )
+    });
+    let _ = tracing_subscriber::fmt().with_env_filter(filter).try_init();
 }
 
 fn startup_config() -> (AppConfig, PathBuf) {

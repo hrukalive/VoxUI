@@ -14,9 +14,9 @@
     "windows": [
       {
         "title": "AhanSays",
-        "width": 980,
-        "height": 720,
-        "minWidth": 760,
+        "width": 876,
+        "height": 520,
+        "minWidth": 876,
         "minHeight": 520
       }
     ],
@@ -26,6 +26,15 @@
   },
   "bundle": {
     "active": false,
-    "targets": "all"
+    "targets": "all",
+    "externalBin": [
+      "../../../target/release/voxui-inference-sidecar"
+    ],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.ico"
+    ]
   }
 }

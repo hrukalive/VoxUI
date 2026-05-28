@@ -27,6 +27,13 @@ pub enum BackendKind {
     Cuda,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ThemeMode {
+    Dark,
+    Light,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct GenerationSettings {
@@ -34,6 +41,8 @@ pub struct GenerationSettings {
     pub inference_timesteps: usize,
     pub min_len: usize,
     pub max_len: usize,
+    pub streaming: bool,
+    pub stream_consolidate_n: usize,
     pub retry_badcase: bool,
     pub retry_badcase_max_times: usize,
     pub retry_badcase_ratio_threshold: f32,
@@ -49,6 +58,8 @@ impl Default for GenerationSettings {
             inference_timesteps: 10,
             min_len: 2,
             max_len: 2000,
+            streaming: true,
+            stream_consolidate_n: 10,
             retry_badcase: true,
             retry_badcase_max_times: 3,
             retry_badcase_ratio_threshold: 6.0,
@@ -65,6 +76,7 @@ pub struct AppConfig {
     pub model_root: Option<PathBuf>,
     pub selected_model_id: Option<String>,
     pub language: LanguageMode,
+    pub theme: ThemeMode,
     pub backend: BackendKind,
     pub audio_host: Option<String>,
     pub audio_device: Option<String>,
@@ -79,13 +91,34 @@ impl Default for AppConfig {
             model_root: None,
             selected_model_id: None,
             language: LanguageMode::System,
-            backend: BackendKind::Cpu,
+            theme: ThemeMode::Dark,
+            backend: default_backend(),
             audio_host: None,
             audio_device: None,
             volume: 0.8,
             max_input_chars: 280,
             generation: GenerationSettings::default(),
         }
+    }
+}
+
+impl AppConfig {
+    pub fn normalize_for_build(&mut self) {
+        if !cuda_available() {
+            self.backend = BackendKind::Cpu;
+        }
+    }
+}
+
+pub fn cuda_available() -> bool {
+    cfg!(feature = "cuda")
+}
+
+fn default_backend() -> BackendKind {
+    if cuda_available() {
+        BackendKind::Cuda
+    } else {
+        BackendKind::Cpu
     }
 }
 
@@ -116,6 +149,8 @@ pub struct ConfigPatch {
     pub selected_model_id: Option<Option<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub language: Option<LanguageMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub theme: Option<ThemeMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub backend: Option<BackendKind>,
     #[serde(
@@ -212,6 +247,7 @@ pub struct AudioStateDto {
     pub hosts: Vec<AudioHostDto>,
     pub devices: Vec<AudioDeviceDto>,
     pub default_host: Option<String>,
+    pub default_devices: Vec<AudioDeviceDto>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -224,6 +260,8 @@ pub struct RequestSnapshot {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AppSnapshot {
     pub config: AppConfig,
+    pub system_language: LanguageMode,
+    pub cuda_available: bool,
     pub models: Vec<ModelChoice>,
     pub selected_model_id: Option<String>,
     pub loaded_model_id: Option<String>,
