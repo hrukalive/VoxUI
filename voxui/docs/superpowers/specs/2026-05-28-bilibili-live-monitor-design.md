@@ -10,10 +10,13 @@ The backend owns the OpenLive connection lifecycle, signing, websocket protocol,
 
 The monitor window opens only after a successful connection and successful Bilibili websocket auth. Closing the monitor window ends the OpenLive app session through the appropriate Bilibili `/v2/app/end` call. Exiting the whole desktop app performs the same cleanup.
 
+If the OpenLive websocket or heartbeat loop disconnects unexpectedly after the monitor is open, the backend should close the monitor window, mark live status disconnected or error, and run the same OpenLive cleanup path.
+
 ## Goals
 
 - Connect to Bilibili OpenLive from `voxui-desktop`.
 - Use the same connection sequence demonstrated by `D:\Dev\py-demo-new\ws2.py`.
+- Use the proven OpenLive `app_id` and signing endpoints from `ws2.py`.
 - Add a separate native Tauri monitor window after successful auth.
 - Show suggested TTS input text for supported live message types.
 - Store raw JSON for each monitor item so existing items can be recomputed when settings change.
@@ -66,7 +69,7 @@ If any step fails, the monitor window is not opened and the main UI receives a c
 Add a focused backend module, for example `src-tauri/src/openblive.rs`, responsible for:
 
 - OpenLive API request body serialization;
-- calling the configured signing endpoints;
+- calling the fixed proven signing endpoints;
 - signed `/v2/app/start`, `/v2/app/heartbeat`, and `/v2/app/end`;
 - websocket connection and binary packet encoding/decoding;
 - websocket auth and heartbeat packets;
@@ -85,6 +88,16 @@ Add a live state module or section in `AppCore` for:
 - replacement rules.
 
 The backend remains authoritative for connection status and raw events. The frontend can render and request actions, but it should not own the Bilibili connection.
+
+Use these OpenLive constants from `ws2.py`:
+
+- app id: `1651388990835`;
+- primary signing endpoint: `https://soft.ceve-market.org/bopen/sign`;
+- fallback signing endpoint: `https://bopen.ceve-market.org/sign`;
+- OpenLive host: `https://live-open.biliapi.com`;
+- heartbeat interval: `20` seconds.
+
+These should be treated as built-in defaults for the Bilibili integration rather than user-facing settings.
 
 ### Tauri Commands and Events
 
@@ -112,7 +125,7 @@ The implementation should mirror `ws2.py`:
 1. Build compact JSON request bodies with `serde_json` in a stable form equivalent to Python `separators=(",", ":")`.
 2. POST the exact body bytes to signing endpoints.
 3. Use the returned signed headers for Bilibili OpenLive API calls.
-4. POST `/v2/app/start` with identity code and app id.
+4. POST `/v2/app/start` with identity code and app id `1651388990835`.
 5. Store `game_id`.
 6. Connect to the returned websocket URL with native ping disabled.
 7. Send auth packet `op=7` with `auth_body`.
@@ -306,6 +319,7 @@ Websocket closes or auth fails:
 - update status to disconnected or error;
 - stop heartbeat loops;
 - call `/v2/app/end` if connected enough to have `game_id`;
+- close the monitor window automatically if it was open;
 - keep current monitor items in memory until cleared or app exits.
 
 Monitor window close:
@@ -348,6 +362,7 @@ Malformed messages:
 - Failed signing or failed Bilibili auth does not open the monitor.
 - Disconnect cleanup is idempotent.
 - Closing the monitor triggers OpenLive app end when `game_id` exists.
+- Unexpected websocket or heartbeat disconnect closes the monitor and runs OpenLive app end.
 - App shutdown triggers the same cleanup path.
 
 ### Frontend Tests or Manual Verification
