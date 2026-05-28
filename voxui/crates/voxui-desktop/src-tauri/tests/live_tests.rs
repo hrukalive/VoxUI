@@ -1,8 +1,13 @@
+use std::fs;
+
 use serde_json::json;
+use tempfile::TempDir;
 use voxui_desktop::live::{
     parse_live_event, render_suggestion, switch_text, LiveLanguage, SuggestionMode,
 };
-use voxui_desktop::types::{AppConfig, LiveMessageKind, ReplacementRule, TemplateConfig};
+use voxui_desktop::types::{
+    AppConfig, LiveConfigPatch, LiveMessageKind, LiveStatus, ReplacementRule, TemplateConfig,
+};
 
 #[test]
 fn live_config_defaults_match_bilibili_monitor_spec() {
@@ -361,4 +366,163 @@ fn switch_text_ignores_empty_replacement_sources() {
     });
 
     assert_eq!(switch_text("abc", &config), "abc");
+}
+
+#[test]
+fn adding_live_event_initializes_name_mapping_and_recomputes_after_patch() {
+    let mut core = voxui_desktop::app_core::AppCore::from_config(AppConfig::default()).unwrap();
+    let event = parse_live_event(json!({
+        "cmd": "LIVE_OPEN_PLATFORM_SEND_GIFT",
+        "data": { "paid": true, "gift_name": "花", "gift_num": 2, "open_id": "u1", "uname": "Alice" }
+    })).unwrap().unwrap();
+
+    let item_id = core.add_live_event_for_test(event).unwrap();
+    let first = core.live_snapshot_for_test(LiveLanguage::Chinese);
+    assert_eq!(
+        first.config.original_unames.get("u1").map(String::as_str),
+        Some("Alice")
+    );
+    assert_eq!(first.items[0].suggestion, "感谢Alice送出的2个花");
+
+    core.apply_live_patch(LiveConfigPatch {
+        mapped_unames: Some(
+            [("u1".to_string(), "A酱".to_string())]
+                .into_iter()
+                .collect(),
+        ),
+        ..LiveConfigPatch::default()
+    })
+    .unwrap();
+    let second = core.live_snapshot_for_test(LiveLanguage::Chinese);
+
+    assert_eq!(second.items[0].id, item_id);
+    assert_eq!(second.items[0].suggestion, "感谢A酱送出的2个花");
+}
+
+#[test]
+fn live_snapshot_filters_likes_by_default_until_enabled() {
+    let mut core = voxui_desktop::app_core::AppCore::from_config(AppConfig::default()).unwrap();
+    let like = parse_live_event(json!({
+        "cmd": "LIVE_OPEN_PLATFORM_LIKE",
+        "data": { "open_id": "u2", "uname": "Bob", "like_count": 1 }
+    }))
+    .unwrap()
+    .unwrap();
+
+    core.add_live_event_for_test(like).unwrap();
+    assert!(core
+        .live_snapshot_for_test(LiveLanguage::Chinese)
+        .items
+        .is_empty());
+
+    core.apply_live_patch(LiveConfigPatch {
+        show_likes: Some(true),
+        ..LiveConfigPatch::default()
+    })
+    .unwrap();
+
+    assert_eq!(
+        core.live_snapshot_for_test(LiveLanguage::Chinese)
+            .items
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn live_status_defaults_to_disconnected() {
+    let core = voxui_desktop::app_core::AppCore::from_config(AppConfig::default()).unwrap();
+
+    assert_eq!(core.live_status_for_test(), LiveStatus::Disconnected);
+}
+
+#[test]
+fn setting_live_status_returns_english_snapshot() {
+    let mut core = voxui_desktop::app_core::AppCore::from_config(AppConfig::default()).unwrap();
+    let event = parse_live_event(json!({
+        "cmd": "LIVE_OPEN_PLATFORM_SEND_GIFT",
+        "data": { "paid": true, "gift_name": "flower", "gift_num": 2, "open_id": "u1", "uname": "Alice" }
+    })).unwrap().unwrap();
+    core.add_live_event_for_test(event).unwrap();
+
+    let snapshot = core.set_live_status(LiveStatus::Connected, Some("ready".to_string()));
+
+    assert_eq!(snapshot.status, LiveStatus::Connected);
+    assert_eq!(snapshot.status_message.as_deref(), Some("ready"));
+    assert_eq!(snapshot.items[0].suggestion, "Thank you Alice for 2 flower");
+}
+
+#[test]
+fn adding_live_event_persists_only_when_name_mapping_changes() {
+    let temp = TempDir::new().unwrap();
+    let config_path = temp.path().join("voxui_config.json");
+    let empty_mapping_path = temp.path().join("empty_mapping_config.json");
+    let mut config = AppConfig::default();
+    config
+        .live
+        .original_unames
+        .insert("u-existing-empty".to_string(), String::new());
+    config
+        .live
+        .mapped_unames
+        .insert("u-existing-empty".to_string(), String::new());
+    let mut empty_mapping_core = voxui_desktop::app_core::AppCore::from_config(config).unwrap();
+    empty_mapping_core.set_config_path(empty_mapping_path.clone());
+
+    let replaces_empty_mapping = parse_live_event(json!({
+        "cmd": "LIVE_OPEN_PLATFORM_SEND_GIFT",
+        "data": { "paid": true, "gift_name": "flower", "gift_num": 1, "open_id": "u-existing-empty", "uname": "Alice" }
+    })).unwrap().unwrap();
+    empty_mapping_core
+        .add_live_event_for_test(replaces_empty_mapping)
+        .unwrap();
+
+    let replaced_snapshot = empty_mapping_core.live_snapshot_for_test(LiveLanguage::English);
+    assert_eq!(
+        replaced_snapshot
+            .config
+            .original_unames
+            .get("u-existing-empty")
+            .map(String::as_str),
+        Some("Alice")
+    );
+    assert_eq!(
+        replaced_snapshot
+            .config
+            .mapped_unames
+            .get("u-existing-empty")
+            .map(String::as_str),
+        Some("Alice")
+    );
+    assert!(empty_mapping_path.exists());
+
+    let mut core = voxui_desktop::app_core::AppCore::from_config(AppConfig::default()).unwrap();
+    core.set_config_path(config_path.clone());
+
+    let empty_name_event = parse_live_event(json!({
+        "cmd": "LIVE_OPEN_PLATFORM_LIKE",
+        "data": { "open_id": "u-empty", "uname": "" }
+    }))
+    .unwrap()
+    .unwrap();
+    core.add_live_event_for_test(empty_name_event).unwrap();
+
+    assert!(!config_path.exists());
+    assert!(core
+        .live_snapshot_for_test(LiveLanguage::English)
+        .config
+        .original_unames
+        .is_empty());
+
+    let named_event = parse_live_event(json!({
+        "cmd": "LIVE_OPEN_PLATFORM_SEND_GIFT",
+        "data": { "paid": true, "gift_name": "flower", "gift_num": 1, "open_id": "u1", "uname": "Alice" }
+    })).unwrap().unwrap();
+    core.add_live_event_for_test(named_event.clone()).unwrap();
+    assert!(config_path.exists());
+
+    fs::write(&config_path, "sentinel").unwrap();
+    core.add_live_event_for_test(named_event).unwrap();
+
+    assert_eq!(fs::read_to_string(&config_path).unwrap(), "sentinel");
 }

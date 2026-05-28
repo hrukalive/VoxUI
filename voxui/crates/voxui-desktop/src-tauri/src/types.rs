@@ -91,6 +91,16 @@ impl LiveMessageKind {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LiveStatus {
+    Disconnected,
+    Connecting,
+    Connected,
+    Disconnecting,
+    Error,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ReplacementRule {
@@ -203,6 +213,52 @@ impl Default for LiveConfig {
             original_unames: BTreeMap::new(),
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LiveMonitorItemDto {
+    pub id: String,
+    pub kind: LiveMessageKind,
+    pub paid: bool,
+    pub open_id: String,
+    pub uname: String,
+    pub mapped_uname: String,
+    pub suggestion: String,
+    pub raw_json: serde_json::Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LiveSnapshot {
+    pub status: LiveStatus,
+    pub status_message: Option<String>,
+    pub config: LiveConfig,
+    pub items: Vec<LiveMonitorItemDto>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct LiveConfigPatch {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub identity_code: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enable_ceve_server_heartbeat: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub show_danmu: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub show_gifts: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub show_superchats: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub show_guards: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub show_likes: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub show_enters: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub templates: Option<TemplateConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replacement_rules: Option<Vec<ReplacementRule>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mapped_unames: Option<BTreeMap<String, String>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

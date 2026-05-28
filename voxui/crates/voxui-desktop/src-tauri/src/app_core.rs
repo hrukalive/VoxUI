@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::collections::{btree_map::Entry, BTreeMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc};
@@ -7,10 +7,12 @@ use anyhow::{bail, Context, Result};
 use voxui_audio::VolumeHandle;
 
 use crate::generation_queue::{GenerationQueue, HistoryItem, HistoryStatus};
+use crate::live::{LiveEvent, LiveLanguage, LiveState, SuggestionMode};
 use crate::model_discovery::discover_models;
 use crate::playback::{GeneratedAudio, GeneratedAudioCache};
 use crate::types::{
-    AppConfig, AppSnapshot, ConfigPatch, LoadUiState, ModelChoice, SidecarCapabilities,
+    AppConfig, AppSnapshot, ConfigPatch, LiveConfigPatch, LiveSnapshot, LiveStatus, LoadUiState,
+    ModelChoice, SidecarCapabilities,
 };
 use voxui_inference::SynthesisRequest;
 
@@ -52,6 +54,7 @@ pub struct AppCore {
     active_generation_audio_backup: Option<(String, GeneratedAudio)>,
     active_playback: Option<ActivePlayback>,
     pending_auto_playback: VecDeque<String>,
+    live: LiveState,
 }
 
 #[derive(Debug)]
@@ -123,6 +126,7 @@ impl AppCore {
             active_generation_audio_backup: None,
             active_playback: None,
             pending_auto_playback: VecDeque::new(),
+            live: LiveState::default(),
         })
     }
 
@@ -195,6 +199,106 @@ impl AppCore {
 
         self.persist_config()?;
         Ok(self.snapshot())
+    }
+
+    pub fn add_live_event(&mut self, event: LiveEvent) -> Result<String> {
+        let username_mapping_changed = if !event.open_id.is_empty() && !event.uname.is_empty() {
+            initialize_uname_mapping(
+                &mut self.config.live.original_unames,
+                &event.open_id,
+                &event.uname,
+            ) | initialize_uname_mapping(
+                &mut self.config.live.mapped_unames,
+                &event.open_id,
+                &event.uname,
+            )
+        } else {
+            false
+        };
+
+        let item_id = self.live.add_event(event);
+        if username_mapping_changed {
+            self.persist_config()?;
+        }
+        Ok(item_id)
+    }
+
+    pub fn apply_live_patch(&mut self, patch: LiveConfigPatch) -> Result<LiveSnapshot> {
+        if let Some(identity_code) = patch.identity_code {
+            self.config.live.identity_code = identity_code;
+        }
+        if let Some(enable_ceve_server_heartbeat) = patch.enable_ceve_server_heartbeat {
+            self.config.live.enable_ceve_server_heartbeat = enable_ceve_server_heartbeat;
+        }
+        if let Some(show_danmu) = patch.show_danmu {
+            self.config.live.show_danmu = show_danmu;
+        }
+        if let Some(show_gifts) = patch.show_gifts {
+            self.config.live.show_gifts = show_gifts;
+        }
+        if let Some(show_superchats) = patch.show_superchats {
+            self.config.live.show_superchats = show_superchats;
+        }
+        if let Some(show_guards) = patch.show_guards {
+            self.config.live.show_guards = show_guards;
+        }
+        if let Some(show_likes) = patch.show_likes {
+            self.config.live.show_likes = show_likes;
+        }
+        if let Some(show_enters) = patch.show_enters {
+            self.config.live.show_enters = show_enters;
+        }
+        if let Some(templates) = patch.templates {
+            self.config.live.templates = templates;
+        }
+        if let Some(replacement_rules) = patch.replacement_rules {
+            self.config.live.replacement_rules = replacement_rules;
+        }
+        if let Some(mapped_unames) = patch.mapped_unames {
+            self.config.live.mapped_unames = mapped_unames;
+        }
+
+        self.persist_config()?;
+        Ok(self.live_snapshot(LiveLanguage::English))
+    }
+
+    pub fn live_snapshot(&self, language: LiveLanguage) -> LiveSnapshot {
+        self.live.snapshot(&self.config.live, language)
+    }
+
+    pub fn set_live_status(
+        &mut self,
+        status: LiveStatus,
+        status_message: Option<String>,
+    ) -> LiveSnapshot {
+        self.live.set_status(status, status_message);
+        self.live_snapshot(LiveLanguage::English)
+    }
+
+    pub fn clear_live_items(&mut self) {
+        self.live.clear_items();
+    }
+
+    pub fn live_suggestion_for_item(
+        &self,
+        item_id: &str,
+        language: LiveLanguage,
+        mode: SuggestionMode,
+    ) -> Option<String> {
+        self.live
+            .suggestion_for_item(item_id, &self.config.live, language, mode)
+    }
+
+    pub fn add_live_event_for_test(&mut self, event: LiveEvent) -> Result<String> {
+        self.add_live_event(event)
+    }
+
+    pub fn live_snapshot_for_test(&self, language: LiveLanguage) -> LiveSnapshot {
+        self.live_snapshot(language)
+    }
+
+    pub fn live_status_for_test(&self) -> LiveStatus {
+        self.live.status()
     }
 
     pub fn set_config_path(&mut self, path: PathBuf) {
@@ -921,6 +1025,24 @@ fn select_existing_model(saved: Option<String>, models: &[ModelChoice]) -> Optio
 
 fn empty_string_as_none(value: Option<String>) -> Option<String> {
     value.filter(|value| !value.is_empty())
+}
+
+fn initialize_uname_mapping(
+    mappings: &mut BTreeMap<String, String>,
+    open_id: &str,
+    uname: &str,
+) -> bool {
+    match mappings.entry(open_id.to_string()) {
+        Entry::Vacant(entry) => {
+            entry.insert(uname.to_string());
+            true
+        }
+        Entry::Occupied(mut entry) if entry.get().is_empty() => {
+            entry.insert(uname.to_string());
+            true
+        }
+        Entry::Occupied(_) => false,
+    }
 }
 
 fn normalize_generation_settings(generation: &mut crate::types::GenerationSettings) {

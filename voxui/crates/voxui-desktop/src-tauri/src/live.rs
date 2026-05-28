@@ -1,6 +1,6 @@
 use serde_json::Value;
 
-use crate::types::{LiveConfig, LiveMessageKind};
+use crate::types::{LiveConfig, LiveMessageKind, LiveMonitorItemDto, LiveSnapshot, LiveStatus};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LiveLanguage {
@@ -25,6 +25,110 @@ pub struct LiveEvent {
     pub gift_num: Option<u64>,
     pub superchat_message: Option<String>,
     pub guard_label: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct LiveItem {
+    id: String,
+    event: LiveEvent,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct LiveState {
+    status: LiveStatus,
+    status_message: Option<String>,
+    items: Vec<LiveItem>,
+    next_item_id: u64,
+}
+
+impl Default for LiveState {
+    fn default() -> Self {
+        Self {
+            status: LiveStatus::Disconnected,
+            status_message: None,
+            items: Vec::new(),
+            next_item_id: 1,
+        }
+    }
+}
+
+impl LiveState {
+    pub fn add_event(&mut self, event: LiveEvent) -> String {
+        let id = format!("live-{}", self.next_item_id);
+        self.next_item_id += 1;
+        self.items.push(LiveItem {
+            id: id.clone(),
+            event,
+        });
+        id
+    }
+
+    pub fn clear_items(&mut self) {
+        self.items.clear();
+    }
+
+    pub fn status(&self) -> LiveStatus {
+        self.status
+    }
+
+    pub fn set_status(&mut self, status: LiveStatus, status_message: Option<String>) {
+        self.status = status;
+        self.status_message = status_message;
+    }
+
+    pub fn snapshot(&self, config: &LiveConfig, language: LiveLanguage) -> LiveSnapshot {
+        LiveSnapshot {
+            status: self.status,
+            status_message: self.status_message.clone(),
+            config: config.clone(),
+            items: self
+                .items
+                .iter()
+                .filter_map(|item| {
+                    self.dto_for_item(item, config, language, SuggestionMode::Normal)
+                })
+                .collect(),
+        }
+    }
+
+    pub fn suggestion_for_item(
+        &self,
+        item_id: &str,
+        config: &LiveConfig,
+        language: LiveLanguage,
+        mode: SuggestionMode,
+    ) -> Option<String> {
+        self.items
+            .iter()
+            .find(|item| item.id == item_id)
+            .and_then(|item| render_suggestion(&item.event, config, language, mode))
+    }
+
+    fn dto_for_item(
+        &self,
+        item: &LiveItem,
+        config: &LiveConfig,
+        language: LiveLanguage,
+        mode: SuggestionMode,
+    ) -> Option<LiveMonitorItemDto> {
+        let suggestion = render_suggestion(&item.event, config, language, mode)?;
+        let mapped_uname = config
+            .mapped_unames
+            .get(&item.event.open_id)
+            .cloned()
+            .unwrap_or_else(|| item.event.uname.clone());
+
+        Some(LiveMonitorItemDto {
+            id: item.id.clone(),
+            kind: item.event.kind,
+            paid: item.event.kind.is_paid(),
+            open_id: item.event.open_id.clone(),
+            uname: item.event.uname.clone(),
+            mapped_uname,
+            suggestion,
+            raw_json: item.event.raw.clone(),
+        })
+    }
 }
 
 pub fn parse_live_event(raw: Value) -> anyhow::Result<Option<LiveEvent>> {
