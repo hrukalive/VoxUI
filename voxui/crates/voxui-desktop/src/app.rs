@@ -11,8 +11,8 @@ use crate::i18n::{labels, UiLanguage};
 use crate::tauri_api::{
     AppConfig, AppSnapshot, AudioState, BackendKind, ConfigPatch, GenerationDoneEvent,
     GenerationProgressEvent, GenerationSettings, HistoryStatus, LanguageMode, LiveConfig,
-    LoadUiState, ModelLoadDoneEvent, ModelLoadProgressEvent, PlaybackStateEvent, ReplacementRule,
-    TemplateConfig, ThemeMode,
+    LiveConfigPatch, LiveSnapshot, LiveStatus, LoadUiState, ModelLoadDoneEvent,
+    ModelLoadProgressEvent, PlaybackStateEvent, ReplacementRule, TemplateConfig, ThemeMode,
 };
 
 #[component]
@@ -23,6 +23,7 @@ pub fn App() -> impl IntoView {
     let (load_percent, set_load_percent) = signal(0.0_f32);
     let (load_error, set_load_error) = signal(None::<String>);
     let (snapshot, set_snapshot) = signal(Some(fallback_snapshot()));
+    let (live_snapshot, set_live_snapshot) = signal(fallback_live_snapshot());
     let (audio_state, set_audio_state) = signal(AudioState::default());
     let (input_replacement, set_input_replacement) = signal(None::<String>);
 
@@ -35,6 +36,11 @@ pub fn App() -> impl IntoView {
     spawn_local(async move {
         if let Ok(next_audio_state) = crate::tauri_api::get_audio_state().await {
             set_audio_state.set(next_audio_state);
+        }
+    });
+    spawn_local(async move {
+        if let Ok(next_live_snapshot) = crate::tauri_api::get_live_state().await {
+            set_live_snapshot.set(next_live_snapshot);
         }
     });
 
@@ -122,6 +128,22 @@ pub fn App() -> impl IntoView {
         })
         .await;
     });
+    spawn_local(async move {
+        let _ = crate::tauri_api::listen_app_event("live_status_changed", move |event| {
+            if let Ok(snapshot) = crate::tauri_api::decode_app_event::<LiveSnapshot>(event) {
+                set_live_snapshot.set(snapshot);
+            }
+        })
+        .await;
+    });
+    spawn_local(async move {
+        let _ = crate::tauri_api::listen_app_event("live_items_changed", move |event| {
+            if let Ok(snapshot) = crate::tauri_api::decode_app_event::<LiveSnapshot>(event) {
+                set_live_snapshot.set(snapshot);
+            }
+        })
+        .await;
+    });
 
     let commit_config_patch = move |patch: ConfigPatch| {
         set_snapshot.update(|snapshot| {
@@ -132,6 +154,14 @@ pub fn App() -> impl IntoView {
         spawn_local(async move {
             if let Ok(next_snapshot) = crate::tauri_api::set_config_patch(patch).await {
                 set_snapshot.set(Some(next_snapshot));
+            }
+        });
+    };
+    let commit_live_patch = move |patch: LiveConfigPatch| {
+        set_live_snapshot.update(|snapshot| apply_live_optimistic_patch(snapshot, &patch));
+        spawn_local(async move {
+            if let Ok(next_snapshot) = crate::tauri_api::set_live_config_patch(patch).await {
+                set_live_snapshot.set(next_snapshot);
             }
         });
     };
@@ -263,6 +293,7 @@ pub fn App() -> impl IntoView {
             <SettingsModal
                 labels=current_labels
                 config=move || current_snapshot().config
+                live_snapshot=move || live_snapshot.get()
                 cuda_available=move || current_snapshot().cuda_available
                 audio_state=move || audio_state.get()
                 open=move || settings_open.get()
@@ -270,6 +301,22 @@ pub fn App() -> impl IntoView {
                 on_close=move || set_settings_open.set(false)
                 on_page_select=move |page| set_settings_page.set(page)
                 on_config_patch=commit_config_patch
+                on_live_patch=commit_live_patch
+                on_live_connect=move || {
+                    let identity_code = live_snapshot.get().config.identity_code;
+                    spawn_local(async move {
+                        if let Ok(next_snapshot) = crate::tauri_api::connect_openblive(identity_code).await {
+                            set_live_snapshot.set(next_snapshot);
+                        }
+                    });
+                }
+                on_live_disconnect=move || {
+                    spawn_local(async move {
+                        if let Ok(next_snapshot) = crate::tauri_api::disconnect_openblive().await {
+                            set_live_snapshot.set(next_snapshot);
+                        }
+                    });
+                }
                 on_browse_model_dir=move || {
                     spawn_local(async move {
                         if let Ok(Some(path)) = crate::tauri_api::browse_model_dir().await {
@@ -452,6 +499,15 @@ fn fallback_live_config() -> LiveConfig {
     }
 }
 
+fn fallback_live_snapshot() -> LiveSnapshot {
+    LiveSnapshot {
+        status: LiveStatus::Disconnected,
+        status_message: None,
+        config: fallback_live_config(),
+        items: Vec::new(),
+    }
+}
+
 fn apply_optimistic_patch(snapshot: &mut AppSnapshot, patch: &ConfigPatch) {
     if let Some(model_root) = patch.model_root.as_ref() {
         snapshot.config.model_root = model_root.clone();
@@ -496,4 +552,40 @@ fn apply_optimistic_patch(snapshot: &mut AppSnapshot, patch: &ConfigPatch) {
 
 fn empty_string_as_none(value: Option<String>) -> Option<String> {
     value.filter(|value| !value.is_empty())
+}
+
+fn apply_live_optimistic_patch(snapshot: &mut LiveSnapshot, patch: &LiveConfigPatch) {
+    if let Some(identity_code) = patch.identity_code.as_ref() {
+        snapshot.config.identity_code = identity_code.clone();
+    }
+    if let Some(enable_ceve_server_heartbeat) = patch.enable_ceve_server_heartbeat {
+        snapshot.config.enable_ceve_server_heartbeat = enable_ceve_server_heartbeat;
+    }
+    if let Some(show_danmu) = patch.show_danmu {
+        snapshot.config.show_danmu = show_danmu;
+    }
+    if let Some(show_gifts) = patch.show_gifts {
+        snapshot.config.show_gifts = show_gifts;
+    }
+    if let Some(show_superchats) = patch.show_superchats {
+        snapshot.config.show_superchats = show_superchats;
+    }
+    if let Some(show_guards) = patch.show_guards {
+        snapshot.config.show_guards = show_guards;
+    }
+    if let Some(show_likes) = patch.show_likes {
+        snapshot.config.show_likes = show_likes;
+    }
+    if let Some(show_enters) = patch.show_enters {
+        snapshot.config.show_enters = show_enters;
+    }
+    if let Some(templates) = patch.templates.as_ref() {
+        snapshot.config.templates = templates.clone();
+    }
+    if let Some(replacement_rules) = patch.replacement_rules.as_ref() {
+        snapshot.config.replacement_rules = replacement_rules.clone();
+    }
+    if let Some(mapped_unames) = patch.mapped_unames.as_ref() {
+        snapshot.config.mapped_unames = mapped_unames.clone();
+    }
 }

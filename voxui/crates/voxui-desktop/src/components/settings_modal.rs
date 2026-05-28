@@ -1,10 +1,12 @@
 use leptos::prelude::*;
+use std::collections::BTreeMap;
 
 use crate::components::controls::{CustomSelect, NumberCounter, SelectOption};
 use crate::i18n::Labels;
 use crate::tauri_api::{
     AppConfig, AudioDevice, AudioHost, AudioState, BackendKind, ConfigPatch, GenerationSettings,
-    LanguageMode, ThemeMode,
+    LanguageMode, LiveConfigPatch, LiveSnapshot, LiveStatus, ReplacementRule, TemplateConfig,
+    ThemeMode,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -12,6 +14,7 @@ pub enum SettingsPage {
     General,
     Inference,
     Audio,
+    Live,
     About,
 }
 
@@ -21,6 +24,7 @@ const DEFAULT_AUDIO_CHOICE: &str = "__voxui_default_audio__";
 pub fn SettingsModal(
     labels: impl Fn() -> Labels + Send + Sync + 'static + Copy,
     config: impl Fn() -> AppConfig + Send + Sync + 'static + Copy,
+    live_snapshot: impl Fn() -> LiveSnapshot + Send + Sync + 'static + Copy,
     cuda_available: impl Fn() -> bool + Send + Sync + 'static + Copy,
     audio_state: impl Fn() -> AudioState + Send + Sync + 'static + Copy,
     open: impl Fn() -> bool + Send + Sync + 'static + Copy,
@@ -28,6 +32,9 @@ pub fn SettingsModal(
     on_close: impl Fn() + Send + Sync + 'static + Copy,
     on_page_select: impl Fn(SettingsPage) + Send + Sync + 'static + Copy,
     on_config_patch: impl Fn(ConfigPatch) + Send + Sync + 'static + Copy,
+    on_live_patch: impl Fn(LiveConfigPatch) + Send + Sync + 'static + Copy,
+    on_live_connect: impl Fn() + Send + Sync + 'static + Copy,
+    on_live_disconnect: impl Fn() + Send + Sync + 'static + Copy,
     on_browse_model_dir: impl Fn() + Send + Sync + 'static + Copy,
     on_browse_prompt_wav: impl Fn() + Send + Sync + 'static + Copy,
     on_browse_reference_wav: impl Fn() + Send + Sync + 'static + Copy,
@@ -58,6 +65,7 @@ pub fn SettingsModal(
                             <button type="button" class:active=move || active_page() == SettingsPage::General on:click=move |_| on_page_select(SettingsPage::General)>{move || labels().settings_general}</button>
                             <button type="button" class:active=move || active_page() == SettingsPage::Inference on:click=move |_| on_page_select(SettingsPage::Inference)>{move || labels().settings_inference}</button>
                             <button type="button" class:active=move || active_page() == SettingsPage::Audio on:click=move |_| on_page_select(SettingsPage::Audio)>{move || labels().settings_audio}</button>
+                            <button type="button" class:active=move || active_page() == SettingsPage::Live on:click=move |_| on_page_select(SettingsPage::Live)>{move || labels().live}</button>
                             <button type="button" class:active=move || active_page() == SettingsPage::About on:click=move |_| on_page_select(SettingsPage::About)>{move || labels().settings_about}</button>
                         </nav>
 
@@ -327,6 +335,185 @@ pub fn SettingsModal(
                                 </section>
                             </Show>
 
+                            <Show when=move || active_page() == SettingsPage::Live>
+                                <section class="settings-section live-settings-section">
+                                    <h3>{move || labels().live}</h3>
+                                    <div class="settings-grid live-settings-grid">
+                                        <label class="settings-field settings-span-2" for="settings-live-identity-code">
+                                            <span>{move || labels().identity_code}</span>
+                                            <input
+                                                id="settings-live-identity-code"
+                                                type="text"
+                                                prop:value=move || live_snapshot().config.identity_code
+                                                on:change=move |event| {
+                                                    on_live_patch(LiveConfigPatch {
+                                                        identity_code: Some(event_target_value(&event)),
+                                                        ..LiveConfigPatch::default()
+                                                    });
+                                                }
+                                            />
+                                        </label>
+                                        <div class="settings-field live-status-field settings-span-2">
+                                            <span>{move || labels().live}</span>
+                                            <strong>{move || live_status_label(labels(), live_snapshot().status)}</strong>
+                                            <button
+                                                class="primary-button"
+                                                type="button"
+                                                on:click=move |_| {
+                                                    if live_snapshot().status == LiveStatus::Connected {
+                                                        on_live_disconnect();
+                                                    } else {
+                                                        on_live_connect();
+                                                    }
+                                                }
+                                            >
+                                                {move || if live_snapshot().status == LiveStatus::Connected { labels().disconnect } else { labels().connect }}
+                                            </button>
+                                        </div>
+                                        <label class="settings-checkbox settings-switch live-checkbox" for="settings-live-ceve-heartbeat">
+                                            <input id="settings-live-ceve-heartbeat" type="checkbox" prop:checked=move || live_snapshot().config.enable_ceve_server_heartbeat on:change=move |event| {
+                                                on_live_patch(LiveConfigPatch {
+                                                    enable_ceve_server_heartbeat: Some(event_target_checked(&event)),
+                                                    ..LiveConfigPatch::default()
+                                                });
+                                            } />
+                                            <span>{move || labels().ceve_heartbeat}</span>
+                                        </label>
+                                        <div class="live-checkbox-grid settings-span-2">
+                                            <label class="settings-checkbox live-checkbox" for="settings-live-show-danmu">
+                                                <input id="settings-live-show-danmu" type="checkbox" prop:checked=move || live_snapshot().config.show_danmu on:change=move |event| {
+                                                    on_live_patch(LiveConfigPatch { show_danmu: Some(event_target_checked(&event)), ..LiveConfigPatch::default() });
+                                                } />
+                                                <span>{move || labels().danmu}</span>
+                                            </label>
+                                            <label class="settings-checkbox live-checkbox" for="settings-live-show-gifts">
+                                                <input id="settings-live-show-gifts" type="checkbox" prop:checked=move || live_snapshot().config.show_gifts on:change=move |event| {
+                                                    on_live_patch(LiveConfigPatch { show_gifts: Some(event_target_checked(&event)), ..LiveConfigPatch::default() });
+                                                } />
+                                                <span>{move || labels().gift}</span>
+                                            </label>
+                                            <label class="settings-checkbox live-checkbox" for="settings-live-show-superchats">
+                                                <input id="settings-live-show-superchats" type="checkbox" prop:checked=move || live_snapshot().config.show_superchats on:change=move |event| {
+                                                    on_live_patch(LiveConfigPatch { show_superchats: Some(event_target_checked(&event)), ..LiveConfigPatch::default() });
+                                                } />
+                                                <span>{move || labels().superchat}</span>
+                                            </label>
+                                            <label class="settings-checkbox live-checkbox" for="settings-live-show-guards">
+                                                <input id="settings-live-show-guards" type="checkbox" prop:checked=move || live_snapshot().config.show_guards on:change=move |event| {
+                                                    on_live_patch(LiveConfigPatch { show_guards: Some(event_target_checked(&event)), ..LiveConfigPatch::default() });
+                                                } />
+                                                <span>{move || labels().guard}</span>
+                                            </label>
+                                            <label class="settings-checkbox live-checkbox" for="settings-live-show-likes">
+                                                <input id="settings-live-show-likes" type="checkbox" prop:checked=move || live_snapshot().config.show_likes on:change=move |event| {
+                                                    on_live_patch(LiveConfigPatch { show_likes: Some(event_target_checked(&event)), ..LiveConfigPatch::default() });
+                                                } />
+                                                <span>{move || labels().like}</span>
+                                            </label>
+                                            <label class="settings-checkbox live-checkbox" for="settings-live-show-enters">
+                                                <input id="settings-live-show-enters" type="checkbox" prop:checked=move || live_snapshot().config.show_enters on:change=move |event| {
+                                                    on_live_patch(LiveConfigPatch { show_enters: Some(event_target_checked(&event)), ..LiveConfigPatch::default() });
+                                                } />
+                                                <span>{move || labels().enter}</span>
+                                            </label>
+                                        </div>
+
+                                        <div class="live-subsection settings-span-2">
+                                            <h4>{move || labels().send}</h4>
+                                            <div class="live-template-grid">
+                                                {template_textarea("settings-live-template-danmu", move || labels().danmu.to_string(), move || live_snapshot().config.templates.danmu, move |value| patch_template(live_snapshot, on_live_patch, move |templates| templates.danmu = value))}
+                                                {template_textarea("settings-live-template-gift-zh", move || format!("{} zh", labels().gift), move || live_snapshot().config.templates.gift_zh, move |value| patch_template(live_snapshot, on_live_patch, move |templates| templates.gift_zh = value))}
+                                                {template_textarea("settings-live-template-gift-en", move || format!("{} en", labels().gift), move || live_snapshot().config.templates.gift_en, move |value| patch_template(live_snapshot, on_live_patch, move |templates| templates.gift_en = value))}
+                                                {template_textarea("settings-live-template-superchat-zh", move || format!("{} zh", labels().superchat), move || live_snapshot().config.templates.superchat_zh, move |value| patch_template(live_snapshot, on_live_patch, move |templates| templates.superchat_zh = value))}
+                                                {template_textarea("settings-live-template-superchat-en", move || format!("{} en", labels().superchat), move || live_snapshot().config.templates.superchat_en, move |value| patch_template(live_snapshot, on_live_patch, move |templates| templates.superchat_en = value))}
+                                                {template_textarea("settings-live-template-guard-zh", move || format!("{} zh", labels().guard), move || live_snapshot().config.templates.guard_zh, move |value| patch_template(live_snapshot, on_live_patch, move |templates| templates.guard_zh = value))}
+                                                {template_textarea("settings-live-template-guard-en", move || format!("{} en", labels().guard), move || live_snapshot().config.templates.guard_en, move |value| patch_template(live_snapshot, on_live_patch, move |templates| templates.guard_en = value))}
+                                                {template_textarea("settings-live-template-like-zh", move || format!("{} zh", labels().like), move || live_snapshot().config.templates.like_zh, move |value| patch_template(live_snapshot, on_live_patch, move |templates| templates.like_zh = value))}
+                                                {template_textarea("settings-live-template-like-en", move || format!("{} en", labels().like), move || live_snapshot().config.templates.like_en, move |value| patch_template(live_snapshot, on_live_patch, move |templates| templates.like_en = value))}
+                                                {template_textarea("settings-live-template-enter-zh", move || format!("{} zh", labels().enter), move || live_snapshot().config.templates.enter_zh, move |value| patch_template(live_snapshot, on_live_patch, move |templates| templates.enter_zh = value))}
+                                                {template_textarea("settings-live-template-enter-en", move || format!("{} en", labels().enter), move || live_snapshot().config.templates.enter_en, move |value| patch_template(live_snapshot, on_live_patch, move |templates| templates.enter_en = value))}
+                                            </div>
+                                        </div>
+
+                                        <div class="live-subsection settings-span-2">
+                                            <div class="live-subsection-header">
+                                                <h4>{move || labels().switch_send}</h4>
+                                                <button class="secondary-button live-symbol-button" type="button" aria-label=move || labels().switch_send on:click=move |_| {
+                                                    let mut rules = live_snapshot().config.replacement_rules;
+                                                    rules.push(ReplacementRule { enabled: true, from: String::new(), to: String::new() });
+                                                    patch_replacement_rules(on_live_patch, rules);
+                                                }>"+"</button>
+                                            </div>
+                                            <div class="live-list">
+                                                {move || {
+                                                    replacement_rule_rows(live_snapshot())
+                                                        .into_iter()
+                                                        .map(|(index, rule)| {
+                                                        view! {
+                                                            <div class="live-replacement-row">
+                                                                <label class="live-inline-checkbox">
+                                                                    <input type="checkbox" prop:checked=rule.enabled on:change=move |event| {
+                                                                        let mut rules = live_snapshot().config.replacement_rules;
+                                                                        if let Some(rule) = rules.get_mut(index) {
+                                                                            rule.enabled = event_target_checked(&event);
+                                                                        }
+                                                                        patch_replacement_rules(on_live_patch, rules);
+                                                                    } />
+                                                                </label>
+                                                                <input type="text" aria-label=move || labels().switch_send prop:value=rule.from.clone() on:change=move |event| {
+                                                                    let mut rules = live_snapshot().config.replacement_rules;
+                                                                    if let Some(rule) = rules.get_mut(index) {
+                                                                        rule.from = event_target_value(&event);
+                                                                    }
+                                                                    patch_replacement_rules(on_live_patch, rules);
+                                                                } />
+                                                                <input type="text" aria-label=move || labels().switch_send prop:value=rule.to.clone() on:change=move |event| {
+                                                                    let mut rules = live_snapshot().config.replacement_rules;
+                                                                    if let Some(rule) = rules.get_mut(index) {
+                                                                        rule.to = event_target_value(&event);
+                                                                    }
+                                                                    patch_replacement_rules(on_live_patch, rules);
+                                                                } />
+                                                                <button class="secondary-button live-remove-button live-symbol-button" type="button" aria-label=move || labels().clear on:click=move |_| {
+                                                                    let mut rules = live_snapshot().config.replacement_rules;
+                                                                    if index < rules.len() {
+                                                                        rules.remove(index);
+                                                                    }
+                                                                    patch_replacement_rules(on_live_patch, rules);
+                                                                }>"x"</button>
+                                                            </div>
+                                                        }
+                                                        })
+                                                        .collect_view()
+                                                }}
+                                            </div>
+                                        </div>
+
+                                        <div class="live-subsection settings-span-2">
+                                            <h4>{move || labels().danmu}</h4>
+                                            <div class="live-list">
+                                                <For
+                                                    each=move || mapped_name_rows(live_snapshot())
+                                                    key=|(open_id, _, _)| open_id.clone()
+                                                    children=move |(open_id, original, mapped)| {
+                                                        view! {
+                                                            <div class="live-name-row">
+                                                                <span>{original}</span>
+                                                                <input type="text" aria-label=move || labels().danmu prop:value=mapped on:change=move |event| {
+                                                                    let mut mapped_unames = live_snapshot().config.mapped_unames;
+                                                                    mapped_unames.insert(open_id.clone(), event_target_value(&event));
+                                                                    patch_mapped_unames(on_live_patch, mapped_unames);
+                                                                } />
+                                                            </div>
+                                                        }
+                                                    }
+                                                />
+                                            </div>
+                                        </div>
+                                    </div>
+                                </section>
+                            </Show>
+
                             <Show when=move || active_page() == SettingsPage::About>
                                 <section class="settings-section">
                                     <h3>{move || labels().settings_about}</h3>
@@ -528,4 +715,115 @@ fn parse_f32(value: &str, fallback: f32) -> f32 {
 
 fn parse_usize(value: &str, fallback: usize) -> usize {
     value.parse().unwrap_or(fallback)
+}
+
+fn live_status_label(labels: Labels, status: LiveStatus) -> &'static str {
+    match status {
+        LiveStatus::Disconnected => match labels.english {
+            "English" => "Disconnected",
+            _ => "未连接",
+        },
+        LiveStatus::Connecting => match labels.english {
+            "English" => "Connecting",
+            _ => "连接中",
+        },
+        LiveStatus::Connected => match labels.english {
+            "English" => "Connected",
+            _ => "已连接",
+        },
+        LiveStatus::Disconnecting => match labels.english {
+            "English" => "Disconnecting",
+            _ => "断开中",
+        },
+        LiveStatus::Error => labels.history_status_failed,
+    }
+}
+
+fn template_textarea(
+    id: &'static str,
+    label: impl Fn() -> String + Send + Sync + 'static + Copy,
+    value: impl Fn() -> String + Send + Sync + 'static + Copy,
+    on_change: impl Fn(String) + Send + Sync + 'static + Copy,
+) -> impl IntoView {
+    view! {
+        <label class="settings-field live-template-field" for=id>
+            <span>{label}</span>
+            <textarea
+                id=id
+                rows="2"
+                prop:value=value
+                on:change=move |event| on_change(event_target_value(&event))
+            ></textarea>
+        </label>
+    }
+}
+
+fn patch_template(
+    live_snapshot: impl Fn() -> LiveSnapshot + Send + Sync + 'static + Copy,
+    on_live_patch: impl Fn(LiveConfigPatch) + Send + Sync + 'static + Copy,
+    update: impl FnOnce(&mut TemplateConfig),
+) {
+    let mut templates = live_snapshot().config.templates;
+    update(&mut templates);
+    on_live_patch(LiveConfigPatch {
+        templates: Some(templates),
+        ..LiveConfigPatch::default()
+    });
+}
+
+fn patch_replacement_rules(
+    on_live_patch: impl Fn(LiveConfigPatch) + Send + Sync + 'static + Copy,
+    replacement_rules: Vec<ReplacementRule>,
+) {
+    on_live_patch(LiveConfigPatch {
+        replacement_rules: Some(replacement_rules),
+        ..LiveConfigPatch::default()
+    });
+}
+
+fn patch_mapped_unames(
+    on_live_patch: impl Fn(LiveConfigPatch) + Send + Sync + 'static + Copy,
+    mapped_unames: BTreeMap<String, String>,
+) {
+    on_live_patch(LiveConfigPatch {
+        mapped_unames: Some(mapped_unames),
+        ..LiveConfigPatch::default()
+    });
+}
+
+fn replacement_rule_rows(snapshot: LiveSnapshot) -> Vec<(usize, ReplacementRule)> {
+    snapshot
+        .config
+        .replacement_rules
+        .into_iter()
+        .enumerate()
+        .collect()
+}
+
+fn mapped_name_rows(snapshot: LiveSnapshot) -> Vec<(String, String, String)> {
+    let mut rows = snapshot
+        .config
+        .original_unames
+        .iter()
+        .map(|(open_id, original)| {
+            let mapped = snapshot
+                .config
+                .mapped_unames
+                .get(open_id)
+                .cloned()
+                .unwrap_or_else(|| original.clone());
+            (open_id.clone(), original.clone(), mapped)
+        })
+        .collect::<Vec<_>>();
+
+    for (open_id, mapped) in snapshot.config.mapped_unames {
+        if !rows
+            .iter()
+            .any(|(existing_open_id, _, _)| existing_open_id == &open_id)
+        {
+            rows.push((open_id.clone(), open_id, mapped));
+        }
+    }
+
+    rows
 }

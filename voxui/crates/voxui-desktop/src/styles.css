@@ -849,6 +849,238 @@ body {
   font: inherit;
 }
 
+.live-settings-section {
+  gap: 14px;
+}
+
+.live-settings-grid {
+  gap: 10px;
+}
+
+.live-status-field {
+  grid-template-columns: 132px minmax(0, 1fr) 116px;
+  min-height: 50px;
+}
+
+.live-status-field strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.live-checkbox-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.live-checkbox {
+  min-height: 42px;
+  border-radius: 6px;
+  font-size: 14px;
+  padding: 8px 10px;
+}
+
+.live-checkbox span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.live-subsection {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  border-radius: 8px;
+  background: var(--field-bg);
+  padding: 12px;
+}
+
+.live-subsection h4 {
+  margin: 0;
+  color: var(--heading);
+  font-size: 15px;
+  font-weight: 500;
+}
+
+.live-subsection-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.live-template-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.live-template-field {
+  grid-template-columns: 96px minmax(0, 1fr);
+  min-height: 70px;
+  border: 1px solid var(--panel-border);
+  border-radius: 6px;
+  background: var(--control-bg-muted);
+  font-size: 14px;
+  padding: 8px;
+}
+
+.live-template-field textarea {
+  min-height: 54px;
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.live-list {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+}
+
+.live-replacement-row,
+.live-name-row {
+  display: grid;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.live-replacement-row {
+  grid-template-columns: 22px minmax(0, 1fr) minmax(0, 1fr) 76px;
+}
+
+.live-name-row {
+  grid-template-columns: minmax(120px, 0.8fr) minmax(0, 1fr);
+}
+
+.live-replacement-row input[type="text"],
+.live-name-row input {
+  min-width: 0;
+  width: 100%;
+  height: 32px;
+  border: 1px solid var(--control-border);
+  border-radius: 5px;
+  background: var(--control-bg);
+  color: var(--text);
+  padding: 0 9px;
+  font: inherit;
+  font-size: 13px;
+}
+
+.live-name-row span {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.live-inline-checkbox {
+  display: grid;
+  place-items: center;
+}
+
+.live-inline-checkbox input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--primary-bg);
+}
+
+.live-remove-button {
+  width: 76px;
+  min-width: 0;
+  padding: 0 8px;
+}
+
+.live-symbol-button {
+  width: 34px;
+  min-width: 34px;
+  padding: 0;
+  font-size: 18px;
+  line-height: 1;
+}
+
+@media (max-width: 900px) {
+  .settings-layout {
+    grid-template-columns: 168px minmax(0, 1fr);
+  }
+
+  .settings-content {
+    padding: 18px;
+  }
+
+  .live-checkbox-grid,
+  .live-template-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .live-status-field {
+    grid-template-columns: 96px minmax(0, 1fr) 96px;
+  }
+
+  .live-template-field {
+    grid-template-columns: 84px minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 760px) {
+  body {
+    min-width: 0;
+  }
+
+  .settings-modal {
+    max-width: calc(100vw - 24px);
+  }
+
+  .settings-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .settings-tabs {
+    flex-direction: row;
+    overflow-x: auto;
+    padding: 12px;
+  }
+
+  .settings-tabs button {
+    flex: 0 0 auto;
+    min-height: 34px;
+    padding: 0 12px;
+  }
+
+  .settings-grid,
+  .live-settings-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .settings-field,
+  .live-status-field,
+  .live-template-field {
+    grid-template-columns: minmax(0, 1fr);
+    align-items: stretch;
+  }
+
+  .live-replacement-row {
+    grid-template-columns: 22px minmax(0, 1fr) minmax(0, 1fr) 34px;
+  }
+
+  .live-remove-button {
+    width: 34px;
+  }
+
+  .live-name-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 .about-panel {
   min-height: 120px;
   border-radius: 8px;
