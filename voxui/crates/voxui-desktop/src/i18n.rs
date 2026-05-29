@@ -147,7 +147,7 @@ pub fn labels(language: UiLanguage) -> Labels {
             connect: "连接",
             disconnect: "断开",
             clear: "清空",
-            ceve_heartbeat: "ceve 心跳",
+            ceve_heartbeat: "签名服务器心跳",
             danmu: "弹幕",
             gift: "礼物",
             superchat: "醒目留言",
@@ -223,7 +223,7 @@ pub fn labels(language: UiLanguage) -> Labels {
             connect: "Connect",
             disconnect: "Disconnect",
             clear: "Clear",
-            ceve_heartbeat: "ceve heartbeat",
+            ceve_heartbeat: "Signing server heartbeat",
             danmu: "Danmu",
             gift: "Gift",
             superchat: "Superchat",
@@ -234,7 +234,7 @@ pub fn labels(language: UiLanguage) -> Labels {
             send: "Send",
             switch_send: "Switch pronouns",
             sidecar_load_failed: "Fail to start inference engine",
-            about_text: "由 久嘉 & OpenCode & Codex 编写。使用 GPLv3 许可证。以 VoxCPM Python 实现作为参考/上游。",
+            about_text: "Coded by Reon Nynes & OpenCode & Codex. Reference Python implementation of VoxCPM. GPLv3 License.",
         },
     }
 }

@@ -438,34 +438,34 @@ pub fn SettingsModal(
                                             <div class="live-template-grid">
                                                 {template_textarea("settings-live-template-danmu", move || labels().danmu.to_string(), move || live_snapshot().config.templates.danmu, move |value| patch_template(live_snapshot, on_live_patch, move |templates| templates.danmu = value))}
                                                 <Show when=move || language() != UiLanguage::English>
-                                                    {template_textarea("settings-live-template-gift-zh", move || format!("{} zh", labels().gift), move || live_snapshot().config.templates.gift_zh, move |value| patch_template(live_snapshot, on_live_patch, move |templates| templates.gift_zh = value))}
+                                                    {template_textarea("settings-live-template-gift-zh", move || format!("{}", labels().gift), move || live_snapshot().config.templates.gift_zh, move |value| patch_template(live_snapshot, on_live_patch, move |templates| templates.gift_zh = value))}
                                                 </Show>
                                                 <Show when=move || language() == UiLanguage::English>
-                                                    {template_textarea("settings-live-template-gift-en", move || format!("{} en", labels().gift), move || live_snapshot().config.templates.gift_en, move |value| patch_template(live_snapshot, on_live_patch, move |templates| templates.gift_en = value))}
+                                                    {template_textarea("settings-live-template-gift-en", move || format!("{}", labels().gift), move || live_snapshot().config.templates.gift_en, move |value| patch_template(live_snapshot, on_live_patch, move |templates| templates.gift_en = value))}
                                                 </Show>
                                                 <Show when=move || language() != UiLanguage::English>
-                                                    {template_textarea("settings-live-template-superchat-zh", move || format!("{} zh", labels().superchat), move || live_snapshot().config.templates.superchat_zh, move |value| patch_template(live_snapshot, on_live_patch, move |templates| templates.superchat_zh = value))}
+                                                    {template_textarea("settings-live-template-superchat-zh", move || format!("{}", labels().superchat), move || live_snapshot().config.templates.superchat_zh, move |value| patch_template(live_snapshot, on_live_patch, move |templates| templates.superchat_zh = value))}
                                                 </Show>
                                                 <Show when=move || language() == UiLanguage::English>
-                                                    {template_textarea("settings-live-template-superchat-en", move || format!("{} en", labels().superchat), move || live_snapshot().config.templates.superchat_en, move |value| patch_template(live_snapshot, on_live_patch, move |templates| templates.superchat_en = value))}
+                                                    {template_textarea("settings-live-template-superchat-en", move || format!("{}", labels().superchat), move || live_snapshot().config.templates.superchat_en, move |value| patch_template(live_snapshot, on_live_patch, move |templates| templates.superchat_en = value))}
                                                 </Show>
                                                 <Show when=move || language() != UiLanguage::English>
-                                                    {template_textarea("settings-live-template-guard-zh", move || format!("{} zh", labels().guard), move || live_snapshot().config.templates.guard_zh, move |value| patch_template(live_snapshot, on_live_patch, move |templates| templates.guard_zh = value))}
+                                                    {template_textarea("settings-live-template-guard-zh", move || format!("{}", labels().guard), move || live_snapshot().config.templates.guard_zh, move |value| patch_template(live_snapshot, on_live_patch, move |templates| templates.guard_zh = value))}
                                                 </Show>
                                                 <Show when=move || language() == UiLanguage::English>
-                                                    {template_textarea("settings-live-template-guard-en", move || format!("{} en", labels().guard), move || live_snapshot().config.templates.guard_en, move |value| patch_template(live_snapshot, on_live_patch, move |templates| templates.guard_en = value))}
+                                                    {template_textarea("settings-live-template-guard-en", move || format!("{}", labels().guard), move || live_snapshot().config.templates.guard_en, move |value| patch_template(live_snapshot, on_live_patch, move |templates| templates.guard_en = value))}
                                                 </Show>
                                                 <Show when=move || language() != UiLanguage::English>
-                                                    {template_textarea("settings-live-template-like-zh", move || format!("{} zh", labels().like), move || live_snapshot().config.templates.like_zh, move |value| patch_template(live_snapshot, on_live_patch, move |templates| templates.like_zh = value))}
+                                                    {template_textarea("settings-live-template-like-zh", move || format!("{}", labels().like), move || live_snapshot().config.templates.like_zh, move |value| patch_template(live_snapshot, on_live_patch, move |templates| templates.like_zh = value))}
                                                 </Show>
                                                 <Show when=move || language() == UiLanguage::English>
-                                                    {template_textarea("settings-live-template-like-en", move || format!("{} en", labels().like), move || live_snapshot().config.templates.like_en, move |value| patch_template(live_snapshot, on_live_patch, move |templates| templates.like_en = value))}
+                                                    {template_textarea("settings-live-template-like-en", move || format!("{}", labels().like), move || live_snapshot().config.templates.like_en, move |value| patch_template(live_snapshot, on_live_patch, move |templates| templates.like_en = value))}
                                                 </Show>
                                                 <Show when=move || language() != UiLanguage::English>
-                                                    {template_textarea("settings-live-template-enter-zh", move || format!("{} zh", labels().enter), move || live_snapshot().config.templates.enter_zh, move |value| patch_template(live_snapshot, on_live_patch, move |templates| templates.enter_zh = value))}
+                                                    {template_textarea("settings-live-template-enter-zh", move || format!("{}", labels().enter), move || live_snapshot().config.templates.enter_zh, move |value| patch_template(live_snapshot, on_live_patch, move |templates| templates.enter_zh = value))}
                                                 </Show>
                                                 <Show when=move || language() == UiLanguage::English>
-                                                    {template_textarea("settings-live-template-enter-en", move || format!("{} en", labels().enter), move || live_snapshot().config.templates.enter_en, move |value| patch_template(live_snapshot, on_live_patch, move |templates| templates.enter_en = value))}
+                                                    {template_textarea("settings-live-template-enter-en", move || format!("{}", labels().enter), move || live_snapshot().config.templates.enter_en, move |value| patch_template(live_snapshot, on_live_patch, move |templates| templates.enter_en = value))}
                                                 </Show>
                                             </div>
                                         </div>
