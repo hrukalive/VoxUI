@@ -253,6 +253,24 @@ impl AppCore {
         if let Some(show_enters) = patch.show_enters {
             self.config.live.show_enters = show_enters;
         }
+        if let Some(auto_gen_danmu) = patch.auto_gen_danmu {
+            self.config.live.auto_gen_danmu = auto_gen_danmu;
+        }
+        if let Some(auto_gen_gifts) = patch.auto_gen_gifts {
+            self.config.live.auto_gen_gifts = auto_gen_gifts;
+        }
+        if let Some(auto_gen_superchats) = patch.auto_gen_superchats {
+            self.config.live.auto_gen_superchats = auto_gen_superchats;
+        }
+        if let Some(auto_gen_guards) = patch.auto_gen_guards {
+            self.config.live.auto_gen_guards = auto_gen_guards;
+        }
+        if let Some(auto_gen_likes) = patch.auto_gen_likes {
+            self.config.live.auto_gen_likes = auto_gen_likes;
+        }
+        if let Some(auto_gen_enters) = patch.auto_gen_enters {
+            self.config.live.auto_gen_enters = auto_gen_enters;
+        }
         if let Some(templates) = patch.templates {
             self.config.live.templates = templates;
         }

@@ -453,6 +453,48 @@ pub fn SettingsModal(
                                         </div>
 
                                         <div class="live-subsection settings-span-2">
+                                            <h4>{move || labels().auto_gen_messages}</h4>
+                                            <div class="live-checkbox-grid">
+                                                {move || {
+                                                    let labels = labels();
+                                                    vec![
+                                                        (LiveMessageKind::Danmu, labels.danmu),
+                                                        (LiveMessageKind::Gift, labels.gift),
+                                                        (LiveMessageKind::Superchat, labels.superchat),
+                                                        (LiveMessageKind::Guard, labels.guard),
+                                                        (LiveMessageKind::Like, labels.like),
+                                                        (LiveMessageKind::Enter, labels.enter),
+                                                    ].into_iter().map(|(kind, label)| {
+                                                        let checked = match kind {
+                                                            LiveMessageKind::Danmu => live_snapshot().config.auto_gen_danmu,
+                                                            LiveMessageKind::Gift => live_snapshot().config.auto_gen_gifts,
+                                                            LiveMessageKind::Superchat => live_snapshot().config.auto_gen_superchats,
+                                                            LiveMessageKind::Guard => live_snapshot().config.auto_gen_guards,
+                                                            LiveMessageKind::Like => live_snapshot().config.auto_gen_likes,
+                                                            LiveMessageKind::Enter => live_snapshot().config.auto_gen_enters,
+                                                        };
+                                                        view! {
+                                                            <label class="settings-checkbox live-checkbox">
+                                                                <input type="checkbox" prop:checked=checked on:change=move |event| {
+                                                                    let checked = event_target_checked(&event);
+                                                                    match kind {
+                                                                        LiveMessageKind::Danmu => on_live_patch(LiveConfigPatch { auto_gen_danmu: Some(checked), ..LiveConfigPatch::default() }),
+                                                                        LiveMessageKind::Gift => on_live_patch(LiveConfigPatch { auto_gen_gifts: Some(checked), ..LiveConfigPatch::default() }),
+                                                                        LiveMessageKind::Superchat => on_live_patch(LiveConfigPatch { auto_gen_superchats: Some(checked), ..LiveConfigPatch::default() }),
+                                                                        LiveMessageKind::Guard => on_live_patch(LiveConfigPatch { auto_gen_guards: Some(checked), ..LiveConfigPatch::default() }),
+                                                                        LiveMessageKind::Like => on_live_patch(LiveConfigPatch { auto_gen_likes: Some(checked), ..LiveConfigPatch::default() }),
+                                                                        LiveMessageKind::Enter => on_live_patch(LiveConfigPatch { auto_gen_enters: Some(checked), ..LiveConfigPatch::default() }),
+                                                                    };
+                                                                } />
+                                                                <span>{label}</span>
+                                                            </label>
+                                                        }
+                                                    }).collect_view()
+                                                }}
+                                            </div>
+                                        </div>
+
+                                        <div class="live-subsection settings-span-2">
                                             <h4>{move || labels().danmu_template}</h4>
                                             <div class="live-template-grid">
                                                 {template_textarea("settings-live-template-danmu", move || labels().danmu.to_string(), move || pending_templates.get().danmu, move |value| set_pending_templates.update(|t| t.danmu = value))}

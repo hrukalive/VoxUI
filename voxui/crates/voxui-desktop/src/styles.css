@@ -1055,7 +1055,7 @@ body:has(.live-monitor-shell) {
 .live-monitor-shell {
   position: relative;
   display: grid;
-  grid-template-rows: 44px minmax(0, 1fr);
+  grid-template-rows: 52px minmax(0, 1fr);
   height: 100vh;
   min-height: 0;
   overflow: hidden;
@@ -1065,12 +1065,12 @@ body:has(.live-monitor-shell) {
 
 .live-monitor-header {
   display: grid;
-  grid-template-columns: minmax(92px, auto) minmax(0, 1fr) auto;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   min-width: 0;
   min-height: 0;
-  padding: 6px 10px;
+  padding: 0 16px;
   border-bottom: 1px solid var(--panel-border);
   background: var(--panel-bg);
 }
@@ -1080,6 +1080,7 @@ body:has(.live-monitor-shell) {
   grid-auto-flow: column;
   align-items: center;
   gap: 8px;
+  min-width: 0;
 }
 
 .live-monitor-header h1 {
@@ -1124,20 +1125,34 @@ body:has(.live-monitor-shell) {
   background: var(--button-hover);
 }
 
+.live-monitor-header .live-monitor-button {
+  width: 34px;
+  height: 34px;
+}
+
+.live-send-mode-select.custom-select,
+.live-auto-gen-mode-select.custom-select {
+  max-width: 100%;
+}
+
 .live-send-mode-select.custom-select {
-  width: 142px;
-  max-width: min(46vw, 142px);
+  width: min(29vw, 124px);
 }
 
-.live-send-mode-select .custom-select-button {
+.live-auto-gen-mode-select.custom-select {
+  width: min(36vw, 168px);
+}
+
+.live-send-mode-select .custom-select-button,
+.live-auto-gen-mode-select .custom-select-button {
   grid-template-columns: minmax(0, 1fr) 28px;
-  height: 30px;
+  height: 34px;
   background: var(--button-bg);
-  padding: 0 8px;
-  font-size: 12px;
+  padding: 0 0 0 10px;
 }
 
-.live-send-mode-select .custom-select-arrow {
+.live-send-mode-select .custom-select-arrow,
+.live-auto-gen-mode-select .custom-select-arrow {
   width: 28px;
 }
 

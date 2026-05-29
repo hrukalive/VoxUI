@@ -262,6 +262,15 @@ fn render_suggestion_for_output(
         .map(String::as_str)
         .unwrap_or(&event.uname);
 
+    let switched_event;
+    let event = if mode == SuggestionMode::Switch {
+        switched_event = event_with_switched_message(event, config);
+        &switched_event
+    } else {
+        event
+    };
+
+    let clean_danmu_event;
     let rendered = if event.kind == LiveMessageKind::Danmu {
         let cleaned = clean_danmu(
             event.msg.as_deref().unwrap_or_default(),
@@ -270,16 +279,17 @@ fn render_suggestion_for_output(
         if cleaned.is_empty() {
             return None;
         }
-        cleaned
+        clean_danmu_event = event_with_message(event, cleaned);
+        render_template(
+            choose(event.kind, language, config),
+            &clean_danmu_event,
+            mapped_uname,
+        )
     } else {
         render_template(choose(event.kind, language, config), event, mapped_uname)
     };
 
-    let evaluated = match mode {
-        SuggestionMode::Normal => rendered,
-        SuggestionMode::Switch => switch_text(&rendered, config),
-    };
-    Some(ensure_period(&evaluated, language, auto_period))
+    Some(ensure_period(&rendered, language, auto_period))
 }
 
 pub fn switch_text(text: &str, config: &LiveConfig) -> String {
@@ -308,6 +318,33 @@ fn guard_label(level: Option<u64>) -> String {
         _ => "舰长",
     }
     .to_string()
+}
+
+fn event_with_switched_message(event: &LiveEvent, config: &LiveConfig) -> LiveEvent {
+    let mut event = event.clone();
+    match event.kind {
+        LiveMessageKind::Danmu => {
+            if let Some(message) = event.msg.as_mut() {
+                *message = switch_text(message, config);
+            }
+        }
+        LiveMessageKind::Superchat => {
+            if let Some(message) = event.superchat_message.as_mut() {
+                *message = switch_text(message, config);
+            }
+        }
+        LiveMessageKind::Gift
+        | LiveMessageKind::Guard
+        | LiveMessageKind::Like
+        | LiveMessageKind::Enter => {}
+    }
+    event
+}
+
+fn event_with_message(event: &LiveEvent, message: String) -> LiveEvent {
+    let mut event = event.clone();
+    event.msg = Some(message);
+    event
 }
 
 fn kind_enabled(kind: LiveMessageKind, config: &LiveConfig) -> bool {

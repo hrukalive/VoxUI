@@ -221,6 +221,12 @@ pub struct LiveConfig {
     pub show_guards: bool,
     pub show_likes: bool,
     pub show_enters: bool,
+    pub auto_gen_danmu: bool,
+    pub auto_gen_gifts: bool,
+    pub auto_gen_superchats: bool,
+    pub auto_gen_guards: bool,
+    pub auto_gen_likes: bool,
+    pub auto_gen_enters: bool,
     pub templates: TemplateConfig,
     pub replacement_rules: Vec<ReplacementRule>,
     pub mapped_unames: BTreeMap<String, String>,
@@ -245,6 +251,18 @@ pub struct LiveConfigPatch {
     pub show_likes: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub show_enters: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auto_gen_danmu: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auto_gen_gifts: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auto_gen_superchats: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auto_gen_guards: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auto_gen_likes: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auto_gen_enters: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub templates: Option<TemplateConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]

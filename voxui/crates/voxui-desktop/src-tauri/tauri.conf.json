@@ -23,10 +23,10 @@
       {
         "label": "live-monitor",
         "title": "Bilibili Live Monitor",
-        "width": 420,
+        "width": 500,
         "height": 640,
         "minWidth": 360,
-        "minHeight": 420,
+        "minHeight": 500,
         "create": false
       }
     ],

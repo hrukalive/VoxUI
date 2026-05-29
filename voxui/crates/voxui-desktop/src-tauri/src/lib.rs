@@ -5,6 +5,12 @@ use app_core::AppCore;
 use tauri::{Manager, RunEvent, WindowEvent};
 use types::AppConfig;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CloseRequestHandling {
+    LetWindowClose,
+    ShutdownApp,
+}
+
 pub mod app_core;
 pub mod audio;
 pub mod commands;
@@ -37,21 +43,24 @@ pub fn run() {
             }
             Ok(())
         })
-        .on_window_event(|window, event| match event {
-            WindowEvent::CloseRequested { api, .. } if window.label() == "live-monitor" => {
-                api.prevent_close();
-                if let Err(error) = window.hide() {
-                    tracing::warn!("failed to hide live monitor window: {error}");
+        .on_window_event(|window, event| {
+            if let WindowEvent::CloseRequested { api, .. } = event {
+                match close_request_handling(window.label()) {
+                    CloseRequestHandling::LetWindowClose => {
+                        api.prevent_close();
+                        if let Err(error) = window.hide() {
+                            tracing::warn!("failed to hide live monitor window: {error}");
+                        }
+                    }
+                    CloseRequestHandling::ShutdownApp => {
+                        let app = window.app_handle();
+                        if let Some(monitor) = app.get_webview_window("live-monitor") {
+                            let _ = monitor.destroy();
+                        }
+                        commands::shutdown_live_worker_for_app_exit();
+                    }
                 }
             }
-            WindowEvent::CloseRequested { .. } if window.label() == "main" => {
-                let app = window.app_handle();
-                if let Some(monitor) = app.get_webview_window("live-monitor") {
-                    let _ = monitor.destroy();
-                }
-                commands::shutdown_live_worker_for_app_exit();
-            }
-            _ => {}
         })
         .invoke_handler(tauri::generate_handler![
             commands::get_app_state,
@@ -88,6 +97,13 @@ pub fn run() {
         });
 }
 
+fn close_request_handling(window_label: &str) -> CloseRequestHandling {
+    match window_label {
+        "main" => CloseRequestHandling::ShutdownApp,
+        _ => CloseRequestHandling::LetWindowClose,
+    }
+}
+
 fn init_tracing() {
     let filter = tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
         tracing_subscriber::EnvFilter::new(
@@ -95,6 +111,27 @@ fn init_tracing() {
         )
     });
     let _ = tracing_subscriber::fmt().with_env_filter(filter).try_init();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{close_request_handling, CloseRequestHandling};
+
+    #[test]
+    fn live_monitor_close_is_not_intercepted() {
+        assert_eq!(
+            close_request_handling("live-monitor"),
+            CloseRequestHandling::LetWindowClose
+        );
+    }
+
+    #[test]
+    fn main_window_close_shuts_down_app_resources() {
+        assert_eq!(
+            close_request_handling("main"),
+            CloseRequestHandling::ShutdownApp
+        );
+    }
 }
 
 fn startup_config() -> (AppConfig, bool, PathBuf) {

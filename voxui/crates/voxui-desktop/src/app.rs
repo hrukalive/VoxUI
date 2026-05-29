@@ -569,11 +569,17 @@ fn fallback_live_config() -> LiveConfig {
         show_guards: true,
         show_likes: false,
         show_enters: true,
+        auto_gen_danmu: false,
+        auto_gen_gifts: true,
+        auto_gen_superchats: true,
+        auto_gen_guards: true,
+        auto_gen_likes: false,
+        auto_gen_enters: true,
         templates: TemplateConfig {
             danmu: "{msg}".to_string(),
             gift_zh: "感谢{mapped_uname}送出的{gift_num}个{gift_name}".to_string(),
             gift_en: "Thank you {mapped_uname} for {gift_num} {gift_name}".to_string(),
-            superchat_zh: "感谢{mapped_uname}的醒目留言：{message}".to_string(),
+            superchat_zh: "感谢{mapped_uname}的SC：{message}".to_string(),
             superchat_en: "Thank you {mapped_uname} for the superchat saying {message}".to_string(),
             guard_zh: "感谢{mapped_uname}开通的{guard_label}".to_string(),
             guard_en: "Thank you {mapped_uname} for joining as {guard_label}".to_string(),
@@ -691,6 +697,24 @@ fn apply_live_optimistic_patch(snapshot: &mut LiveSnapshot, patch: &LiveConfigPa
     }
     if let Some(show_enters) = patch.show_enters {
         snapshot.config.show_enters = show_enters;
+    }
+    if let Some(auto_gen_danmu) = patch.auto_gen_danmu {
+        snapshot.config.auto_gen_danmu = auto_gen_danmu;
+    }
+    if let Some(auto_gen_gifts) = patch.auto_gen_gifts {
+        snapshot.config.auto_gen_gifts = auto_gen_gifts;
+    }
+    if let Some(auto_gen_superchats) = patch.auto_gen_superchats {
+        snapshot.config.auto_gen_superchats = auto_gen_superchats;
+    }
+    if let Some(auto_gen_guards) = patch.auto_gen_guards {
+        snapshot.config.auto_gen_guards = auto_gen_guards;
+    }
+    if let Some(auto_gen_likes) = patch.auto_gen_likes {
+        snapshot.config.auto_gen_likes = auto_gen_likes;
+    }
+    if let Some(auto_gen_enters) = patch.auto_gen_enters {
+        snapshot.config.auto_gen_enters = auto_gen_enters;
     }
     if let Some(templates) = patch.templates.as_ref() {
         snapshot.config.templates = templates.clone();

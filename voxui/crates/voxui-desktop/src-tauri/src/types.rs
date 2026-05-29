@@ -141,7 +141,7 @@ impl Default for TemplateConfig {
             danmu: "{msg}".to_string(),
             gift_zh: "感谢{mapped_uname}送出的{gift_num}个{gift_name}".to_string(),
             gift_en: "Thank you {mapped_uname} for {gift_num} {gift_name}".to_string(),
-            superchat_zh: "感谢{mapped_uname}的醒目留言：{message}".to_string(),
+            superchat_zh: "感谢{mapped_uname}的SC：{message}".to_string(),
             superchat_en: "Thank you {mapped_uname} for the superchat saying {message}".to_string(),
             guard_zh: "感谢{mapped_uname}开通的{guard_label}".to_string(),
             guard_en: "Thank you {mapped_uname} for joining as {guard_label}".to_string(),
@@ -164,6 +164,12 @@ pub struct LiveConfig {
     pub show_guards: bool,
     pub show_likes: bool,
     pub show_enters: bool,
+    pub auto_gen_danmu: bool,
+    pub auto_gen_gifts: bool,
+    pub auto_gen_superchats: bool,
+    pub auto_gen_guards: bool,
+    pub auto_gen_likes: bool,
+    pub auto_gen_enters: bool,
     pub templates: TemplateConfig,
     pub replacement_rules: Vec<ReplacementRule>,
     pub mapped_unames: BTreeMap<String, String>,
@@ -181,6 +187,12 @@ impl Default for LiveConfig {
             show_guards: true,
             show_likes: false,
             show_enters: true,
+            auto_gen_danmu: false,
+            auto_gen_gifts: true,
+            auto_gen_superchats: true,
+            auto_gen_guards: true,
+            auto_gen_likes: false,
+            auto_gen_enters: true,
             templates: TemplateConfig::default(),
             replacement_rules: vec![
                 ReplacementRule {
@@ -253,6 +265,18 @@ pub struct LiveConfigPatch {
     pub show_likes: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub show_enters: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_gen_danmu: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_gen_gifts: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_gen_superchats: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_gen_guards: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_gen_likes: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_gen_enters: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub templates: Option<TemplateConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -22,6 +22,12 @@ fn live_config_defaults_match_bilibili_monitor_spec() {
     assert!(live.show_guards);
     assert!(!live.show_likes);
     assert!(live.show_enters);
+    assert!(!live.auto_gen_danmu);
+    assert!(live.auto_gen_gifts);
+    assert!(live.auto_gen_superchats);
+    assert!(live.auto_gen_guards);
+    assert!(!live.auto_gen_likes);
+    assert!(live.auto_gen_enters);
     assert_eq!(
         live.replacement_rules,
         vec![
@@ -59,6 +65,8 @@ fn old_config_json_deserializes_with_live_defaults() {
 
     assert_eq!(decoded.max_input_chars, 123);
     assert!(decoded.live.show_danmu);
+    assert!(!decoded.live.auto_gen_danmu);
+    assert!(decoded.live.auto_gen_gifts);
     assert!(!decoded.live.enable_ceve_server_heartbeat);
 }
 
@@ -75,10 +83,7 @@ fn live_template_config_contains_all_message_templates() {
         templates.gift_en,
         "Thank you {mapped_uname} for {gift_num} {gift_name}"
     );
-    assert_eq!(
-        templates.superchat_zh,
-        "感谢{mapped_uname}的醒目留言：{message}"
-    );
+    assert_eq!(templates.superchat_zh, "感谢{mapped_uname}的SC：{message}");
     assert_eq!(
         templates.superchat_en,
         "Thank you {mapped_uname} for the superchat saying {message}"
@@ -246,6 +251,59 @@ fn template_rendering_does_not_reprocess_inserted_values() {
             SuggestionMode::Normal,
         ),
         Some("Thank you {message} for the superchat saying 加油".to_string())
+    );
+}
+
+#[test]
+fn replacement_applies_to_message_body_before_template_rendering() {
+    let mut config = AppConfig::default().live;
+    config.replacement_rules = vec![ReplacementRule {
+        enabled: true,
+        from: "cat".to_string(),
+        to: "dog".to_string(),
+    }];
+
+    config.templates.danmu = "cat template says {msg}".to_string();
+    let danmu = parse_live_event(json!({
+        "cmd": "LIVE_OPEN_PLATFORM_DM",
+        "data": {
+            "dm_type": 0,
+            "open_id": "u1",
+            "uname": "Alice",
+            "msg": "catnip"
+        }
+    }))
+    .unwrap()
+    .unwrap();
+    assert_eq!(
+        render_suggestion(
+            &danmu,
+            &config,
+            LiveLanguage::English,
+            SuggestionMode::Switch,
+        ),
+        Some("cat template says dognip".to_string())
+    );
+
+    config.templates.superchat_en = "cat template says {message}".to_string();
+    let superchat = parse_live_event(json!({
+        "cmd": "LIVE_OPEN_PLATFORM_SUPER_CHAT",
+        "data": {
+            "open_id": "u2",
+            "uname": "Bob",
+            "message": "cat"
+        }
+    }))
+    .unwrap()
+    .unwrap();
+    assert_eq!(
+        render_suggestion(
+            &superchat,
+            &config,
+            LiveLanguage::English,
+            SuggestionMode::Switch,
+        ),
+        Some("cat template says dog".to_string())
     );
 }
 
