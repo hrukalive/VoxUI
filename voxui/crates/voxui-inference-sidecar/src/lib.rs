@@ -1,5 +1,5 @@
 use std::cell::RefCell;
-use std::io::{Read, Write};
+use std::io::{ErrorKind, Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
@@ -39,9 +39,17 @@ impl SidecarEngine {
                 command = sidecar_command_name(&command),
                 "sidecar received command"
             );
-            let shutdown = self.handle_command_write(command, &mut writer)?;
-            if shutdown {
-                break;
+            match self.handle_command_write(command, &mut writer) {
+                Ok(shutdown) => {
+                    if shutdown {
+                        break;
+                    }
+                }
+                Err(error) if is_broken_pipe(&error) => {
+                    tracing::debug!("parent process closed the pipe, exiting");
+                    break;
+                }
+                Err(error) => return Err(error),
             }
         }
 
@@ -427,6 +435,7 @@ where
 {
     let sample_rate = engine.sample_rate();
     let progress_error = RefCell::new(None);
+    let cancel_for_progress = cancel.clone();
     let samples = {
         let emit_cell = RefCell::new(&mut *emit);
         engine.generate_cancellable(
@@ -442,6 +451,7 @@ where
                 };
                 if let Err(error) = (emit_cell.borrow_mut())(event) {
                     *progress_error.borrow_mut() = Some(error);
+                    cancel_for_progress.store(true, Ordering::Relaxed);
                 }
             },
             Some(cancel.as_ref()),
@@ -616,6 +626,12 @@ fn duration_seconds(sample_count: usize, sample_rate: u32) -> f32 {
 fn is_cancel_error(error: &anyhow::Error) -> bool {
     let message = error.to_string().to_ascii_lowercase();
     message.contains("cancelled") || message.contains("canceled")
+}
+
+fn is_broken_pipe(error: &anyhow::Error) -> bool {
+    error
+        .downcast_ref::<std::io::Error>()
+        .is_some_and(|e| e.kind() == ErrorKind::BrokenPipe)
 }
 
 fn is_clean_eof(error: &anyhow::Error) -> bool {
