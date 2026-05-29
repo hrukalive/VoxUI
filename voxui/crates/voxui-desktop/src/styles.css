@@ -1318,6 +1318,20 @@ body:has(.live-monitor-shell) {
   padding: 0;
 }
 
+.startup-modal {
+  width: 320px;
+  max-width: calc(100vw - 48px);
+  padding: 24px 28px;
+  text-align: center;
+}
+
+.startup-modal p {
+  margin: 0;
+  color: var(--text);
+  font-size: 15px;
+  line-height: 1.5;
+}
+
 .error-dialog-message {
   margin: 0;
   padding: 22px 24px 24px;

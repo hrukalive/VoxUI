@@ -22,6 +22,7 @@ pub fn App() -> impl IntoView {
     let (settings_page, set_settings_page) = signal(SettingsPage::General);
     let (load_open, set_load_open) = signal(false);
     let (load_percent, set_load_percent) = signal(0.0_f32);
+    let (sidecar_ready, set_sidecar_ready) = signal(false);
     let (load_error, set_load_error) = signal(None::<String>);
     let (live_error, set_live_error) = signal(None::<String>);
     let (snapshot, set_snapshot) = signal(Some(fallback_snapshot()));
@@ -32,6 +33,7 @@ pub fn App() -> impl IntoView {
     // Root component is mounted once; Tauri event listeners intentionally live for the app lifetime.
     spawn_local(async move {
         if let Ok(next_snapshot) = crate::tauri_api::get_app_state().await {
+            set_sidecar_ready.set(next_snapshot.cuda_available);
             set_snapshot.set(Some(next_snapshot));
         }
     });
@@ -116,9 +118,11 @@ pub fn App() -> impl IntoView {
     });
     spawn_local(async move {
         let _ = crate::tauri_api::listen_app_event("sidecar_capabilities", move |_| {
+            set_sidecar_ready.set(true);
             refresh_snapshot();
         })
         .await;
+        refresh_snapshot();
     });
     spawn_local(async move {
         let _ = crate::tauri_api::listen_app_event("main_input_replace", move |event| {
@@ -208,6 +212,13 @@ pub fn App() -> impl IntoView {
             class:theme-light=move || current_snapshot().config.theme == ThemeMode::Light
             class:theme-dark=move || current_snapshot().config.theme == ThemeMode::Dark
         >
+            <Show when=move || !sidecar_ready.get()>
+                <div class="modal-backdrop" role="presentation">
+                    <section class="modal startup-modal" role="dialog" aria-modal="true">
+                        <p>{move || current_labels().loading}</p>
+                    </section>
+                </div>
+            </Show>
             {move || {
                 let snapshot = current_snapshot();
                 let labels = labels(ui_language(
