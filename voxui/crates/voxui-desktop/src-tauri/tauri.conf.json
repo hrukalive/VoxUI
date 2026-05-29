@@ -38,7 +38,7 @@
     "active": false,
     "targets": "all",
     "externalBin": [
-      "../../../target/release/voxui-inference-sidecar"
+      "binaries/voxui-inference-sidecar"
     ],
     "icon": [
       "icons/32x32.png",

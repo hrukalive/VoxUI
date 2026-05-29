@@ -6743,7 +6743,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "voxui-audio"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "cpal",
@@ -6754,7 +6754,7 @@ dependencies = [
 
 [[package]]
 name = "voxui-cli"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "candle-core",
@@ -6767,7 +6767,7 @@ dependencies = [
 
 [[package]]
 name = "voxui-desktop"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "candle-core",
@@ -6795,7 +6795,7 @@ dependencies = [
 
 [[package]]
 name = "voxui-desktop-ui"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "js-sys",
  "leptos",
@@ -6809,7 +6809,7 @@ dependencies = [
 
 [[package]]
 name = "voxui-gguf"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "byteorder",
@@ -6821,7 +6821,7 @@ dependencies = [
 
 [[package]]
 name = "voxui-inference"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "byteorder",
@@ -6839,7 +6839,7 @@ dependencies = [
 
 [[package]]
 name = "voxui-inference-sidecar"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "candle-core",
@@ -6851,7 +6851,7 @@ dependencies = [
 
 [[package]]
 name = "voxui-sidecar-protocol"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "serde",
