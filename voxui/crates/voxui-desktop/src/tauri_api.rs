@@ -465,6 +465,28 @@ pub async fn send_live_suggestion(item_id: String, mode: String) -> Result<Comma
     command_result("send_live_suggestion", args).await
 }
 
+pub async fn mock_live_message(kind: LiveMessageKind) -> Result<LiveSnapshot, String> {
+    let kind_str = match kind {
+        LiveMessageKind::Danmu => "danmu",
+        LiveMessageKind::Gift => "gift",
+        LiveMessageKind::Superchat => "superchat",
+        LiveMessageKind::Guard => "guard",
+        LiveMessageKind::Like => "like",
+        LiveMessageKind::Enter => "enter",
+    };
+    let args = serde_wasm_bindgen::to_value(&serde_json::json!({ "kind": kind_str }))
+        .map_err(|err| err.to_string())?;
+    let value = invoke("mock_live_message", args)
+        .await
+        .map_err(stringify_js_error)?;
+
+    serde_wasm_bindgen::from_value(value).map_err(|err| err.to_string())
+}
+
+pub async fn show_live_monitor() -> Result<CommandResult, String> {
+    command_result("show_live_monitor", JsValue::NULL).await
+}
+
 pub async fn clear_live_items() -> Result<LiveSnapshot, String> {
     let value = invoke("clear_live_items", JsValue::NULL)
         .await

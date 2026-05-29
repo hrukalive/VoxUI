@@ -23,6 +23,7 @@ pub fn App() -> impl IntoView {
     let (load_open, set_load_open) = signal(false);
     let (load_percent, set_load_percent) = signal(0.0_f32);
     let (load_error, set_load_error) = signal(None::<String>);
+    let (live_error, set_live_error) = signal(None::<String>);
     let (snapshot, set_snapshot) = signal(Some(fallback_snapshot()));
     let (live_snapshot, set_live_snapshot) = signal(fallback_live_snapshot());
     let (audio_state, set_audio_state) = signal(AudioState::default());
@@ -167,6 +168,11 @@ pub fn App() -> impl IntoView {
         });
     };
 
+    let current_ui_language = move || {
+        let snapshot = current_snapshot();
+        ui_language(snapshot.config.language, snapshot.system_language)
+    };
+
     let is_live_monitor_window = crate::tauri_api::current_window_label() == "live-monitor";
     if is_live_monitor_window {
         return view! {
@@ -258,6 +264,27 @@ pub fn App() -> impl IntoView {
                             }
                         }
                         on_open_settings=move || set_settings_open.set(true)
+                        on_open_live_monitor=move || {
+                            let identity_code = live_snapshot.get().config.identity_code.trim().to_string();
+                            if identity_code.is_empty() {
+                                set_live_error.set(Some("Identity code not provided".to_string()));
+                                return;
+                            }
+                            if live_snapshot.get().status == LiveStatus::Connected {
+                                spawn_local(async move {
+                                    if let Err(error) = crate::tauri_api::show_live_monitor().await {
+                                        set_live_error.set(Some(error));
+                                    }
+                                });
+                                return;
+                            }
+                            spawn_local(async move {
+                                match crate::tauri_api::connect_openblive(identity_code).await {
+                                    Ok(next_snapshot) => set_live_snapshot.set(next_snapshot),
+                                    Err(error) => set_live_error.set(Some(error)),
+                                }
+                            });
+                        }
                     />
                 }
             }}
@@ -322,6 +349,7 @@ pub fn App() -> impl IntoView {
             />
             <SettingsModal
                 labels=current_labels
+                language=current_ui_language
                 config=move || current_snapshot().config
                 live_snapshot=move || live_snapshot.get()
                 cuda_available=move || current_snapshot().cuda_available
@@ -343,6 +371,13 @@ pub fn App() -> impl IntoView {
                 on_live_disconnect=move || {
                     spawn_local(async move {
                         if let Ok(next_snapshot) = crate::tauri_api::disconnect_openblive().await {
+                            set_live_snapshot.set(next_snapshot);
+                        }
+                    });
+                }
+                on_live_mock_message=move |kind| {
+                    spawn_local(async move {
+                        if let Ok(next_snapshot) = crate::tauri_api::mock_live_message(kind).await {
                             set_live_snapshot.set(next_snapshot);
                         }
                     });
@@ -418,6 +453,18 @@ pub fn App() -> impl IntoView {
                         title=move || current_labels().model_load_failed.to_string()
                         message=move || load_error.get().unwrap_or_default()
                         on_close=move || set_load_error.set(None)
+                    />
+                }
+            }}
+            {move || {
+                let labels = current_labels();
+                view! {
+                    <ErrorModal
+                        labels=labels
+                        open=move || live_error.get().is_some()
+                        title=move || current_labels().live.to_string()
+                        message=move || live_error.get().unwrap_or_default()
+                        on_close=move || set_live_error.set(None)
                     />
                 }
             }}

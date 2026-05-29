@@ -18,8 +18,8 @@ use crate::generation_queue::HistoryItem;
 use crate::inference_sidecar::{SidecarProcess, SidecarReaderEvent};
 use crate::types::{
     AppSnapshot, AudioStateDto, BackendKind, CommandResult, ConfigPatch, GenerationDoneEvent,
-    GenerationProgressEvent, MainInputReplaceEvent, ModelChoice, PlaybackStateEvent,
-    SidecarCapabilities,
+    GenerationProgressEvent, LiveMessageKind, MainInputReplaceEvent, ModelChoice,
+    PlaybackStateEvent, SidecarCapabilities,
 };
 
 pub type SharedAppCore = Arc<Mutex<AppCore>>;
@@ -140,6 +140,35 @@ pub fn clear_live_items(
     })?;
     emit_live_snapshot(&app, "live_items_changed", &snapshot);
     Ok(snapshot)
+}
+
+#[tauri::command]
+pub fn mock_live_message(
+    app: AppHandle,
+    state: State<'_, SharedAppCore>,
+    kind: String,
+) -> Result<crate::types::LiveSnapshot, String> {
+    let kind = match kind.as_str() {
+        "danmu" => LiveMessageKind::Danmu,
+        "gift" => LiveMessageKind::Gift,
+        "superchat" => LiveMessageKind::Superchat,
+        "guard" => LiveMessageKind::Guard,
+        "like" => LiveMessageKind::Like,
+        "enter" => LiveMessageKind::Enter,
+        other => return Err(format!("unsupported live message kind: {other}")),
+    };
+    let event = crate::live::create_mock_live_event(kind).map_err(|e| e.to_string())?;
+    let snapshot = with_core(state, |core| {
+        core.add_live_event(event).map(|_| core.live_snapshot_for_current_language())
+    })?;
+    emit_live_snapshot(&app, "live_items_changed", &snapshot);
+    Ok(snapshot)
+}
+
+#[tauri::command]
+pub fn show_live_monitor(app: AppHandle) -> Result<CommandResult, String> {
+    show_live_monitor_impl(&app)?;
+    Ok(CommandResult { ok: true })
 }
 
 #[tauri::command]
@@ -647,7 +676,7 @@ fn handle_openblive_status(
 
     match status {
         crate::types::LiveStatus::Connected => {
-            if let Err(error) = show_live_monitor(app) {
+            if let Err(error) = show_live_monitor_impl(app) {
                 tracing::warn!("failed to show live monitor window: {error}");
             }
         }
@@ -685,7 +714,7 @@ fn emit_live_snapshot(app: &AppHandle, event: &str, snapshot: &crate::types::Liv
     let _ = app.emit(event, snapshot.clone());
 }
 
-fn show_live_monitor(app: &AppHandle) -> Result<(), String> {
+fn show_live_monitor_impl(app: &AppHandle) -> Result<(), String> {
     if let Ok(mut guard) = live_monitor_close_guard().lock() {
         guard.mark_monitor_shown();
     }

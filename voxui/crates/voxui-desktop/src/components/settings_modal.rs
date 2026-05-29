@@ -2,11 +2,11 @@ use leptos::prelude::*;
 use std::collections::BTreeMap;
 
 use crate::components::controls::{CustomSelect, NumberCounter, SelectOption};
-use crate::i18n::Labels;
+use crate::i18n::{Labels, UiLanguage};
 use crate::tauri_api::{
     AppConfig, AudioDevice, AudioHost, AudioState, BackendKind, ConfigPatch, GenerationSettings,
-    LanguageMode, LiveConfigPatch, LiveSnapshot, LiveStatus, ReplacementRule, TemplateConfig,
-    ThemeMode,
+    LanguageMode, LiveConfigPatch, LiveMessageKind, LiveSnapshot, LiveStatus, ReplacementRule,
+    TemplateConfig, ThemeMode,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -23,6 +23,7 @@ const DEFAULT_AUDIO_CHOICE: &str = "__voxui_default_audio__";
 #[component]
 pub fn SettingsModal(
     labels: impl Fn() -> Labels + Send + Sync + 'static + Copy,
+    language: impl Fn() -> UiLanguage + Send + Sync + 'static + Copy,
     config: impl Fn() -> AppConfig + Send + Sync + 'static + Copy,
     live_snapshot: impl Fn() -> LiveSnapshot + Send + Sync + 'static + Copy,
     cuda_available: impl Fn() -> bool + Send + Sync + 'static + Copy,
@@ -35,6 +36,7 @@ pub fn SettingsModal(
     on_live_patch: impl Fn(LiveConfigPatch) + Send + Sync + 'static + Copy,
     on_live_connect: impl Fn() + Send + Sync + 'static + Copy,
     on_live_disconnect: impl Fn() + Send + Sync + 'static + Copy,
+    on_live_mock_message: impl Fn(LiveMessageKind) + Send + Sync + 'static + Copy,
     on_browse_model_dir: impl Fn() + Send + Sync + 'static + Copy,
     on_browse_prompt_wav: impl Fn() + Send + Sync + 'static + Copy,
     on_browse_reference_wav: impl Fn() + Send + Sync + 'static + Copy,
@@ -380,58 +382,91 @@ pub fn SettingsModal(
                                             <span>{move || labels().ceve_heartbeat}</span>
                                         </label>
                                         <div class="live-checkbox-grid settings-span-2">
-                                            <label class="settings-checkbox live-checkbox" for="settings-live-show-danmu">
-                                                <input id="settings-live-show-danmu" type="checkbox" prop:checked=move || live_snapshot().config.show_danmu on:change=move |event| {
-                                                    on_live_patch(LiveConfigPatch { show_danmu: Some(event_target_checked(&event)), ..LiveConfigPatch::default() });
-                                                } />
-                                                <span>{move || labels().danmu}</span>
-                                            </label>
-                                            <label class="settings-checkbox live-checkbox" for="settings-live-show-gifts">
-                                                <input id="settings-live-show-gifts" type="checkbox" prop:checked=move || live_snapshot().config.show_gifts on:change=move |event| {
-                                                    on_live_patch(LiveConfigPatch { show_gifts: Some(event_target_checked(&event)), ..LiveConfigPatch::default() });
-                                                } />
-                                                <span>{move || labels().gift}</span>
-                                            </label>
-                                            <label class="settings-checkbox live-checkbox" for="settings-live-show-superchats">
-                                                <input id="settings-live-show-superchats" type="checkbox" prop:checked=move || live_snapshot().config.show_superchats on:change=move |event| {
-                                                    on_live_patch(LiveConfigPatch { show_superchats: Some(event_target_checked(&event)), ..LiveConfigPatch::default() });
-                                                } />
-                                                <span>{move || labels().superchat}</span>
-                                            </label>
-                                            <label class="settings-checkbox live-checkbox" for="settings-live-show-guards">
-                                                <input id="settings-live-show-guards" type="checkbox" prop:checked=move || live_snapshot().config.show_guards on:change=move |event| {
-                                                    on_live_patch(LiveConfigPatch { show_guards: Some(event_target_checked(&event)), ..LiveConfigPatch::default() });
-                                                } />
-                                                <span>{move || labels().guard}</span>
-                                            </label>
-                                            <label class="settings-checkbox live-checkbox" for="settings-live-show-likes">
-                                                <input id="settings-live-show-likes" type="checkbox" prop:checked=move || live_snapshot().config.show_likes on:change=move |event| {
-                                                    on_live_patch(LiveConfigPatch { show_likes: Some(event_target_checked(&event)), ..LiveConfigPatch::default() });
-                                                } />
-                                                <span>{move || labels().like}</span>
-                                            </label>
-                                            <label class="settings-checkbox live-checkbox" for="settings-live-show-enters">
-                                                <input id="settings-live-show-enters" type="checkbox" prop:checked=move || live_snapshot().config.show_enters on:change=move |event| {
-                                                    on_live_patch(LiveConfigPatch { show_enters: Some(event_target_checked(&event)), ..LiveConfigPatch::default() });
-                                                } />
-                                                <span>{move || labels().enter}</span>
-                                            </label>
+                                            {move || {
+                                                let labels = labels();
+                                                vec![
+                                                    (LiveMessageKind::Danmu, labels.danmu),
+                                                    (LiveMessageKind::Gift, labels.gift),
+                                                    (LiveMessageKind::Superchat, labels.superchat),
+                                                    (LiveMessageKind::Guard, labels.guard),
+                                                    (LiveMessageKind::Like, labels.like),
+                                                    (LiveMessageKind::Enter, labels.enter),
+                                                ].into_iter().map(|(kind, label)| {
+                                                    let checked = match kind {
+                                                        LiveMessageKind::Danmu => live_snapshot().config.show_danmu,
+                                                        LiveMessageKind::Gift => live_snapshot().config.show_gifts,
+                                                        LiveMessageKind::Superchat => live_snapshot().config.show_superchats,
+                                                        LiveMessageKind::Guard => live_snapshot().config.show_guards,
+                                                        LiveMessageKind::Like => live_snapshot().config.show_likes,
+                                                        LiveMessageKind::Enter => live_snapshot().config.show_enters,
+                                                    };
+                                                    let kind_for_test = kind;
+                                                    let kind_for_checkbox = kind;
+                                                    view! {
+                                                        <div class="live-checkbox-row">
+                                                            <label class="settings-checkbox live-checkbox">
+                                                                <input type="checkbox" prop:checked=checked on:change=move |event| {
+                                                                    let checked = event_target_checked(&event);
+                                                                    match kind_for_checkbox {
+                                                                        LiveMessageKind::Danmu => on_live_patch(LiveConfigPatch { show_danmu: Some(checked), ..LiveConfigPatch::default() }),
+                                                                        LiveMessageKind::Gift => on_live_patch(LiveConfigPatch { show_gifts: Some(checked), ..LiveConfigPatch::default() }),
+                                                                        LiveMessageKind::Superchat => on_live_patch(LiveConfigPatch { show_superchats: Some(checked), ..LiveConfigPatch::default() }),
+                                                                        LiveMessageKind::Guard => on_live_patch(LiveConfigPatch { show_guards: Some(checked), ..LiveConfigPatch::default() }),
+                                                                        LiveMessageKind::Like => on_live_patch(LiveConfigPatch { show_likes: Some(checked), ..LiveConfigPatch::default() }),
+                                                                        LiveMessageKind::Enter => on_live_patch(LiveConfigPatch { show_enters: Some(checked), ..LiveConfigPatch::default() }),
+                                                                    };
+                                                                } />
+                                                                <span>{label}</span>
+                                                            </label>
+                                                            <button
+                                                                class="live-test-button"
+                                                                type="button"
+                                                                title="Test"
+                                                                aria-label="Test"
+                                                                on:click=move |_| on_live_mock_message(kind_for_test)
+                                                            >
+                                                                "Test"
+                                                            </button>
+                                                        </div>
+                                                    }
+                                                }).collect_view()
+                                            }}
                                         </div>
 
                                         <div class="live-subsection settings-span-2">
                                             <h4>{move || labels().send}</h4>
                                             <div class="live-template-grid">
                                                 {template_textarea("settings-live-template-danmu", move || labels().danmu.to_string(), move || live_snapshot().config.templates.danmu, move |value| patch_template(live_snapshot, on_live_patch, move |templates| templates.danmu = value))}
-                                                {template_textarea("settings-live-template-gift-zh", move || format!("{} zh", labels().gift), move || live_snapshot().config.templates.gift_zh, move |value| patch_template(live_snapshot, on_live_patch, move |templates| templates.gift_zh = value))}
-                                                {template_textarea("settings-live-template-gift-en", move || format!("{} en", labels().gift), move || live_snapshot().config.templates.gift_en, move |value| patch_template(live_snapshot, on_live_patch, move |templates| templates.gift_en = value))}
-                                                {template_textarea("settings-live-template-superchat-zh", move || format!("{} zh", labels().superchat), move || live_snapshot().config.templates.superchat_zh, move |value| patch_template(live_snapshot, on_live_patch, move |templates| templates.superchat_zh = value))}
-                                                {template_textarea("settings-live-template-superchat-en", move || format!("{} en", labels().superchat), move || live_snapshot().config.templates.superchat_en, move |value| patch_template(live_snapshot, on_live_patch, move |templates| templates.superchat_en = value))}
-                                                {template_textarea("settings-live-template-guard-zh", move || format!("{} zh", labels().guard), move || live_snapshot().config.templates.guard_zh, move |value| patch_template(live_snapshot, on_live_patch, move |templates| templates.guard_zh = value))}
-                                                {template_textarea("settings-live-template-guard-en", move || format!("{} en", labels().guard), move || live_snapshot().config.templates.guard_en, move |value| patch_template(live_snapshot, on_live_patch, move |templates| templates.guard_en = value))}
-                                                {template_textarea("settings-live-template-like-zh", move || format!("{} zh", labels().like), move || live_snapshot().config.templates.like_zh, move |value| patch_template(live_snapshot, on_live_patch, move |templates| templates.like_zh = value))}
-                                                {template_textarea("settings-live-template-like-en", move || format!("{} en", labels().like), move || live_snapshot().config.templates.like_en, move |value| patch_template(live_snapshot, on_live_patch, move |templates| templates.like_en = value))}
-                                                {template_textarea("settings-live-template-enter-zh", move || format!("{} zh", labels().enter), move || live_snapshot().config.templates.enter_zh, move |value| patch_template(live_snapshot, on_live_patch, move |templates| templates.enter_zh = value))}
-                                                {template_textarea("settings-live-template-enter-en", move || format!("{} en", labels().enter), move || live_snapshot().config.templates.enter_en, move |value| patch_template(live_snapshot, on_live_patch, move |templates| templates.enter_en = value))}
+                                                <Show when=move || language() != UiLanguage::English>
+                                                    {template_textarea("settings-live-template-gift-zh", move || format!("{} zh", labels().gift), move || live_snapshot().config.templates.gift_zh, move |value| patch_template(live_snapshot, on_live_patch, move |templates| templates.gift_zh = value))}
+                                                </Show>
+                                                <Show when=move || language() == UiLanguage::English>
+                                                    {template_textarea("settings-live-template-gift-en", move || format!("{} en", labels().gift), move || live_snapshot().config.templates.gift_en, move |value| patch_template(live_snapshot, on_live_patch, move |templates| templates.gift_en = value))}
+                                                </Show>
+                                                <Show when=move || language() != UiLanguage::English>
+                                                    {template_textarea("settings-live-template-superchat-zh", move || format!("{} zh", labels().superchat), move || live_snapshot().config.templates.superchat_zh, move |value| patch_template(live_snapshot, on_live_patch, move |templates| templates.superchat_zh = value))}
+                                                </Show>
+                                                <Show when=move || language() == UiLanguage::English>
+                                                    {template_textarea("settings-live-template-superchat-en", move || format!("{} en", labels().superchat), move || live_snapshot().config.templates.superchat_en, move |value| patch_template(live_snapshot, on_live_patch, move |templates| templates.superchat_en = value))}
+                                                </Show>
+                                                <Show when=move || language() != UiLanguage::English>
+                                                    {template_textarea("settings-live-template-guard-zh", move || format!("{} zh", labels().guard), move || live_snapshot().config.templates.guard_zh, move |value| patch_template(live_snapshot, on_live_patch, move |templates| templates.guard_zh = value))}
+                                                </Show>
+                                                <Show when=move || language() == UiLanguage::English>
+                                                    {template_textarea("settings-live-template-guard-en", move || format!("{} en", labels().guard), move || live_snapshot().config.templates.guard_en, move |value| patch_template(live_snapshot, on_live_patch, move |templates| templates.guard_en = value))}
+                                                </Show>
+                                                <Show when=move || language() != UiLanguage::English>
+                                                    {template_textarea("settings-live-template-like-zh", move || format!("{} zh", labels().like), move || live_snapshot().config.templates.like_zh, move |value| patch_template(live_snapshot, on_live_patch, move |templates| templates.like_zh = value))}
+                                                </Show>
+                                                <Show when=move || language() == UiLanguage::English>
+                                                    {template_textarea("settings-live-template-like-en", move || format!("{} en", labels().like), move || live_snapshot().config.templates.like_en, move |value| patch_template(live_snapshot, on_live_patch, move |templates| templates.like_en = value))}
+                                                </Show>
+                                                <Show when=move || language() != UiLanguage::English>
+                                                    {template_textarea("settings-live-template-enter-zh", move || format!("{} zh", labels().enter), move || live_snapshot().config.templates.enter_zh, move |value| patch_template(live_snapshot, on_live_patch, move |templates| templates.enter_zh = value))}
+                                                </Show>
+                                                <Show when=move || language() == UiLanguage::English>
+                                                    {template_textarea("settings-live-template-enter-en", move || format!("{} en", labels().enter), move || live_snapshot().config.templates.enter_en, move |value| patch_template(live_snapshot, on_live_patch, move |templates| templates.enter_en = value))}
+                                                </Show>
                                             </div>
                                         </div>
 
@@ -498,6 +533,7 @@ pub fn SettingsModal(
                                                     children=move |(open_id, original, mapped)| {
                                                         view! {
                                                             <div class="live-name-row">
+                                                                <code class="live-open-id">{open_id.clone()}</code>
                                                                 <span>{original}</span>
                                                                 <input type="text" aria-label=move || labels().danmu prop:value=mapped on:change=move |event| {
                                                                     let mut mapped_unames = live_snapshot().config.mapped_unames;

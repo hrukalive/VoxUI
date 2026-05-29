@@ -357,6 +357,166 @@ fn render_template(template: &str, event: &LiveEvent, mapped_uname: &str) -> Str
     rendered
 }
 
+pub fn create_mock_live_event(kind: LiveMessageKind) -> anyhow::Result<LiveEvent> {
+    let open_id = "test-user-1".to_string();
+    let uname = "测试用户".to_string();
+    match kind {
+        LiveMessageKind::Danmu => Ok(LiveEvent {
+            kind,
+            raw: serde_json::json!({
+                "cmd": "LIVE_OPEN_PLATFORM_DM",
+                "data": {
+                    "open_id": open_id.as_str(),
+                    "uname": uname.as_str(),
+                    "msg": "大家好！",
+                    "dm_type": 0,
+                    "timestamp": 0,
+                    "uface": "",
+                    "guard_level": 0,
+                    "fans_medal_name": "",
+                    "fans_medal_wearing_status": false,
+                    "fans_medal_level": 0,
+                    "room_id": 0,
+                    "emoji_img_url": ""
+                }
+            }),
+            open_id,
+            uname,
+            msg: Some("大家好！".to_string()),
+            gift_name: None,
+            gift_num: None,
+            superchat_message: None,
+            guard_label: None,
+        }),
+        LiveMessageKind::Gift => Ok(LiveEvent {
+            kind,
+            raw: serde_json::json!({
+                "cmd": "LIVE_OPEN_PLATFORM_SEND_GIFT",
+                "data": {
+                    "open_id": open_id.as_str(),
+                    "uname": uname.as_str(),
+                    "gift_name": "小花花",
+                    "gift_num": 1,
+                    "price": 100,
+                    "paid": true,
+                    "gift_id": "gift-1",
+                    "timestamp": 0,
+                    "uface": "",
+                    "guard_level": 0,
+                    "fans_medal_name": "",
+                    "fans_medal_wearing_status": false,
+                    "fans_medal_level": 0,
+                    "room_id": 0,
+                    "anchor_info": {
+                        "uname": "主播",
+                        "open_id": "anchor-1"
+                    }
+                }
+            }),
+            open_id,
+            uname,
+            msg: None,
+            gift_name: Some("小花花".to_string()),
+            gift_num: Some(1),
+            superchat_message: None,
+            guard_label: None,
+        }),
+        LiveMessageKind::Superchat => Ok(LiveEvent {
+            kind,
+            raw: serde_json::json!({
+                "cmd": "LIVE_OPEN_PLATFORM_SUPER_CHAT",
+                "data": {
+                    "open_id": open_id.as_str(),
+                    "uname": uname.as_str(),
+                    "message": "主播加油！",
+                    "rmb": 30,
+                    "start_time": 0,
+                    "end_time": 0,
+                    "message_id": 0,
+                    "uface": "",
+                    "guard_level": 0,
+                    "fans_medal_name": "",
+                    "fans_medal_wearing_status": false,
+                    "fans_medal_level": 0,
+                    "room_id": 0
+                }
+            }),
+            open_id,
+            uname,
+            msg: None,
+            gift_name: None,
+            gift_num: None,
+            superchat_message: Some("主播加油！".to_string()),
+            guard_label: None,
+        }),
+        LiveMessageKind::Guard => Ok(LiveEvent {
+            kind,
+            raw: serde_json::json!({
+                "cmd": "LIVE_OPEN_PLATFORM_GUARD",
+                "data": {
+                    "user_info": {
+                        "open_id": open_id.as_str(),
+                        "uname": uname.as_str(),
+                        "uface": ""
+                    },
+                    "guard_level": 3,
+                    "guard_num": 1,
+                    "price": 198
+                }
+            }),
+            open_id,
+            uname,
+            msg: None,
+            gift_name: None,
+            gift_num: None,
+            superchat_message: None,
+            guard_label: Some("舰长".to_string()),
+        }),
+        LiveMessageKind::Like => Ok(LiveEvent {
+            kind,
+            raw: serde_json::json!({
+                "cmd": "LIVE_OPEN_PLATFORM_LIKE",
+                "data": {
+                    "open_id": open_id.as_str(),
+                    "uname": uname.as_str(),
+                    "uface": "",
+                    "timestamp": 0,
+                    "like_count": 1,
+                    "fans_medal_name": "",
+                    "fans_medal_wearing_status": false,
+                    "fans_medal_level": 0,
+                    "guard_level": 0
+                }
+            }),
+            open_id,
+            uname,
+            msg: None,
+            gift_name: None,
+            gift_num: None,
+            superchat_message: None,
+            guard_label: None,
+        }),
+        LiveMessageKind::Enter => Ok(LiveEvent {
+            kind,
+            raw: serde_json::json!({
+                "cmd": "LIVE_OPEN_PLATFORM_LIVE_ROOM_ENTER",
+                "data": {
+                    "open_id": open_id.as_str(),
+                    "uname": uname.as_str(),
+                    "uface": ""
+                }
+            }),
+            open_id,
+            uname,
+            msg: None,
+            gift_name: None,
+            gift_num: None,
+            superchat_message: None,
+            guard_label: None,
+        }),
+    }
+}
+
 fn clean_danmu(text: &str, period: char) -> String {
     let mut cleaned = String::new();
     let mut in_brackets = false;

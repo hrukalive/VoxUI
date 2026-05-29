@@ -49,6 +49,8 @@ pub fn run() {
             commands::clear_live_items,
             commands::connect_openblive,
             commands::disconnect_openblive,
+            commands::mock_live_message,
+            commands::show_live_monitor,
             commands::send_live_suggestion,
             commands::discover_models,
             commands::get_audio_state,
@@ -66,7 +68,12 @@ pub fn run() {
         ])
         .build(tauri::generate_context!())
         .expect("failed to build AhanSays desktop app")
-        .run(|_, event| {
+        .run(|app, event| {
+            if matches!(event, RunEvent::ExitRequested { .. }) {
+                if let Some(monitor) = app.get_webview_window("live-monitor") {
+                    let _ = monitor.close();
+                }
+            }
             if matches!(event, RunEvent::ExitRequested { .. } | RunEvent::Exit) {
                 commands::shutdown_live_worker_for_app_exit();
             }
