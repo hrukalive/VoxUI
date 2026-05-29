@@ -33,7 +33,6 @@ pub fn App() -> impl IntoView {
     // Root component is mounted once; Tauri event listeners intentionally live for the app lifetime.
     spawn_local(async move {
         if let Ok(next_snapshot) = crate::tauri_api::get_app_state().await {
-            set_sidecar_ready.set(next_snapshot.cuda_available);
             set_snapshot.set(Some(next_snapshot));
         }
     });
@@ -123,6 +122,7 @@ pub fn App() -> impl IntoView {
         })
         .await;
         refresh_snapshot();
+        set_sidecar_ready.set(true);
     });
     spawn_local(async move {
         let _ = crate::tauri_api::listen_app_event("main_input_replace", move |event| {
