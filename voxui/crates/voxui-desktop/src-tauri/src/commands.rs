@@ -166,6 +166,14 @@ pub fn mock_live_message(
 }
 
 #[tauri::command]
+pub fn exit_app(app: AppHandle) -> Result<CommandResult, String> {
+    if let Some(window) = app.get_webview_window("main") {
+        window.close().map_err(|e| e.to_string())?;
+    }
+    Ok(CommandResult { ok: true })
+}
+
+#[tauri::command]
 pub fn show_live_monitor(app: AppHandle) -> Result<CommandResult, String> {
     show_live_monitor_impl(&app)?;
     Ok(CommandResult { ok: true })
