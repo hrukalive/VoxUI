@@ -213,8 +213,17 @@ fn distance_from_bottom(feed: &web_sys::HtmlElement) -> i32 {
     feed.scroll_height() - feed.client_height() - feed.scroll_top()
 }
 
-fn scroll_to_bottom(feed: &web_sys::HtmlElement) {
-    feed.set_scroll_top(feed.scroll_height());
+fn scroll_to_bottom(element: &web_sys::HtmlElement) {
+    let element = element.clone();
+    if let Some(window) = web_sys::window() {
+        let callback = Closure::wrap(Box::new(move || {
+            element.set_scroll_top(element.scroll_height());
+        }) as Box<dyn FnMut()>);
+        let _ = window.request_animation_frame(callback.as_ref().unchecked_ref());
+        callback.forget();
+    } else {
+        element.set_scroll_top(element.scroll_height());
+    }
 }
 
 fn schedule_status_notice_clear(

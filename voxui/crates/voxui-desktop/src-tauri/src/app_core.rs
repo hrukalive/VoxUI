@@ -99,7 +99,6 @@ impl AppCore {
 
     pub fn from_loaded_config(mut config: AppConfig, backend_saved: bool) -> Result<Self> {
         let sidecar_capabilities = SidecarCapabilities::default();
-        normalize_backend_for_sidecar(&mut config, backend_saved, sidecar_capabilities);
         normalize_generation_settings(&mut config.generation);
         let models = match config.model_root.as_deref() {
             Some(root) => discover_models(root)?,

@@ -312,7 +312,7 @@ pub fn App() -> impl IntoView {
                 view! {
                     <HistoryList
                         labels=labels
-                        items=snapshot.history
+                        items=move || current_snapshot().history
                         on_play=move |item_id| {
                             spawn_local(async move {
                                 let is_playing = current_snapshot()

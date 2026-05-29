@@ -12,23 +12,29 @@ use crate::tauri_api::{HistoryItem, HistoryStatus};
 #[component]
 pub fn HistoryList(
     labels: Labels,
-    items: Vec<HistoryItem>,
+    items: impl Fn() -> Vec<HistoryItem> + Send + Sync + 'static + Copy,
     on_play: impl Fn(String) + Send + Sync + 'static + Copy,
     on_regenerate: impl Fn(String) + Send + Sync + 'static + Copy,
     on_cancel: impl Fn(String) + Send + Sync + 'static + Copy,
 ) -> impl IntoView {
     let list_ref = NodeRef::<Div>::new();
-    let item_count = items.len();
+    let (previous_count, set_previous_count) = signal(0_usize);
+
     Effect::new(move |_| {
+        let item_count = items().len();
         if item_count == 0 {
             return;
         }
-        if let Some(element) = list_ref.get() {
-            scroll_to_bottom(element.into());
+        if previous_count.get() != item_count {
+            set_previous_count.set(item_count);
+            if let Some(element) = list_ref.get() {
+                scroll_to_bottom(element.into());
+            }
         }
     });
 
-    if items.is_empty() {
+    let initial = items();
+    if initial.is_empty() {
         return view! {
             <section class="history-panel">
                 <p class="empty-history">{labels.history_empty}</p>
@@ -42,7 +48,7 @@ pub fn HistoryList(
         <section class="history-panel">
             <div class="history-list" node_ref=list_ref>
                 <For
-                    each=move || items_for_view.clone()
+                    each=move || items_for_view()
                     key=|item| item.id.clone()
                     children=move |item| {
                         let id_for_play = item.id.clone();
@@ -190,7 +196,6 @@ fn scroll_to_bottom(element: web_sys::HtmlElement) {
         let progress = ((timestamp - first_timestamp) / 180.0).clamp(0.0, 1.0);
         let eased = 1.0 - (1.0 - progress).powi(3);
         element.set_scroll_top(start + ((distance as f64) * eased).round() as i32);
-
         if progress < 1.0 {
             if let Some(callback) = frame_for_step.borrow().as_ref() {
                 let _ = window_for_step.request_animation_frame(callback.as_ref().unchecked_ref());
