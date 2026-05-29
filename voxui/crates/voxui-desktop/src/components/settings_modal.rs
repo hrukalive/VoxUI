@@ -453,7 +453,7 @@ pub fn SettingsModal(
                                         </div>
 
                                         <div class="live-subsection settings-span-2">
-                                            <h4>{move || labels().send}</h4>
+                                            <h4>{move || labels().danmu_template}</h4>
                                             <div class="live-template-grid">
                                                 {template_textarea("settings-live-template-danmu", move || labels().danmu.to_string(), move || pending_templates.get().danmu, move |value| set_pending_templates.update(|t| t.danmu = value))}
                                                 <Show when=move || language() != UiLanguage::English>
@@ -491,8 +491,8 @@ pub fn SettingsModal(
 
                                         <div class="live-subsection settings-span-2">
                                             <div class="live-subsection-header">
-                                                <h4>{move || labels().swap_send}</h4>
-                                                <button class="secondary-button live-symbol-button" type="button" aria-label=move || labels().swap_send on:click=move |_| {
+                                                <h4>{move || labels().replacement_rule}</h4>
+                                                <button class="secondary-button live-symbol-button" type="button" aria-label=move || labels().replacement_rule on:click=move |_| {
                                                     set_pending_rules.update(|rules| rules.push(ReplacementRule { enabled: true, from: String::new(), to: String::new() }));
                                                 }>
                                                     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -518,14 +518,14 @@ pub fn SettingsModal(
                                                                         });
                                                                     } />
                                                                 </label>
-                                                                <input type="text" aria-label=move || labels().swap_send prop:value=rule.from.clone() on:change=move |event| {
+                                                                <input type="text" aria-label=move || labels().replacement_rule prop:value=rule.from.clone() on:change=move |event| {
                                                                     set_pending_rules.update(|rules| {
                                                                         if let Some(rule) = rules.get_mut(index) {
                                                                             rule.from = event_target_value(&event);
                                                                         }
                                                                     });
                                                                 } />
-                                                                <input type="text" aria-label=move || labels().swap_send prop:value=rule.to.clone() on:change=move |event| {
+                                                                <input type="text" aria-label=move || labels().replacement_rule prop:value=rule.to.clone() on:change=move |event| {
                                                                     set_pending_rules.update(|rules| {
                                                                         if let Some(rule) = rules.get_mut(index) {
                                                                             rule.to = event_target_value(&event);
@@ -553,7 +553,7 @@ pub fn SettingsModal(
                                         </div>
 
                                         <div class="live-subsection settings-span-2">
-                                            <h4>{move || labels().danmu}</h4>
+                                            <h4>{move || labels().uname_map}</h4>
                                             <div class="live-list">
                                                 {move || {
                                                     let snapshot = live_snapshot();
@@ -575,7 +575,7 @@ pub fn SettingsModal(
                                                             <div class="live-name-row">
                                                                 <code class="live-open-id">{open_id.clone()}</code>
                                                                 <span>{original}</span>
-                                                                <input type="text" aria-label=move || labels().danmu prop:value=mapped on:change=move |event| {
+                                                                <input type="text" aria-label=move || labels().uname_map prop:value=mapped on:change=move |event| {
                                                                     set_pending_mapped.update(|m| { m.insert(open_id.clone(), event_target_value(&event)); });
                                                                 } />
                                                             </div>

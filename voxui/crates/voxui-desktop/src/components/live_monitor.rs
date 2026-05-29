@@ -1,10 +1,58 @@
+use std::collections::HashSet;
+
 use leptos::html::Div;
 use leptos::prelude::*;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
 
+use crate::components::controls::{CustomSelect, SelectOption};
 use crate::i18n::Labels;
 use crate::tauri_api::{LiveMessageKind, LiveMonitorItem, LiveSnapshot, LiveStatus};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LiveSendMode {
+    Manual,
+    AutoEnqueue,
+    AutoGen,
+    AutoGenSwap,
+}
+
+impl LiveSendMode {
+    fn value(self) -> &'static str {
+        match self {
+            Self::Manual => "manual",
+            Self::AutoEnqueue => "auto_enqueue",
+            Self::AutoGen => "auto_gen",
+            Self::AutoGenSwap => "auto_gen_swap",
+        }
+    }
+
+    fn from_value(value: &str) -> Self {
+        match value {
+            "auto_enqueue" => Self::AutoEnqueue,
+            "auto_gen" => Self::AutoGen,
+            "auto_gen_swap" => Self::AutoGenSwap,
+            _ => Self::Manual,
+        }
+    }
+
+    fn label(self, labels: Labels) -> &'static str {
+        match self {
+            Self::Manual => labels.send_mode_manual,
+            Self::AutoEnqueue => labels.send_mode_auto_enqueue,
+            Self::AutoGen => labels.send_mode_auto_gen,
+            Self::AutoGenSwap => labels.send_mode_auto_gen_swap,
+        }
+    }
+
+    fn direct_enqueue_on_click(self) -> bool {
+        matches!(self, Self::AutoEnqueue)
+    }
+
+    fn hides_item_actions(self) -> bool {
+        matches!(self, Self::AutoGen | Self::AutoGenSwap)
+    }
+}
 
 #[component]
 pub fn LiveMonitor(
@@ -16,7 +64,8 @@ pub fn LiveMonitor(
     let feed_ref = NodeRef::<Div>::new();
     let (was_near_bottom, set_was_near_bottom) = signal(true);
     let (previous_item_count, set_previous_item_count) = signal(0_usize);
-    let (auto_send, set_auto_send) = signal(false);
+    let (send_mode, set_send_mode) = signal(LiveSendMode::Manual);
+    let (_seen_item_ids, set_seen_item_ids) = signal(HashSet::<String>::new());
     let (status_notice, set_status_notice) = signal(None::<String>);
     let (status_notice_generation, set_status_notice_generation) = signal(0_u64);
     let (last_status_key, set_last_status_key) = signal(None::<(LiveStatus, Option<String>)>);
@@ -61,6 +110,26 @@ pub fn LiveMonitor(
         schedule_status_notice_clear(set_status_notice, status_notice_generation, generation);
     });
 
+    Effect::new(move |_| {
+        let mode = send_mode.get();
+        let snapshot = snapshot();
+        let mut pending = Vec::new();
+
+        set_seen_item_ids.update(|seen| {
+            for item in snapshot.items.iter() {
+                if seen.insert(item.id.clone()) {
+                    if let Some(use_switch) = auto_generation_switch(mode, item.kind) {
+                        pending.push((item.id.clone(), use_switch));
+                    }
+                }
+            }
+        });
+
+        for (item_id, use_switch) in pending {
+            on_send(item_id, use_switch, true);
+        }
+    });
+
     view! {
         <section class="live-monitor-shell" aria-label=move || labels().live>
             <header class="live-monitor-header">
@@ -69,10 +138,16 @@ pub fn LiveMonitor(
                     {move || status_text(&snapshot(), labels())}
                 </span>
                 <div class="live-monitor-header-actions">
-                    <label class="live-auto-send-checkbox" title=move || labels().auto_send>
-                        <input type="checkbox" prop:checked=move || auto_send.get() on:change=move |event| set_auto_send.set(event_target_checked(&event)) />
-                        <span>{move || labels().auto_send}</span>
-                    </label>
+                    <CustomSelect
+                        class="live-send-mode-select"
+                        aria_label=labels().send_mode
+                        value=move || send_mode.get().value().to_string()
+                        options=move || live_send_mode_options(labels())
+                        disabled=move || false
+                        on_change=move |value| {
+                            set_send_mode.set(LiveSendMode::from_value(&value));
+                        }
+                    />
                     <button
                     class="live-monitor-button"
                     type="button"
@@ -113,7 +188,7 @@ pub fn LiveMonitor(
                         let mapped_uname = item.mapped_uname.clone();
                         let suggestion = item.suggestion.clone();
                         let paid = item.paid;
-                        let show_switch = matches!(kind, LiveMessageKind::Danmu | LiveMessageKind::Superchat);
+                        let show_switch = live_item_supports_switch(kind);
                         let switch_button = show_switch.then(|| {
                             view! {
                                 <button
@@ -121,7 +196,13 @@ pub fn LiveMonitor(
                                     type="button"
                                     title=labels.swap_send
                                     aria-label=labels.swap_send
-                                        on:click=move |_| on_send(item_id_for_switch.clone(), true, auto_send.get())
+                                        on:click=move |_| {
+                                            on_send(
+                                                item_id_for_switch.clone(),
+                                                true,
+                                                send_mode.get_untracked().direct_enqueue_on_click(),
+                                            )
+                                        }
                                     >
                                         <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                                             <polyline points="17 1 21 5 17 9"></polyline>
@@ -143,13 +224,22 @@ pub fn LiveMonitor(
                                     </div>
                                     <p>{suggestion}</p>
                                 </div>
-                                <div class="live-item-actions">
+                                <div
+                                    class="live-item-actions"
+                                    class:live-item-actions-hidden=move || send_mode.get().hides_item_actions()
+                                >
                                     <button
                                         class="live-monitor-button"
                                         type="button"
                                         title=labels.send
                                         aria-label=labels.send
-                                        on:click=move |_| on_send(item_id_for_send.clone(), false, auto_send.get())
+                                        on:click=move |_| {
+                                            on_send(
+                                                item_id_for_send.clone(),
+                                                false,
+                                                send_mode.get_untracked().direct_enqueue_on_click(),
+                                            )
+                                        }
                                     >
                                         <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                                             <line x1="22" y1="2" x2="11" y2="13"></line>
@@ -176,6 +266,30 @@ fn kind_label(kind: LiveMessageKind, labels: Labels) -> &'static str {
         LiveMessageKind::Like => labels.like,
         LiveMessageKind::Enter => labels.enter,
     }
+}
+
+fn auto_generation_switch(mode: LiveSendMode, kind: LiveMessageKind) -> Option<bool> {
+    match mode {
+        LiveSendMode::Manual | LiveSendMode::AutoEnqueue => None,
+        LiveSendMode::AutoGen => Some(false),
+        LiveSendMode::AutoGenSwap => Some(live_item_supports_switch(kind)),
+    }
+}
+
+fn live_item_supports_switch(kind: LiveMessageKind) -> bool {
+    matches!(kind, LiveMessageKind::Danmu | LiveMessageKind::Superchat)
+}
+
+fn live_send_mode_options(labels: Labels) -> Vec<SelectOption> {
+    [
+        LiveSendMode::Manual,
+        LiveSendMode::AutoEnqueue,
+        LiveSendMode::AutoGen,
+        LiveSendMode::AutoGenSwap,
+    ]
+    .into_iter()
+    .map(|mode| SelectOption::new(mode.value(), mode.label(labels)))
+    .collect()
 }
 
 fn live_item_render_key(item: &LiveMonitorItem) -> String {
@@ -260,6 +374,8 @@ fn schedule_status_notice_clear(
 mod tests {
     use super::*;
     use crate::i18n::{labels, UiLanguage};
+    use crate::tauri_api::{LiveConfig, TemplateConfig};
+    use std::collections::BTreeMap;
 
     #[test]
     fn maps_live_message_kinds_to_labels() {
@@ -282,12 +398,14 @@ mod tests {
         let snapshot = LiveSnapshot {
             status: LiveStatus::Connected,
             status_message: None,
+            config: test_live_config(),
             items: Vec::new(),
         };
         assert_eq!(status_text(&snapshot, labels), "Connected");
         let snapshot = LiveSnapshot {
             status: LiveStatus::Error,
             status_message: Some("bad token".to_string()),
+            config: test_live_config(),
             items: Vec::new(),
         };
         assert_eq!(status_text(&snapshot, labels), "Failed: bad token");
@@ -350,8 +468,90 @@ mod tests {
     }
 
     #[test]
+    fn live_send_mode_values_round_trip() {
+        for mode in [
+            LiveSendMode::Manual,
+            LiveSendMode::AutoEnqueue,
+            LiveSendMode::AutoGen,
+            LiveSendMode::AutoGenSwap,
+        ] {
+            assert_eq!(LiveSendMode::from_value(mode.value()), mode);
+        }
+        assert_eq!(LiveSendMode::from_value("unknown"), LiveSendMode::Manual);
+    }
+
+    #[test]
+    fn auto_generation_modes_choose_expected_send_action() {
+        assert_eq!(
+            auto_generation_switch(LiveSendMode::Manual, LiveMessageKind::Danmu),
+            None
+        );
+        assert_eq!(
+            auto_generation_switch(LiveSendMode::AutoEnqueue, LiveMessageKind::Danmu),
+            None
+        );
+        assert_eq!(
+            auto_generation_switch(LiveSendMode::AutoGen, LiveMessageKind::Danmu),
+            Some(false)
+        );
+        assert_eq!(
+            auto_generation_switch(LiveSendMode::AutoGenSwap, LiveMessageKind::Danmu),
+            Some(true)
+        );
+        assert_eq!(
+            auto_generation_switch(LiveSendMode::AutoGenSwap, LiveMessageKind::Gift),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn monitor_uses_send_mode_dropdown_instead_of_auto_send_checkbox() {
+        let source = include_str!("live_monitor.rs");
+        assert!(
+            source.contains("<CustomSelect"),
+            "Monitor should expose send modes through the shared CustomSelect"
+        );
+        assert!(
+            !source.contains("type=\"checkbox\""),
+            "Monitor send mode should not render the old auto-send checkbox"
+        );
+    }
+
+    #[test]
     fn monitor_buttons_use_svg_icons() {
         let source = include_str!("live_monitor.rs");
-        assert!(source.contains("<svg"), "Monitor buttons should use SVG icons");
+        assert!(
+            source.contains("<svg"),
+            "Monitor buttons should use SVG icons"
+        );
+    }
+
+    fn test_live_config() -> LiveConfig {
+        LiveConfig {
+            identity_code: String::new(),
+            enable_ceve_server_heartbeat: false,
+            show_danmu: true,
+            show_gifts: true,
+            show_superchats: true,
+            show_guards: true,
+            show_likes: true,
+            show_enters: true,
+            templates: TemplateConfig {
+                danmu: String::new(),
+                gift_zh: String::new(),
+                gift_en: String::new(),
+                superchat_zh: String::new(),
+                superchat_en: String::new(),
+                guard_zh: String::new(),
+                guard_en: String::new(),
+                like_zh: String::new(),
+                like_en: String::new(),
+                enter_zh: String::new(),
+                enter_en: String::new(),
+            },
+            replacement_rules: Vec::new(),
+            mapped_unames: BTreeMap::new(),
+            original_unames: BTreeMap::new(),
+        }
     }
 }

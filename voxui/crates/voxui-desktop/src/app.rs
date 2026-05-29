@@ -191,10 +191,10 @@ pub fn App() -> impl IntoView {
                 <LiveMonitor
                     labels=current_labels
                     snapshot=move || live_snapshot.get()
-                    on_send=move |item_id, switch, auto_send| {
+                    on_send=move |item_id, switch, enqueue_direct| {
                         spawn_local(async move {
                             let mode = if switch { "switch" } else { "normal" }.to_string();
-                            if auto_send {
+                            if enqueue_direct {
                                 match crate::tauri_api::send_live_suggestion(item_id, mode, true).await {
                                     Ok(result) => {
                                         let _ = crate::tauri_api::enqueue_generation(result.text).await;

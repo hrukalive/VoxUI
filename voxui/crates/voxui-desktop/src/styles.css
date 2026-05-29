@@ -1124,23 +1124,21 @@ body:has(.live-monitor-shell) {
   background: var(--button-hover);
 }
 
-.live-auto-send-checkbox {
-  display: grid;
-  grid-auto-flow: column;
-  align-items: center;
-  gap: 4px;
-  font-size: 12px;
-  color: var(--text-muted);
-  white-space: nowrap;
-  cursor: pointer;
-  width: fit-content;
+.live-send-mode-select.custom-select {
+  width: 142px;
+  max-width: min(46vw, 142px);
 }
 
-.live-auto-send-checkbox input {
-  width: 14px;
-  height: 14px;
-  accent-color: var(--primary-bg);
-  cursor: pointer;
+.live-send-mode-select .custom-select-button {
+  grid-template-columns: minmax(0, 1fr) 28px;
+  height: 30px;
+  background: var(--button-bg);
+  padding: 0 8px;
+  font-size: 12px;
+}
+
+.live-send-mode-select .custom-select-arrow {
+  width: 28px;
 }
 
 .live-status-notice {
@@ -1246,6 +1244,10 @@ body:has(.live-monitor-shell) {
   grid-auto-flow: column;
   gap: 6px;
   align-items: center;
+}
+
+.live-item-actions-hidden {
+  display: none;
 }
 
 @media (max-width: 900px) {
