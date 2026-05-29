@@ -103,7 +103,7 @@ pub fn LiveMonitor(
                         let mapped_uname = item.mapped_uname.clone();
                         let suggestion = item.suggestion.clone();
                         let paid = item.paid;
-                        let show_switch = matches!(kind, LiveMessageKind::Danmu);
+                        let show_switch = matches!(kind, LiveMessageKind::Danmu | LiveMessageKind::Superchat);
                         let switch_button = show_switch.then(|| {
                             view! {
                                 <button
@@ -170,9 +170,9 @@ fn compact_send_label(labels: Labels) -> &'static str {
 
 fn compact_switch_label(labels: Labels) -> &'static str {
     if labels.switch_send == "人称替换" {
-        "替换"
+        "替换发送"
     } else {
-        "Swap"
+        "Replace Send"
     }
 }
 
