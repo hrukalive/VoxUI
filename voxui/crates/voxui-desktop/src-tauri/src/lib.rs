@@ -38,10 +38,12 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
-            if window.label() == "live-monitor"
-                && matches!(event, WindowEvent::CloseRequested { .. })
-            {
-                commands::disconnect_live_worker_for_window_close(window.app_handle());
+            if window.label() == "main" && matches!(event, WindowEvent::CloseRequested { .. }) {
+                let app = window.app_handle();
+                if let Some(monitor) = app.get_webview_window("live-monitor") {
+                    let _ = monitor.close();
+                }
+                commands::shutdown_live_worker_for_app_exit();
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -72,12 +74,7 @@ pub fn run() {
         ])
         .build(tauri::generate_context!())
         .expect("failed to build AhanSays desktop app")
-        .run(|app, event| {
-            if matches!(event, RunEvent::ExitRequested { .. }) {
-                if let Some(monitor) = app.get_webview_window("live-monitor") {
-                    let _ = monitor.close();
-                }
-            }
+        .run(|_app, event| {
             if matches!(event, RunEvent::ExitRequested { .. } | RunEvent::Exit) {
                 commands::shutdown_live_worker_for_app_exit();
             }

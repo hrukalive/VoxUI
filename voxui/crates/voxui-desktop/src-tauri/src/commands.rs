@@ -26,7 +26,6 @@ pub type SharedAppCore = Arc<Mutex<AppCore>>;
 
 static SIDECAR_PROCESS: OnceLock<Mutex<Option<SidecarProcess>>> = OnceLock::new();
 static LIVE_WORKER: OnceLock<Mutex<Option<LiveWorkerHandle>>> = OnceLock::new();
-static LIVE_MONITOR_CLOSE_GUARD: OnceLock<Mutex<LiveMonitorCloseGuard>> = OnceLock::new();
 static STREAMING_PLAYERS: OnceLock<Mutex<HashMap<String, mpsc::Sender<StreamingPlaybackCommand>>>> =
     OnceLock::new();
 
@@ -50,35 +49,6 @@ impl LiveWorkerHandle {
         self.start
             .send(())
             .map_err(|_| "OpenLive worker stopped before start signal".to_string())
-    }
-}
-
-#[derive(Debug, Default)]
-struct LiveMonitorCloseGuard {
-    generation: u64,
-    suppress_generation: Option<u64>,
-}
-
-impl LiveMonitorCloseGuard {
-    fn mark_monitor_shown(&mut self) {
-        self.generation = self.generation.saturating_add(1);
-        self.suppress_generation = None;
-    }
-
-    fn suppress_current_close(&mut self) {
-        self.suppress_generation = Some(self.generation);
-    }
-
-    fn should_disconnect_on_close(&mut self) -> bool {
-        if self.suppress_generation == Some(self.generation) {
-            self.suppress_generation = None;
-            return false;
-        }
-        true
-    }
-
-    fn clear_suppression(&mut self) {
-        self.suppress_generation = None;
     }
 }
 
@@ -618,10 +588,6 @@ fn live_worker_slot() -> &'static Mutex<Option<LiveWorkerHandle>> {
     LIVE_WORKER.get_or_init(|| Mutex::new(None))
 }
 
-fn live_monitor_close_guard() -> &'static Mutex<LiveMonitorCloseGuard> {
-    LIVE_MONITOR_CLOSE_GUARD.get_or_init(|| Mutex::new(LiveMonitorCloseGuard::default()))
-}
-
 fn signal_live_worker_stop() -> Result<bool, String> {
     let guard = live_worker_slot()
         .lock()
@@ -636,27 +602,6 @@ fn signal_live_worker_stop() -> Result<bool, String> {
 fn clear_live_worker_slot() {
     if let Ok(mut guard) = live_worker_slot().lock() {
         *guard = None;
-    }
-}
-
-pub fn disconnect_live_worker_for_window_close(app: &AppHandle) {
-    let should_disconnect = live_monitor_close_guard()
-        .lock()
-        .map(|mut guard| guard.should_disconnect_on_close())
-        .unwrap_or(true);
-    if !should_disconnect {
-        return;
-    }
-
-    if signal_live_worker_stop().unwrap_or(false) {
-        if let Some(state) = app.try_state::<SharedAppCore>() {
-            let shared = state.inner().clone();
-            let snapshot = match shared.lock() {
-                Ok(mut core) => core.set_live_status(crate::types::LiveStatus::Disconnecting, None),
-                Err(_) => return,
-            };
-            emit_live_snapshot(app, "live_status_changed", &snapshot);
-        }
     }
 }
 
@@ -688,10 +633,8 @@ fn handle_openblive_status(
                 tracing::warn!("failed to show live monitor window: {error}");
             }
         }
-        crate::types::LiveStatus::Disconnected | crate::types::LiveStatus::Error => {
-            schedule_live_monitor_close(app.clone());
-        }
-        crate::types::LiveStatus::Connecting | crate::types::LiveStatus::Disconnecting => {}
+        crate::types::LiveStatus::Connecting | crate::types::LiveStatus::Disconnecting
+            | crate::types::LiveStatus::Disconnected | crate::types::LiveStatus::Error => {}
     }
 }
 
@@ -723,10 +666,6 @@ fn emit_live_snapshot(app: &AppHandle, event: &str, snapshot: &crate::types::Liv
 }
 
 fn show_live_monitor_impl(app: &AppHandle) -> Result<(), String> {
-    if let Ok(mut guard) = live_monitor_close_guard().lock() {
-        guard.mark_monitor_shown();
-    }
-
     if let Some(window) = app.get_webview_window("live-monitor") {
         window.show().map_err(|error| error.to_string())?;
         window.set_focus().map_err(|error| error.to_string())?;
@@ -740,30 +679,6 @@ fn show_live_monitor_impl(app: &AppHandle) -> Result<(), String> {
         .build()
         .map_err(|error| error.to_string())?;
     Ok(())
-}
-
-fn close_live_monitor(app: &AppHandle) {
-    if let Some(window) = app.get_webview_window("live-monitor") {
-        if let Ok(mut guard) = live_monitor_close_guard().lock() {
-            guard.suppress_current_close();
-        }
-        if window.close().is_err() {
-            if let Ok(mut guard) = live_monitor_close_guard().lock() {
-                guard.clear_suppression();
-            }
-        }
-    }
-}
-
-fn schedule_live_monitor_close(app: AppHandle) {
-    if app.get_webview_window("live-monitor").is_none() {
-        return;
-    }
-
-    let _ = spawn_background("voxui-live-monitor-close", move || {
-        thread::sleep(Duration::from_millis(2200));
-        close_live_monitor(&app);
-    });
 }
 
 fn send_sidecar_command(
@@ -1532,7 +1447,7 @@ fn spawn_background(
 
 #[cfg(test)]
 mod tests {
-    use super::{spawn_background, LiveMonitorCloseGuard, LiveWorkerHandle};
+    use super::{spawn_background, LiveWorkerHandle};
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::mpsc;
     use std::sync::Arc;
@@ -1550,45 +1465,6 @@ mod tests {
         assert_eq!(receiver.recv_timeout(Duration::from_secs(2)).unwrap(), 42);
     }
 
-    #[test]
-    fn live_worker_handle_stop_waits_for_completion_ack() {
-        let stop = Arc::new(AtomicBool::new(false));
-        let worker_stop = stop.clone();
-        let (done_sender, done_receiver) = mpsc::channel();
-        let (start_sender, _start_receiver) = mpsc::channel();
-        let handle = LiveWorkerHandle {
-            stop,
-            done: done_receiver,
-            start: start_sender,
-        };
-
-        let worker = std::thread::spawn(move || {
-            while !worker_stop.load(Ordering::SeqCst) {
-                std::thread::sleep(Duration::from_millis(1));
-            }
-            done_sender.send(()).unwrap();
-        });
-
-        handle.request_stop_and_wait();
-        worker.join().unwrap();
-    }
-
-    #[test]
-    fn live_worker_handle_treats_completion_disconnect_as_done() {
-        let stop = Arc::new(AtomicBool::new(false));
-        let (done_sender, done_receiver) = mpsc::channel();
-        let (start_sender, _start_receiver) = mpsc::channel();
-        let handle = LiveWorkerHandle {
-            stop: stop.clone(),
-            done: done_receiver,
-            start: start_sender,
-        };
-        drop(done_sender);
-
-        handle.request_stop_and_wait();
-
-        assert!(stop.load(Ordering::SeqCst));
-    }
 
     #[test]
     fn live_worker_start_gate_blocks_until_slot_registration_signal() {
@@ -1609,32 +1485,5 @@ mod tests {
             Ok(())
         );
         worker.join().unwrap();
-    }
-
-    #[test]
-    fn live_monitor_close_guard_suppresses_only_programmatic_close() {
-        let mut guard = LiveMonitorCloseGuard::default();
-
-        assert!(guard.should_disconnect_on_close());
-
-        guard.mark_monitor_shown();
-        guard.suppress_current_close();
-        assert!(!guard.should_disconnect_on_close());
-        assert!(guard.should_disconnect_on_close());
-
-        guard.suppress_current_close();
-        guard.clear_suppression();
-        assert!(guard.should_disconnect_on_close());
-    }
-
-    #[test]
-    fn live_monitor_close_guard_does_not_suppress_after_reconnect_generation() {
-        let mut guard = LiveMonitorCloseGuard::default();
-
-        guard.mark_monitor_shown();
-        guard.suppress_current_close();
-        guard.mark_monitor_shown();
-
-        assert!(guard.should_disconnect_on_close());
     }
 }
