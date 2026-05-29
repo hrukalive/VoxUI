@@ -491,8 +491,8 @@ pub fn SettingsModal(
 
                                         <div class="live-subsection settings-span-2">
                                             <div class="live-subsection-header">
-                                                <h4>{move || labels().switch_send}</h4>
-                                                <button class="secondary-button live-symbol-button" type="button" aria-label=move || labels().switch_send on:click=move |_| {
+                                                <h4>{move || labels().swap_send}</h4>
+                                                <button class="secondary-button live-symbol-button" type="button" aria-label=move || labels().swap_send on:click=move |_| {
                                                     set_pending_rules.update(|rules| rules.push(ReplacementRule { enabled: true, from: String::new(), to: String::new() }));
                                                 }>
                                                     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -518,14 +518,14 @@ pub fn SettingsModal(
                                                                         });
                                                                     } />
                                                                 </label>
-                                                                <input type="text" aria-label=move || labels().switch_send prop:value=rule.from.clone() on:change=move |event| {
+                                                                <input type="text" aria-label=move || labels().swap_send prop:value=rule.from.clone() on:change=move |event| {
                                                                     set_pending_rules.update(|rules| {
                                                                         if let Some(rule) = rules.get_mut(index) {
                                                                             rule.from = event_target_value(&event);
                                                                         }
                                                                     });
                                                                 } />
-                                                                <input type="text" aria-label=move || labels().switch_send prop:value=rule.to.clone() on:change=move |event| {
+                                                                <input type="text" aria-label=move || labels().swap_send prop:value=rule.to.clone() on:change=move |event| {
                                                                     set_pending_rules.update(|rules| {
                                                                         if let Some(rule) = rules.get_mut(index) {
                                                                             rule.to = event_target_value(&event);

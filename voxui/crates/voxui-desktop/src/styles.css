@@ -1107,19 +1107,16 @@ body:has(.live-monitor-shell) {
 .live-monitor-button {
   display: inline-grid;
   place-items: center;
-  width: 58px;
+  width: 30px;
   height: 30px;
   min-width: 0;
   border: 1px solid var(--control-border);
   border-radius: 5px;
   background: var(--button-bg);
   color: var(--text);
-  padding: 0 8px;
+  padding: 0;
   font: inherit;
-  font-size: 12px;
   line-height: 1;
-  text-align: center;
-  white-space: nowrap;
   cursor: pointer;
 }
 

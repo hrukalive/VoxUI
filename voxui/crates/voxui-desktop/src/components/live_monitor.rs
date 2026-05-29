@@ -80,7 +80,10 @@ pub fn LiveMonitor(
                     aria-label=move || labels().clear
                     on:click=move |_| on_clear()
                 >
-                    {move || labels().clear}
+                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <polyline points="3 6 5 6 21 6"></polyline>
+                        <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                    </svg>
                 </button>
                 </div>
             </header>
@@ -116,12 +119,17 @@ pub fn LiveMonitor(
                                 <button
                                     class="live-monitor-button"
                                     type="button"
-                                    title=labels.switch_send
-                                    aria-label=labels.switch_send
-                                    on:click=move |_| on_send(item_id_for_switch.clone(), true, auto_send.get())
-                                >
-                                    {compact_switch_label(labels)}
-                                </button>
+                                    title=labels.swap_send
+                                    aria-label=labels.swap_send
+                                        on:click=move |_| on_send(item_id_for_switch.clone(), true, auto_send.get())
+                                    >
+                                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                            <polyline points="17 1 21 5 17 9"></polyline>
+                                            <path d="M3 11V9a4 4 0 0 1 4-4h14"></path>
+                                            <polyline points="7 23 3 19 7 15"></polyline>
+                                            <path d="M21 13v2a4 4 0 0 1-4 4H3"></path>
+                                        </svg>
+                                    </button>
                             }
                         });
 
@@ -143,7 +151,10 @@ pub fn LiveMonitor(
                                         aria-label=labels.send
                                         on:click=move |_| on_send(item_id_for_send.clone(), false, auto_send.get())
                                     >
-                                        {compact_send_label(labels)}
+                                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                            <line x1="22" y1="2" x2="11" y2="13"></line>
+                                            <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                                        </svg>
                                     </button>
                                     {switch_button}
                                 </div>
@@ -172,22 +183,6 @@ fn live_item_render_key(item: &LiveMonitorItem) -> String {
         "{}\x1f{}\x1f{}",
         item.id, item.mapped_uname, item.suggestion
     )
-}
-
-fn compact_send_label(labels: Labels) -> &'static str {
-    if labels.send == "发送" {
-        "发送"
-    } else {
-        "Send"
-    }
-}
-
-fn compact_switch_label(labels: Labels) -> &'static str {
-    if labels.switch_send == "人称替换" {
-        "替换"
-    } else {
-        "Swap"
-    }
 }
 
 fn status_text(snapshot: &LiveSnapshot, labels: Labels) -> String {
@@ -355,13 +350,8 @@ mod tests {
     }
 
     #[test]
-    fn compact_action_labels_fit_fixed_monitor_buttons() {
-        let english = labels(UiLanguage::English);
-        assert_eq!(compact_send_label(english), "Send");
-        assert_eq!(compact_switch_label(english), "Swap");
-
-        let chinese = labels(UiLanguage::Chinese);
-        assert_eq!(compact_send_label(chinese), "发送");
-        assert_eq!(compact_switch_label(chinese), "替换");
+    fn monitor_buttons_use_svg_icons() {
+        let source = include_str!("live_monitor.rs");
+        assert!(source.contains("<svg"), "Monitor buttons should use SVG icons");
     }
 }

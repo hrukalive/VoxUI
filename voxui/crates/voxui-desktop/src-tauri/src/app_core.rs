@@ -268,7 +268,8 @@ impl AppCore {
     }
 
     pub fn live_snapshot(&self, language: LiveLanguage) -> LiveSnapshot {
-        self.live.snapshot(&self.config.live, language)
+        self.live
+            .snapshot(&self.config.live, language, self.config.auto_period)
     }
 
     pub fn live_language(&self) -> LiveLanguage {
@@ -301,8 +302,13 @@ impl AppCore {
         language: LiveLanguage,
         mode: SuggestionMode,
     ) -> Option<String> {
-        self.live
-            .suggestion_for_item(item_id, &self.config.live, language, mode)
+        self.live.suggestion_for_item(
+            item_id,
+            &self.config.live,
+            language,
+            mode,
+            self.config.auto_period,
+        )
     }
 
     pub fn live_suggestion_for_item_current_language(

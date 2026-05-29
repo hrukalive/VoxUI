@@ -76,7 +76,12 @@ impl LiveState {
         self.status_message = status_message;
     }
 
-    pub fn snapshot(&self, config: &LiveConfig, language: LiveLanguage) -> LiveSnapshot {
+    pub fn snapshot(
+        &self,
+        config: &LiveConfig,
+        language: LiveLanguage,
+        auto_period: bool,
+    ) -> LiveSnapshot {
         LiveSnapshot {
             status: self.status,
             status_message: self.status_message.clone(),
@@ -85,7 +90,7 @@ impl LiveState {
                 .items
                 .iter()
                 .filter_map(|item| {
-                    self.dto_for_item(item, config, language, SuggestionMode::Normal)
+                    self.dto_for_item(item, config, language, SuggestionMode::Normal, auto_period)
                 })
                 .collect(),
         }
@@ -97,11 +102,14 @@ impl LiveState {
         config: &LiveConfig,
         language: LiveLanguage,
         mode: SuggestionMode,
+        auto_period: bool,
     ) -> Option<String> {
         self.items
             .iter()
             .find(|item| item.id == item_id)
-            .and_then(|item| render_suggestion(&item.event, config, language, mode))
+            .and_then(|item| {
+                render_suggestion_for_output(&item.event, config, language, mode, auto_period)
+            })
     }
 
     fn dto_for_item(
@@ -110,8 +118,10 @@ impl LiveState {
         config: &LiveConfig,
         language: LiveLanguage,
         mode: SuggestionMode,
+        auto_period: bool,
     ) -> Option<LiveMonitorItemDto> {
-        let suggestion = render_suggestion(&item.event, config, language, mode)?;
+        let suggestion =
+            render_suggestion_for_output(&item.event, config, language, mode, auto_period)?;
         let mapped_uname = config
             .mapped_unames
             .get(&item.event.open_id)
@@ -232,6 +242,16 @@ pub fn render_suggestion(
     language: LiveLanguage,
     mode: SuggestionMode,
 ) -> Option<String> {
+    render_suggestion_for_output(event, config, language, mode, false)
+}
+
+fn render_suggestion_for_output(
+    event: &LiveEvent,
+    config: &LiveConfig,
+    language: LiveLanguage,
+    mode: SuggestionMode,
+    auto_period: bool,
+) -> Option<String> {
     if !kind_enabled(event.kind, config) {
         return None;
     }
@@ -243,11 +263,10 @@ pub fn render_suggestion(
         .unwrap_or(&event.uname);
 
     let rendered = if event.kind == LiveMessageKind::Danmu {
-        let period = match language {
-            LiveLanguage::Chinese => '。',
-            LiveLanguage::English => '.',
-        };
-        let cleaned = clean_danmu(event.msg.as_deref().unwrap_or_default(), period);
+        let cleaned = clean_danmu(
+            event.msg.as_deref().unwrap_or_default(),
+            period_for_language(language),
+        );
         if cleaned.is_empty() {
             return None;
         }
@@ -256,10 +275,11 @@ pub fn render_suggestion(
         render_template(choose(event.kind, language, config), event, mapped_uname)
     };
 
-    match mode {
-        SuggestionMode::Normal => Some(rendered),
-        SuggestionMode::Switch => Some(switch_text(&rendered, config)),
-    }
+    let evaluated = match mode {
+        SuggestionMode::Normal => rendered,
+        SuggestionMode::Switch => switch_text(&rendered, config),
+    };
+    Some(ensure_period(&evaluated, language, auto_period))
 }
 
 pub fn switch_text(text: &str, config: &LiveConfig) -> String {
@@ -541,4 +561,26 @@ fn clean_danmu(text: &str, period: char) -> String {
     }
 
     cleaned.trim_matches(period).to_string()
+}
+
+fn ensure_period(text: &str, language: LiveLanguage, auto_period: bool) -> String {
+    if !auto_period {
+        return text.to_string();
+    }
+
+    let endings = [
+        '?', '!', '.', '\u{2026}', '\u{ff1f}', '\u{ff01}', '\u{3002}',
+    ];
+    if text.is_empty() || text.ends_with(&endings) {
+        text.to_string()
+    } else {
+        format!("{}{}", text, period_for_language(language))
+    }
+}
+
+fn period_for_language(language: LiveLanguage) -> char {
+    match language {
+        LiveLanguage::Chinese => '\u{3002}',
+        LiveLanguage::English => '.',
+    }
 }

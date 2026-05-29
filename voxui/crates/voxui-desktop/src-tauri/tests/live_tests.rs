@@ -365,6 +365,74 @@ fn switch_text_ignores_empty_replacement_sources() {
 }
 
 #[test]
+fn app_auto_period_applies_to_live_monitor_items_and_suggestions() {
+    let mut live = AppConfig::default().live;
+    live.replacement_rules = vec![ReplacementRule {
+        enabled: true,
+        from: "cat".to_string(),
+        to: "dog".to_string(),
+    }];
+    let event = parse_live_event(json!({
+        "cmd": "LIVE_OPEN_PLATFORM_DM",
+        "data": { "msg": "cat", "open_id": "u1", "uname": "Alice" }
+    }))
+    .unwrap()
+    .unwrap();
+
+    let mut with_period = voxui_desktop::app_core::AppCore::from_config(AppConfig {
+        language: LanguageMode::English,
+        auto_period: true,
+        live: live.clone(),
+        ..AppConfig::default()
+    })
+    .unwrap();
+    let with_period_id = with_period.add_live_event_for_test(event.clone()).unwrap();
+    assert_eq!(
+        with_period
+            .live_snapshot_for_test(LiveLanguage::English)
+            .items[0]
+            .suggestion,
+        "cat."
+    );
+    assert_eq!(
+        with_period
+            .live_suggestion_for_item(
+                &with_period_id,
+                LiveLanguage::English,
+                SuggestionMode::Switch
+            )
+            .as_deref(),
+        Some("dog.")
+    );
+
+    let mut without_period = voxui_desktop::app_core::AppCore::from_config(AppConfig {
+        language: LanguageMode::English,
+        auto_period: false,
+        live,
+        ..AppConfig::default()
+    })
+    .unwrap();
+    let without_period_id = without_period.add_live_event_for_test(event).unwrap();
+    assert_eq!(
+        without_period
+            .live_snapshot_for_test(LiveLanguage::English)
+            .items[0]
+            .suggestion,
+        "cat"
+    );
+    assert_eq!(
+        without_period
+            .live_suggestion_for_item(
+                &without_period_id,
+                LiveLanguage::English,
+                SuggestionMode::Switch
+            )
+            .as_deref(),
+        Some("dog")
+    );
+}
+
+#[test]
 fn adding_live_event_initializes_name_mapping_and_recomputes_after_patch() {
     let mut core = voxui_desktop::app_core::AppCore::from_config(AppConfig::default()).unwrap();
     let event = parse_live_event(json!({
@@ -378,7 +446,7 @@ fn adding_live_event_initializes_name_mapping_and_recomputes_after_patch() {
         first.config.original_unames.get("u1").map(String::as_str),
         Some("Alice")
     );
-    assert_eq!(first.items[0].suggestion, "感谢Alice送出的2个花");
+    assert_eq!(first.items[0].suggestion, "感谢Alice送出的2个花。");
 
     core.apply_live_patch(LiveConfigPatch {
         mapped_unames: Some(
@@ -392,7 +460,7 @@ fn adding_live_event_initializes_name_mapping_and_recomputes_after_patch() {
     let second = core.live_snapshot_for_test(LiveLanguage::Chinese);
 
     assert_eq!(second.items[0].id, item_id);
-    assert_eq!(second.items[0].suggestion, "感谢A酱送出的2个花");
+    assert_eq!(second.items[0].suggestion, "感谢A酱送出的2个花。");
 }
 
 #[test]
@@ -453,7 +521,7 @@ fn setting_live_status_uses_configured_live_language() {
 
     assert_eq!(snapshot.status, LiveStatus::Connected);
     assert_eq!(snapshot.status_message.as_deref(), Some("ready"));
-    assert_eq!(snapshot.items[0].suggestion, "ZH Alice 2 èŠ±");
+    assert_eq!(snapshot.items[0].suggestion, "ZH Alice 2 èŠ±。");
 }
 
 #[test]
@@ -480,7 +548,7 @@ fn applying_live_patch_returns_snapshot_in_configured_live_language() {
         })
         .unwrap();
 
-    assert_eq!(snapshot.items[0].suggestion, "ZH Alice 2 èŠ±");
+    assert_eq!(snapshot.items[0].suggestion, "ZH Alice 2 èŠ±。");
 }
 
 #[test]
