@@ -142,6 +142,11 @@ pub fn App() -> impl IntoView {
     spawn_local(async move {
         let _ = crate::tauri_api::listen_app_event("live_status_changed", move |event| {
             if let Ok(snapshot) = crate::tauri_api::decode_app_event::<LiveSnapshot>(event) {
+                if snapshot.status == LiveStatus::Error {
+                    if let Some(ref message) = snapshot.status_message {
+                        set_live_error.set(Some(message.clone()));
+                    }
+                }
                 set_live_snapshot.set(snapshot);
             }
         })
@@ -291,12 +296,12 @@ pub fn App() -> impl IntoView {
                         }
                         on_open_settings=move || set_settings_open.set(true)
                         on_open_live_monitor=move || {
-                            let identity_code = live_snapshot.get().config.identity_code.trim().to_string();
+                            let identity_code = live_snapshot.get_untracked().config.identity_code.trim().to_string();
                             if identity_code.is_empty() {
                                 set_live_error.set(Some("Identity code not provided".to_string()));
                                 return;
                             }
-                            if live_snapshot.get().status == LiveStatus::Connected {
+                            if live_snapshot.get_untracked().status == LiveStatus::Connected {
                                 spawn_local(async move {
                                     if let Err(error) = crate::tauri_api::show_live_monitor().await {
                                         set_live_error.set(Some(error));
@@ -380,10 +385,11 @@ pub fn App() -> impl IntoView {
                 on_config_patch=commit_config_patch
                 on_live_patch=commit_live_patch
                 on_live_connect=move || {
-                    let identity_code = live_snapshot.get().config.identity_code;
+                    let identity_code = live_snapshot.get_untracked().config.identity_code;
                     spawn_local(async move {
-                        if let Ok(next_snapshot) = crate::tauri_api::connect_openblive(identity_code).await {
-                            set_live_snapshot.set(next_snapshot);
+                        match crate::tauri_api::connect_openblive(identity_code).await {
+                            Ok(next_snapshot) => set_live_snapshot.set(next_snapshot),
+                            Err(error) => set_live_error.set(Some(error)),
                         }
                     });
                 }
@@ -481,8 +487,9 @@ pub fn App() -> impl IntoView {
                     <ErrorModal
                         labels=labels
                         open=move || live_error.get().is_some()
-                        title=move || current_labels().live.to_string()
+                        title=move || current_labels().connection_failed.to_string()
                         message=move || live_error.get().unwrap_or_default()
+                        danger=true
                         on_close=move || set_live_error.set(None)
                     />
                 }

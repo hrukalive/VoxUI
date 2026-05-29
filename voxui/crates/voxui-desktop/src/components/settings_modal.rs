@@ -50,7 +50,7 @@ pub fn SettingsModal(
         });
     };
 
-    let initial = live_snapshot();
+    let initial = untrack(live_snapshot);
     let (pending_templates, set_pending_templates) = signal(initial.config.templates.clone());
     let (pending_rules, set_pending_rules) = signal(initial.config.replacement_rules.clone());
     let (pending_mapped, set_pending_mapped) = signal(initial.config.mapped_unames.clone());
@@ -360,7 +360,7 @@ pub fn SettingsModal(
                                 <section class="settings-section live-settings-section">
                                     <h3>{move || labels().live}</h3>
                                     <div class="settings-grid live-settings-grid">
-                                        <label class="settings-field settings-span-2" for="settings-live-identity-code">
+                                        <label class="settings-field" for="settings-live-identity-code">
                                             <span>{move || labels().identity_code}</span>
                                             <input
                                                 id="settings-live-identity-code"
@@ -374,9 +374,7 @@ pub fn SettingsModal(
                                                 }
                                             />
                                         </label>
-                                        <div class="settings-field live-status-field settings-span-2">
-                                            <span>{move || labels().live}</span>
-                                            <strong>{move || live_status_label(labels(), live_snapshot().status)}</strong>
+                                        <label class="settings-field" for="settings-live-connect-to-service">
                                             <button
                                                 class="primary-button"
                                                 type="button"
@@ -390,15 +388,7 @@ pub fn SettingsModal(
                                             >
                                                 {move || if live_snapshot().status == LiveStatus::Connected { labels().disconnect } else { labels().connect }}
                                             </button>
-                                        </div>
-                                        <label class="settings-checkbox settings-switch live-checkbox" for="settings-live-ceve-heartbeat">
-                                            <input id="settings-live-ceve-heartbeat" type="checkbox" prop:checked=move || live_snapshot().config.enable_ceve_server_heartbeat on:change=move |event| {
-                                                on_live_patch(LiveConfigPatch {
-                                                    enable_ceve_server_heartbeat: Some(event_target_checked(&event)),
-                                                    ..LiveConfigPatch::default()
-                                                });
-                                            } />
-                                            <span>{move || labels().ceve_heartbeat}</span>
+                                            <strong>{move || live_status_label(labels(), live_snapshot().status)}</strong>
                                         </label>
                                         <label class="settings-field">
                                             <span>{move || labels().send_mode}</span>
@@ -431,6 +421,15 @@ pub fn SettingsModal(
                                                     });
                                                 }
                                             />
+                                        </label>
+                                        <label class="settings-checkbox settings-switch live-checkbox" for="settings-live-ceve-heartbeat">
+                                            <input id="settings-live-ceve-heartbeat" type="checkbox" prop:checked=move || live_snapshot().config.enable_ceve_server_heartbeat on:change=move |event| {
+                                                on_live_patch(LiveConfigPatch {
+                                                    enable_ceve_server_heartbeat: Some(event_target_checked(&event)),
+                                                    ..LiveConfigPatch::default()
+                                                });
+                                            } />
+                                            <span>{move || labels().ceve_heartbeat}</span>
                                         </label>
                                         <div class="live-checkbox-grid settings-span-2">
                                             {move || {
@@ -476,7 +475,7 @@ pub fn SettingsModal(
                                                                 aria-label="Test"
                                                                 on:click=move |_| on_live_mock_message(kind_for_test)
                                                             >
-                                                                "Test"
+                                                                {labels.test}
                                                             </button>
                                                         </div>
                                                     }

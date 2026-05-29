@@ -95,6 +95,7 @@ pub struct Labels {
     pub replacement_rule: &'static str,
     pub uname_map: &'static str,
     pub sidecar_load_failed: &'static str,
+    pub connection_failed: &'static str,
     pub about_text: &'static str,
 }
 
@@ -190,6 +191,7 @@ pub fn labels(language: UiLanguage) -> Labels {
             replacement_rule: "替换规则",
             uname_map: "用户名映射",
             sidecar_load_failed: "推理引擎启动失败",
+            connection_failed: "连接失败",
             about_text: "由 久嘉 & OpenCode & Codex 编写。使用 GPLv3 许可证。以 VoxCPM Python 实现作为参考/上游。",
         },
         UiLanguage::English => Labels {
@@ -282,6 +284,7 @@ pub fn labels(language: UiLanguage) -> Labels {
             replacement_rule: "Replacement rule",
             uname_map: "Username mapping",
             sidecar_load_failed: "Fail to start inference engine",
+            connection_failed: "Connection failed",
             about_text: "Coded by Reon Nynes & OpenCode & Codex. Reference Python implementation of VoxCPM. GPLv3 License.",
         },
     }
