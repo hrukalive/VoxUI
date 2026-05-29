@@ -4,7 +4,7 @@ use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
 
 use crate::i18n::Labels;
-use crate::tauri_api::{LiveMessageKind, LiveSnapshot, LiveStatus};
+use crate::tauri_api::{LiveMessageKind, LiveMonitorItem, LiveSnapshot, LiveStatus};
 
 #[component]
 pub fn LiveMonitor(
@@ -18,8 +18,7 @@ pub fn LiveMonitor(
     let (previous_item_count, set_previous_item_count) = signal(0_usize);
     let (status_notice, set_status_notice) = signal(None::<String>);
     let (status_notice_generation, set_status_notice_generation) = signal(0_u64);
-    let (last_status_key, set_last_status_key) =
-        signal(Some((snapshot().status, snapshot().status_message.clone())));
+    let (last_status_key, set_last_status_key) = signal(None::<(LiveStatus, Option<String>)>);
 
     Effect::new(move |_| {
         let item_count = snapshot().items.len();
@@ -46,11 +45,15 @@ pub fn LiveMonitor(
     Effect::new(move |_| {
         let snapshot = snapshot();
         let current_key = (snapshot.status, snapshot.status_message.clone());
-        if last_status_key.get_untracked() == Some(current_key.clone()) {
+        let previous_key = last_status_key.get_untracked();
+        if previous_key == Some(current_key.clone()) {
             return;
         }
 
         set_last_status_key.set(Some(current_key));
+        if previous_key.is_none() {
+            return;
+        }
         set_status_notice.set(Some(status_text_parts(
             snapshot.status,
             snapshot.status_message.as_deref(),
@@ -94,7 +97,7 @@ pub fn LiveMonitor(
             >
                 <For
                     each=move || snapshot().items
-                    key=|item| item.id.clone()
+                    key=live_item_render_key
                     children=move |item| {
                         let labels = labels();
                         let kind = item.kind;
@@ -160,6 +163,13 @@ fn kind_label(kind: LiveMessageKind, labels: Labels) -> &'static str {
     }
 }
 
+fn live_item_render_key(item: &LiveMonitorItem) -> String {
+    format!(
+        "{}\x1f{}\x1f{}",
+        item.id, item.mapped_uname, item.suggestion
+    )
+}
+
 fn compact_send_label(labels: Labels) -> &'static str {
     if labels.send == "发送" {
         "发送"
@@ -172,7 +182,7 @@ fn compact_switch_label(labels: Labels) -> &'static str {
     if labels.switch_send == "人称替换" {
         "替换"
     } else {
-        "Replace"
+        "Swap"
     }
 }
 
@@ -283,6 +293,55 @@ mod tests {
         assert!(should_scroll_after_item_change(0, false));
         assert!(should_scroll_after_item_change(4, true));
         assert!(!should_scroll_after_item_change(4, false));
+    }
+
+    #[test]
+    fn does_not_read_snapshot_prop_in_component_body() {
+        let source = include_str!("live_monitor.rs");
+        let body_snapshot_read = ["signal(Some((snapshot", "().status"].concat();
+
+        assert!(
+            !source.contains(&body_snapshot_read),
+            "LiveMonitor should read snapshot inside effects/view closures, not during component setup"
+        );
+    }
+
+    #[test]
+    fn live_item_key_tracks_rendered_content() {
+        let source = include_str!("live_monitor.rs");
+        let render_key_helper = ["live", "_item", "_render", "_key"].concat();
+        let id_only_key = ["key=|item| item", ".id.clone()"].concat();
+
+        assert!(
+            source.contains(&render_key_helper),
+            "live item keys should include rendered content that can change after settings patches"
+        );
+        assert!(
+            !source.contains(&id_only_key),
+            "live item keys should not use only id, because templates/name mappings can change row content"
+        );
+    }
+
+    #[test]
+    fn live_item_render_key_changes_with_rendered_text() {
+        let mut item = LiveMonitorItem {
+            id: "1".to_string(),
+            kind: LiveMessageKind::Gift,
+            paid: true,
+            open_id: "u1".to_string(),
+            uname: "Alice".to_string(),
+            mapped_uname: "Alice".to_string(),
+            suggestion: "old template".to_string(),
+            raw_json: serde_json::Value::Null,
+        };
+        let first_key = live_item_render_key(&item);
+
+        item.suggestion = "new template".to_string();
+        assert_ne!(first_key, live_item_render_key(&item));
+
+        let second_key = live_item_render_key(&item);
+        item.mapped_uname = "A-chan".to_string();
+        assert_ne!(second_key, live_item_render_key(&item));
     }
 
     #[test]

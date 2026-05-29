@@ -1,12 +1,11 @@
 use leptos::prelude::*;
-use std::collections::BTreeMap;
 
 use crate::components::controls::{CustomSelect, NumberCounter, SelectOption};
 use crate::i18n::{Labels, UiLanguage};
 use crate::tauri_api::{
     AppConfig, AudioDevice, AudioHost, AudioState, BackendKind, ConfigPatch, GenerationSettings,
     LanguageMode, LiveConfigPatch, LiveMessageKind, LiveSnapshot, LiveStatus, ReplacementRule,
-    TemplateConfig, ThemeMode,
+    ThemeMode,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -51,13 +50,27 @@ pub fn SettingsModal(
         });
     };
 
+    let initial = live_snapshot();
+    let (pending_templates, set_pending_templates) = signal(initial.config.templates.clone());
+    let (pending_rules, set_pending_rules) = signal(initial.config.replacement_rules.clone());
+    let (pending_mapped, set_pending_mapped) = signal(initial.config.mapped_unames.clone());
+
+    let flush_live = move || {
+        on_live_patch(LiveConfigPatch {
+            templates: Some(pending_templates.get()),
+            replacement_rules: Some(pending_rules.get()),
+            mapped_unames: Some(pending_mapped.get()),
+            ..LiveConfigPatch::default()
+        });
+    };
+
     view! {
         <Show when=open>
             <div class="modal-backdrop" role="presentation">
                 <section class="modal settings-modal" role="dialog" aria-modal="true" aria-label=move || labels().settings>
                     <header class="modal-header">
                         <h2>{move || labels().settings}</h2>
-                        <button class="primary-button" type="button" aria-label=move || labels().save on:click=move |_| { on_close() }>
+                        <button class="primary-button" type="button" aria-label=move || labels().save on:click=move |_| { flush_live(); on_close() }>
                             {move || labels().save}
                         </button>
                     </header>
@@ -436,36 +449,36 @@ pub fn SettingsModal(
                                         <div class="live-subsection settings-span-2">
                                             <h4>{move || labels().send}</h4>
                                             <div class="live-template-grid">
-                                                {template_textarea("settings-live-template-danmu", move || labels().danmu.to_string(), move || live_snapshot().config.templates.danmu, move |value| patch_template(live_snapshot, on_live_patch, move |templates| templates.danmu = value))}
+                                                {template_textarea("settings-live-template-danmu", move || labels().danmu.to_string(), move || pending_templates.get().danmu, move |value| set_pending_templates.update(|t| t.danmu = value))}
                                                 <Show when=move || language() != UiLanguage::English>
-                                                    {template_textarea("settings-live-template-gift-zh", move || format!("{}", labels().gift), move || live_snapshot().config.templates.gift_zh, move |value| patch_template(live_snapshot, on_live_patch, move |templates| templates.gift_zh = value))}
+                                                    {template_textarea("settings-live-template-gift-zh", move || format!("{}", labels().gift), move || pending_templates.get().gift_zh, move |value| set_pending_templates.update(|t| t.gift_zh = value))}
                                                 </Show>
                                                 <Show when=move || language() == UiLanguage::English>
-                                                    {template_textarea("settings-live-template-gift-en", move || format!("{}", labels().gift), move || live_snapshot().config.templates.gift_en, move |value| patch_template(live_snapshot, on_live_patch, move |templates| templates.gift_en = value))}
+                                                    {template_textarea("settings-live-template-gift-en", move || format!("{}", labels().gift), move || pending_templates.get().gift_en, move |value| set_pending_templates.update(|t| t.gift_en = value))}
                                                 </Show>
                                                 <Show when=move || language() != UiLanguage::English>
-                                                    {template_textarea("settings-live-template-superchat-zh", move || format!("{}", labels().superchat), move || live_snapshot().config.templates.superchat_zh, move |value| patch_template(live_snapshot, on_live_patch, move |templates| templates.superchat_zh = value))}
+                                                    {template_textarea("settings-live-template-superchat-zh", move || format!("{}", labels().superchat), move || pending_templates.get().superchat_zh, move |value| set_pending_templates.update(|t| t.superchat_zh = value))}
                                                 </Show>
                                                 <Show when=move || language() == UiLanguage::English>
-                                                    {template_textarea("settings-live-template-superchat-en", move || format!("{}", labels().superchat), move || live_snapshot().config.templates.superchat_en, move |value| patch_template(live_snapshot, on_live_patch, move |templates| templates.superchat_en = value))}
+                                                    {template_textarea("settings-live-template-superchat-en", move || format!("{}", labels().superchat), move || pending_templates.get().superchat_en, move |value| set_pending_templates.update(|t| t.superchat_en = value))}
                                                 </Show>
                                                 <Show when=move || language() != UiLanguage::English>
-                                                    {template_textarea("settings-live-template-guard-zh", move || format!("{}", labels().guard), move || live_snapshot().config.templates.guard_zh, move |value| patch_template(live_snapshot, on_live_patch, move |templates| templates.guard_zh = value))}
+                                                    {template_textarea("settings-live-template-guard-zh", move || format!("{}", labels().guard), move || pending_templates.get().guard_zh, move |value| set_pending_templates.update(|t| t.guard_zh = value))}
                                                 </Show>
                                                 <Show when=move || language() == UiLanguage::English>
-                                                    {template_textarea("settings-live-template-guard-en", move || format!("{}", labels().guard), move || live_snapshot().config.templates.guard_en, move |value| patch_template(live_snapshot, on_live_patch, move |templates| templates.guard_en = value))}
+                                                    {template_textarea("settings-live-template-guard-en", move || format!("{}", labels().guard), move || pending_templates.get().guard_en, move |value| set_pending_templates.update(|t| t.guard_en = value))}
                                                 </Show>
                                                 <Show when=move || language() != UiLanguage::English>
-                                                    {template_textarea("settings-live-template-like-zh", move || format!("{}", labels().like), move || live_snapshot().config.templates.like_zh, move |value| patch_template(live_snapshot, on_live_patch, move |templates| templates.like_zh = value))}
+                                                    {template_textarea("settings-live-template-like-zh", move || format!("{}", labels().like), move || pending_templates.get().like_zh, move |value| set_pending_templates.update(|t| t.like_zh = value))}
                                                 </Show>
                                                 <Show when=move || language() == UiLanguage::English>
-                                                    {template_textarea("settings-live-template-like-en", move || format!("{}", labels().like), move || live_snapshot().config.templates.like_en, move |value| patch_template(live_snapshot, on_live_patch, move |templates| templates.like_en = value))}
+                                                    {template_textarea("settings-live-template-like-en", move || format!("{}", labels().like), move || pending_templates.get().like_en, move |value| set_pending_templates.update(|t| t.like_en = value))}
                                                 </Show>
                                                 <Show when=move || language() != UiLanguage::English>
-                                                    {template_textarea("settings-live-template-enter-zh", move || format!("{}", labels().enter), move || live_snapshot().config.templates.enter_zh, move |value| patch_template(live_snapshot, on_live_patch, move |templates| templates.enter_zh = value))}
+                                                    {template_textarea("settings-live-template-enter-zh", move || format!("{}", labels().enter), move || pending_templates.get().enter_zh, move |value| set_pending_templates.update(|t| t.enter_zh = value))}
                                                 </Show>
                                                 <Show when=move || language() == UiLanguage::English>
-                                                    {template_textarea("settings-live-template-enter-en", move || format!("{}", labels().enter), move || live_snapshot().config.templates.enter_en, move |value| patch_template(live_snapshot, on_live_patch, move |templates| templates.enter_en = value))}
+                                                    {template_textarea("settings-live-template-enter-en", move || format!("{}", labels().enter), move || pending_templates.get().enter_en, move |value| set_pending_templates.update(|t| t.enter_en = value))}
                                                 </Show>
                                             </div>
                                         </div>
@@ -474,48 +487,57 @@ pub fn SettingsModal(
                                             <div class="live-subsection-header">
                                                 <h4>{move || labels().switch_send}</h4>
                                                 <button class="secondary-button live-symbol-button" type="button" aria-label=move || labels().switch_send on:click=move |_| {
-                                                    let mut rules = live_snapshot().config.replacement_rules;
-                                                    rules.push(ReplacementRule { enabled: true, from: String::new(), to: String::new() });
-                                                    patch_replacement_rules(on_live_patch, rules);
-                                                }>"+"</button>
+                                                    set_pending_rules.update(|rules| rules.push(ReplacementRule { enabled: true, from: String::new(), to: String::new() }));
+                                                }>
+                                                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                                        <line x1="12" y1="5" x2="12" y2="19"></line>
+                                                        <line x1="5" y1="12" x2="19" y2="12"></line>
+                                                    </svg>
+                                                </button>
                                             </div>
                                             <div class="live-list">
                                                 {move || {
-                                                    replacement_rule_rows(live_snapshot())
+                                                    pending_rules.get()
                                                         .into_iter()
+                                                        .enumerate()
                                                         .map(|(index, rule)| {
                                                         view! {
                                                             <div class="live-replacement-row">
                                                                 <label class="live-inline-checkbox">
                                                                     <input type="checkbox" prop:checked=rule.enabled on:change=move |event| {
-                                                                        let mut rules = live_snapshot().config.replacement_rules;
-                                                                        if let Some(rule) = rules.get_mut(index) {
-                                                                            rule.enabled = event_target_checked(&event);
-                                                                        }
-                                                                        patch_replacement_rules(on_live_patch, rules);
+                                                                        set_pending_rules.update(|rules| {
+                                                                            if let Some(rule) = rules.get_mut(index) {
+                                                                                rule.enabled = event_target_checked(&event);
+                                                                            }
+                                                                        });
                                                                     } />
                                                                 </label>
                                                                 <input type="text" aria-label=move || labels().switch_send prop:value=rule.from.clone() on:change=move |event| {
-                                                                    let mut rules = live_snapshot().config.replacement_rules;
-                                                                    if let Some(rule) = rules.get_mut(index) {
-                                                                        rule.from = event_target_value(&event);
-                                                                    }
-                                                                    patch_replacement_rules(on_live_patch, rules);
+                                                                    set_pending_rules.update(|rules| {
+                                                                        if let Some(rule) = rules.get_mut(index) {
+                                                                            rule.from = event_target_value(&event);
+                                                                        }
+                                                                    });
                                                                 } />
                                                                 <input type="text" aria-label=move || labels().switch_send prop:value=rule.to.clone() on:change=move |event| {
-                                                                    let mut rules = live_snapshot().config.replacement_rules;
-                                                                    if let Some(rule) = rules.get_mut(index) {
-                                                                        rule.to = event_target_value(&event);
-                                                                    }
-                                                                    patch_replacement_rules(on_live_patch, rules);
+                                                                    set_pending_rules.update(|rules| {
+                                                                        if let Some(rule) = rules.get_mut(index) {
+                                                                            rule.to = event_target_value(&event);
+                                                                        }
+                                                                    });
                                                                 } />
-                                                                <button class="secondary-button live-remove-button live-symbol-button" type="button" aria-label=move || labels().clear on:click=move |_| {
-                                                                    let mut rules = live_snapshot().config.replacement_rules;
-                                                                    if index < rules.len() {
-                                                                        rules.remove(index);
-                                                                    }
-                                                                    patch_replacement_rules(on_live_patch, rules);
-                                                                }>"x"</button>
+                                                                <button class="secondary-button live-remove-button" type="button" aria-label=move || labels().clear on:click=move |_| {
+                                                                    set_pending_rules.update(|rules| {
+                                                                        if index < rules.len() {
+                                                                            rules.remove(index);
+                                                                        }
+                                                                    });
+                                                                }>
+                                                                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                                                        <polyline points="3 6 5 6 21 6"></polyline>
+                                                                        <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                                                                    </svg>
+                                                                </button>
                                                             </div>
                                                         }
                                                         })
@@ -527,23 +549,33 @@ pub fn SettingsModal(
                                         <div class="live-subsection settings-span-2">
                                             <h4>{move || labels().danmu}</h4>
                                             <div class="live-list">
-                                                <For
-                                                    each=move || mapped_name_rows(live_snapshot())
-                                                    key=|(open_id, _, _)| open_id.clone()
-                                                    children=move |(open_id, original, mapped)| {
+                                                {move || {
+                                                    let snapshot = live_snapshot();
+                                                    let pending = pending_mapped.get();
+                                                    let mut rows = snapshot.config.original_unames
+                                                        .iter()
+                                                        .map(|(open_id, original)| {
+                                                            let mapped = pending.get(open_id).cloned().unwrap_or_else(|| original.clone());
+                                                            (open_id.clone(), original.clone(), mapped)
+                                                        })
+                                                        .collect::<Vec<_>>();
+                                                    for (open_id, mapped) in &pending {
+                                                        if !rows.iter().any(|(oid, _, _)| oid == open_id) {
+                                                            rows.push((open_id.clone(), open_id.clone(), mapped.clone()));
+                                                        }
+                                                    }
+                                                    rows.into_iter().map(|(open_id, original, mapped)| {
                                                         view! {
                                                             <div class="live-name-row">
                                                                 <code class="live-open-id">{open_id.clone()}</code>
                                                                 <span>{original}</span>
                                                                 <input type="text" aria-label=move || labels().danmu prop:value=mapped on:change=move |event| {
-                                                                    let mut mapped_unames = live_snapshot().config.mapped_unames;
-                                                                    mapped_unames.insert(open_id.clone(), event_target_value(&event));
-                                                                    patch_mapped_unames(on_live_patch, mapped_unames);
+                                                                    set_pending_mapped.update(|m| { m.insert(open_id.clone(), event_target_value(&event)); });
                                                                 } />
                                                             </div>
                                                         }
-                                                    }
-                                                />
+                                                    }).collect_view()
+                                                }}
                                             </div>
                                         </div>
                                     </div>
@@ -792,74 +824,4 @@ fn template_textarea(
             ></textarea>
         </label>
     }
-}
-
-fn patch_template(
-    live_snapshot: impl Fn() -> LiveSnapshot + Send + Sync + 'static + Copy,
-    on_live_patch: impl Fn(LiveConfigPatch) + Send + Sync + 'static + Copy,
-    update: impl FnOnce(&mut TemplateConfig),
-) {
-    let mut templates = live_snapshot().config.templates;
-    update(&mut templates);
-    on_live_patch(LiveConfigPatch {
-        templates: Some(templates),
-        ..LiveConfigPatch::default()
-    });
-}
-
-fn patch_replacement_rules(
-    on_live_patch: impl Fn(LiveConfigPatch) + Send + Sync + 'static + Copy,
-    replacement_rules: Vec<ReplacementRule>,
-) {
-    on_live_patch(LiveConfigPatch {
-        replacement_rules: Some(replacement_rules),
-        ..LiveConfigPatch::default()
-    });
-}
-
-fn patch_mapped_unames(
-    on_live_patch: impl Fn(LiveConfigPatch) + Send + Sync + 'static + Copy,
-    mapped_unames: BTreeMap<String, String>,
-) {
-    on_live_patch(LiveConfigPatch {
-        mapped_unames: Some(mapped_unames),
-        ..LiveConfigPatch::default()
-    });
-}
-
-fn replacement_rule_rows(snapshot: LiveSnapshot) -> Vec<(usize, ReplacementRule)> {
-    snapshot
-        .config
-        .replacement_rules
-        .into_iter()
-        .enumerate()
-        .collect()
-}
-
-fn mapped_name_rows(snapshot: LiveSnapshot) -> Vec<(String, String, String)> {
-    let mut rows = snapshot
-        .config
-        .original_unames
-        .iter()
-        .map(|(open_id, original)| {
-            let mapped = snapshot
-                .config
-                .mapped_unames
-                .get(open_id)
-                .cloned()
-                .unwrap_or_else(|| original.clone());
-            (open_id.clone(), original.clone(), mapped)
-        })
-        .collect::<Vec<_>>();
-
-    for (open_id, mapped) in snapshot.config.mapped_unames {
-        if !rows
-            .iter()
-            .any(|(existing_open_id, _, _)| existing_open_id == &open_id)
-        {
-            rows.push((open_id.clone(), open_id, mapped));
-        }
-    }
-
-    rows
 }
