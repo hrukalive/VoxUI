@@ -23,6 +23,7 @@ pub fn App() -> impl IntoView {
     let (load_open, set_load_open) = signal(false);
     let (load_percent, set_load_percent) = signal(0.0_f32);
     let (sidecar_ready, set_sidecar_ready) = signal(false);
+    let (sidecar_error, set_sidecar_error) = signal(None::<String>);
     let (load_error, set_load_error) = signal(None::<String>);
     let (live_error, set_live_error) = signal(None::<String>);
     let (snapshot, set_snapshot) = signal(Some(fallback_snapshot()));
@@ -33,6 +34,9 @@ pub fn App() -> impl IntoView {
     // Root component is mounted once; Tauri event listeners intentionally live for the app lifetime.
     spawn_local(async move {
         if let Ok(next_snapshot) = crate::tauri_api::get_app_state().await {
+            if let Some(error) = next_snapshot.sidecar_init_error.clone() {
+                set_sidecar_error.set(Some(error));
+            }
             set_snapshot.set(Some(next_snapshot));
         }
     });
@@ -479,6 +483,24 @@ pub fn App() -> impl IntoView {
                     />
                 }
             }}
+            {move || {
+                let labels = current_labels();
+                view! {
+                    <ErrorModal
+                        labels=labels
+                        open=move || sidecar_error.get().is_some()
+                        title=move || current_labels().sidecar_load_failed.to_string()
+                        message=move || sidecar_error.get().unwrap_or_default()
+                        danger=true
+                        on_close=move || {
+                            set_sidecar_error.set(None);
+                            spawn_local(async move {
+                                let _ = crate::tauri_api::exit_app().await;
+                            });
+                        }
+                    />
+                }
+            }}
         </div>
     }
     .into_any()
@@ -525,6 +547,7 @@ fn fallback_snapshot() -> AppSnapshot {
         },
         system_language: LanguageMode::English,
         cuda_available: false,
+        sidecar_init_error: None,
         models: Vec::new(),
         selected_model_id: None,
         loaded_model_id: None,

@@ -55,6 +55,7 @@ pub struct AppCore {
     active_playback: Option<ActivePlayback>,
     pending_auto_playback: VecDeque<String>,
     live: LiveState,
+    sidecar_init_error: Option<String>,
 }
 
 #[derive(Debug)]
@@ -127,6 +128,7 @@ impl AppCore {
             active_playback: None,
             pending_auto_playback: VecDeque::new(),
             live: LiveState::default(),
+            sidecar_init_error: None,
         })
     }
 
@@ -135,6 +137,7 @@ impl AppCore {
             config: self.config.clone(),
             system_language: crate::config::detect_system_language(),
             cuda_available: self.sidecar_capabilities.cuda_available,
+            sidecar_init_error: self.sidecar_init_error.clone(),
             models: self.models.clone(),
             selected_model_id: self.selected_model_id.clone(),
             loaded_model_id: self.loaded_model_id.clone(),
@@ -322,6 +325,10 @@ impl AppCore {
 
     pub fn set_config_path(&mut self, path: PathBuf) {
         self.config_path = Some(path);
+    }
+
+    pub fn set_sidecar_init_error(&mut self, error: String) {
+        self.sidecar_init_error = Some(error);
     }
 
     pub fn rescan_models(&mut self) -> Result<Vec<ModelChoice>> {

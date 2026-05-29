@@ -78,6 +78,7 @@ pub struct Labels {
     pub paid: &'static str,
     pub send: &'static str,
     pub switch_send: &'static str,
+    pub sidecar_load_failed: &'static str,
     pub about_text: &'static str,
 }
 
@@ -156,6 +157,7 @@ pub fn labels(language: UiLanguage) -> Labels {
             paid: "付费",
             send: "发送",
             switch_send: "人称替换",
+            sidecar_load_failed: "推理引擎启动失败",
             about_text: "由 久嘉 & OpenCode & Codex 编写。使用 GPLv3 许可证。以 VoxCPM Python 实现作为参考/上游。",
         },
         UiLanguage::English => Labels {
@@ -231,6 +233,7 @@ pub fn labels(language: UiLanguage) -> Labels {
             paid: "Paid",
             send: "Send",
             switch_send: "Switch pronouns",
+            sidecar_load_failed: "Fail to start inference engine",
             about_text: "由 久嘉 & OpenCode & Codex 编写。使用 GPLv3 许可证。以 VoxCPM Python 实现作为参考/上游。",
         },
     }

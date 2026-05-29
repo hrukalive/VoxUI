@@ -544,7 +544,6 @@ body:has(.live-monitor-shell) {
   align-self: stretch;
   min-width: 0;
   height: auto;
-  min-height: 74px;
   display: inline-flex;
   align-items: center;
   justify-content: center;

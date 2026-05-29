@@ -41,6 +41,7 @@ pub struct AppSnapshot {
     pub config: AppConfig,
     pub system_language: LanguageMode,
     pub cuda_available: bool,
+    pub sidecar_init_error: Option<String>,
     pub models: Vec<ModelChoice>,
     pub selected_model_id: Option<String>,
     pub loaded_model_id: Option<String>,
@@ -463,6 +464,10 @@ pub async fn send_live_suggestion(item_id: String, mode: String) -> Result<Comma
         .map_err(|err| err.to_string())?;
 
     command_result("send_live_suggestion", args).await
+}
+
+pub async fn exit_app() -> Result<CommandResult, String> {
+    command_result("exit_app", JsValue::NULL).await
 }
 
 pub async fn mock_live_message(kind: LiveMessageKind) -> Result<LiveSnapshot, String> {

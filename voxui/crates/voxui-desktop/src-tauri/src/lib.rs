@@ -29,8 +29,11 @@ pub fn run() {
         .manage(Arc::new(Mutex::new(core)))
         .setup(|app| {
             let shared = app.state::<Arc<Mutex<AppCore>>>().inner().clone();
-            if let Err(error) = commands::initialize_sidecar(app.handle(), shared) {
+            if let Err(error) = commands::initialize_sidecar(app.handle(), shared.clone()) {
                 tracing::warn!("failed to initialize inference sidecar: {error}");
+                if let Ok(mut core) = shared.lock() {
+                    core.set_sidecar_init_error(error.to_string());
+                }
             }
             Ok(())
         })
@@ -65,6 +68,7 @@ pub fn run() {
             commands::cancel_generation,
             commands::play_audio,
             commands::stop_audio,
+            commands::exit_app,
         ])
         .build(tauri::generate_context!())
         .expect("failed to build AhanSays desktop app")
