@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use app_core::AppCore;
@@ -104,6 +104,21 @@ fn close_request_handling(window_label: &str) -> CloseRequestHandling {
     }
 }
 
+fn runtime_config_path() -> PathBuf {
+    std::env::current_exe()
+        .ok()
+        .and_then(|exe| config_path_next_to_exe(&exe))
+        .unwrap_or_else(|| {
+            std::env::current_dir()
+                .unwrap_or_else(|_| std::env::temp_dir())
+                .join("voxui_config.json")
+        })
+}
+
+fn config_path_next_to_exe(exe_path: &Path) -> Option<PathBuf> {
+    exe_path.parent().map(crate::config::default_config_path)
+}
+
 fn init_tracing() {
     let filter = tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
         tracing_subscriber::EnvFilter::new(
@@ -115,7 +130,9 @@ fn init_tracing() {
 
 #[cfg(test)]
 mod tests {
-    use super::{close_request_handling, CloseRequestHandling};
+    use std::path::{Path, PathBuf};
+
+    use super::{close_request_handling, config_path_next_to_exe, CloseRequestHandling};
 
     #[test]
     fn live_monitor_close_is_not_intercepted() {
@@ -132,13 +149,18 @@ mod tests {
             CloseRequestHandling::ShutdownApp
         );
     }
+
+    #[test]
+    fn runtime_config_path_is_next_to_executable() {
+        assert_eq!(
+            config_path_next_to_exe(Path::new("D:/Apps/AhanSays/AhanSays.exe")),
+            Some(PathBuf::from("D:/Apps/AhanSays/voxui_config.json"))
+        );
+    }
 }
 
 fn startup_config() -> (AppConfig, bool, PathBuf) {
-    let config_dir = dirs::config_dir()
-        .unwrap_or_else(|| std::env::temp_dir())
-        .join("AhanSays");
-    let config_path = crate::config::default_config_path(&config_dir);
+    let config_path = runtime_config_path();
     let loaded = match crate::config::load_config_with_metadata(&config_path) {
         Ok(loaded) => loaded,
         Err(error) => {

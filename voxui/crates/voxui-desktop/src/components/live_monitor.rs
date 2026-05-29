@@ -7,86 +7,22 @@ use wasm_bindgen::JsCast;
 
 use crate::components::controls::{CustomSelect, SelectOption};
 use crate::i18n::Labels;
-use crate::tauri_api::{LiveConfig, LiveMessageKind, LiveMonitorItem, LiveSnapshot, LiveStatus};
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum LiveClickMode {
-    Manual,
-    AutoEnqueue,
-}
-
-impl LiveClickMode {
-    fn value(self) -> &'static str {
-        match self {
-            Self::Manual => "manual",
-            Self::AutoEnqueue => "auto_enqueue",
-        }
-    }
-
-    fn from_value(value: &str) -> Self {
-        match value {
-            "auto_enqueue" => Self::AutoEnqueue,
-            _ => Self::Manual,
-        }
-    }
-
-    fn label(self, labels: Labels) -> &'static str {
-        match self {
-            Self::Manual => labels.send_mode_manual,
-            Self::AutoEnqueue => labels.send_mode_auto_enqueue,
-        }
-    }
-
-    fn direct_enqueue_on_click(self) -> bool {
-        matches!(self, Self::AutoEnqueue)
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum LiveAutoGenMode {
-    None,
-    Normal,
-    Replacement,
-}
-
-impl LiveAutoGenMode {
-    fn value(self) -> &'static str {
-        match self {
-            Self::None => "none",
-            Self::Normal => "auto_gen",
-            Self::Replacement => "auto_gen_replacement",
-        }
-    }
-
-    fn from_value(value: &str) -> Self {
-        match value {
-            "auto_gen" => Self::Normal,
-            "auto_gen_replacement" => Self::Replacement,
-            _ => Self::None,
-        }
-    }
-
-    fn label(self, labels: Labels) -> &'static str {
-        match self {
-            Self::None => labels.auto_gen_mode_none,
-            Self::Normal => labels.auto_gen_mode_normal,
-            Self::Replacement => labels.auto_gen_mode_replacement,
-        }
-    }
-}
+use crate::tauri_api::{
+    AutoGenMode, LiveConfig, LiveConfigPatch, LiveMessageKind, LiveMonitorItem, LiveSnapshot,
+    LiveStatus, SendMode,
+};
 
 #[component]
 pub fn LiveMonitor(
     labels: impl Fn() -> Labels + Send + Sync + 'static + Copy,
     snapshot: impl Fn() -> LiveSnapshot + Send + Sync + 'static + Copy,
+    on_live_patch: impl Fn(LiveConfigPatch) + Send + Sync + 'static + Copy,
     on_send: impl Fn(String, bool, bool) + Send + Sync + 'static + Copy,
     on_clear: impl Fn() + Send + Sync + 'static + Copy,
 ) -> impl IntoView {
     let feed_ref = NodeRef::<Div>::new();
     let (was_near_bottom, set_was_near_bottom) = signal(true);
     let (previous_item_count, set_previous_item_count) = signal(0_usize);
-    let (click_mode, set_click_mode) = signal(LiveClickMode::Manual);
-    let (auto_gen_mode, set_auto_gen_mode) = signal(LiveAutoGenMode::None);
     let (_seen_item_ids, set_seen_item_ids) = signal(HashSet::<String>::new());
     let (status_notice, set_status_notice) = signal(None::<String>);
     let (status_notice_generation, set_status_notice_generation) = signal(0_u64);
@@ -133,8 +69,8 @@ pub fn LiveMonitor(
     });
 
     Effect::new(move |_| {
-        let mode = auto_gen_mode.get();
         let snapshot = snapshot();
+        let mode = snapshot.config.auto_gen_mode;
         let mut pending = Vec::new();
 
         set_seen_item_ids.update(|seen| {
@@ -165,21 +101,27 @@ pub fn LiveMonitor(
                     <CustomSelect
                         class="live-send-mode-select"
                         aria_label=labels().send_mode
-                        value=move || click_mode.get().value().to_string()
-                        options=move || live_click_mode_options(labels())
+                        value=move || snapshot().config.send_mode.value().to_string()
+                        options=move || live_send_mode_options(labels())
                         disabled=move || false
                         on_change=move |value| {
-                            set_click_mode.set(LiveClickMode::from_value(&value));
+                            on_live_patch(LiveConfigPatch {
+                                send_mode: Some(SendMode::from_value(&value)),
+                                ..LiveConfigPatch::default()
+                            });
                         }
                     />
                     <CustomSelect
                         class="live-auto-gen-mode-select"
                         aria_label=labels().auto_gen_mode
-                        value=move || auto_gen_mode.get().value().to_string()
+                        value=move || snapshot().config.auto_gen_mode.value().to_string()
                         options=move || live_auto_gen_mode_options(labels())
                         disabled=move || false
                         on_change=move |value| {
-                            set_auto_gen_mode.set(LiveAutoGenMode::from_value(&value));
+                            on_live_patch(LiveConfigPatch {
+                                auto_gen_mode: Some(AutoGenMode::from_value(&value)),
+                                ..LiveConfigPatch::default()
+                            });
                         }
                     />
                     <button
@@ -234,7 +176,10 @@ pub fn LiveMonitor(
                                             on_send(
                                                 item_id_for_switch.clone(),
                                                 true,
-                                                click_mode.get_untracked().direct_enqueue_on_click(),
+                                                snapshot()
+                                                    .config
+                                                    .send_mode
+                                                    .direct_enqueue_on_click(),
                                             )
                                         }
                                     >
@@ -262,7 +207,7 @@ pub fn LiveMonitor(
                                     class="live-item-actions"
                                     class:live-item-actions-hidden=move || {
                                         auto_generation_switch(
-                                            auto_gen_mode.get(),
+                                            snapshot().config.auto_gen_mode,
                                             kind,
                                             &snapshot().config,
                                         )
@@ -278,7 +223,10 @@ pub fn LiveMonitor(
                                             on_send(
                                                 item_id_for_send.clone(),
                                                 false,
-                                                click_mode.get_untracked().direct_enqueue_on_click(),
+                                                snapshot()
+                                                    .config
+                                                    .send_mode
+                                                    .direct_enqueue_on_click(),
                                             )
                                         }
                                     >
@@ -310,7 +258,7 @@ fn kind_label(kind: LiveMessageKind, labels: Labels) -> &'static str {
 }
 
 fn auto_generation_switch(
-    mode: LiveAutoGenMode,
+    mode: AutoGenMode,
     kind: LiveMessageKind,
     config: &LiveConfig,
 ) -> Option<bool> {
@@ -319,9 +267,9 @@ fn auto_generation_switch(
     }
 
     match mode {
-        LiveAutoGenMode::None => None,
-        LiveAutoGenMode::Normal => Some(false),
-        LiveAutoGenMode::Replacement => Some(live_item_supports_switch(kind)),
+        AutoGenMode::None => None,
+        AutoGenMode::Normal => Some(false),
+        AutoGenMode::Replacement => Some(live_item_supports_switch(kind)),
     }
 }
 
@@ -340,8 +288,8 @@ fn live_item_auto_gen_enabled(kind: LiveMessageKind, config: &LiveConfig) -> boo
     }
 }
 
-fn live_click_mode_options(labels: Labels) -> Vec<SelectOption> {
-    [LiveClickMode::Manual, LiveClickMode::AutoEnqueue]
+fn live_send_mode_options(labels: Labels) -> Vec<SelectOption> {
+    [SendMode::Manual, SendMode::AutoEnqueue]
         .into_iter()
         .map(|mode| SelectOption::new(mode.value(), mode.label(labels)))
         .collect()
@@ -349,9 +297,9 @@ fn live_click_mode_options(labels: Labels) -> Vec<SelectOption> {
 
 fn live_auto_gen_mode_options(labels: Labels) -> Vec<SelectOption> {
     [
-        LiveAutoGenMode::None,
-        LiveAutoGenMode::Normal,
-        LiveAutoGenMode::Replacement,
+        AutoGenMode::None,
+        AutoGenMode::Normal,
+        AutoGenMode::Replacement,
     ]
     .into_iter()
     .map(|mode| SelectOption::new(mode.value(), mode.label(labels)))
@@ -534,28 +482,25 @@ mod tests {
     }
 
     #[test]
-    fn live_click_mode_values_round_trip() {
-        for mode in [LiveClickMode::Manual, LiveClickMode::AutoEnqueue] {
-            assert_eq!(LiveClickMode::from_value(mode.value()), mode);
+    fn live_send_mode_values_round_trip() {
+        for mode in [SendMode::Manual, SendMode::AutoEnqueue] {
+            assert_eq!(SendMode::from_value(mode.value()), mode);
         }
-        assert_eq!(LiveClickMode::from_value("unknown"), LiveClickMode::Manual);
-        assert!(!LiveClickMode::Manual.direct_enqueue_on_click());
-        assert!(LiveClickMode::AutoEnqueue.direct_enqueue_on_click());
+        assert_eq!(SendMode::from_value("unknown"), SendMode::Manual);
+        assert!(!SendMode::Manual.direct_enqueue_on_click());
+        assert!(SendMode::AutoEnqueue.direct_enqueue_on_click());
     }
 
     #[test]
     fn live_auto_gen_mode_values_round_trip() {
         for mode in [
-            LiveAutoGenMode::None,
-            LiveAutoGenMode::Normal,
-            LiveAutoGenMode::Replacement,
+            AutoGenMode::None,
+            AutoGenMode::Normal,
+            AutoGenMode::Replacement,
         ] {
-            assert_eq!(LiveAutoGenMode::from_value(mode.value()), mode);
+            assert_eq!(AutoGenMode::from_value(mode.value()), mode);
         }
-        assert_eq!(
-            LiveAutoGenMode::from_value("unknown"),
-            LiveAutoGenMode::None
-        );
+        assert_eq!(AutoGenMode::from_value("unknown"), AutoGenMode::None);
     }
 
     #[test]
@@ -564,35 +509,31 @@ mod tests {
         config.auto_gen_danmu = true;
 
         assert_eq!(
-            auto_generation_switch(LiveAutoGenMode::None, LiveMessageKind::Danmu, &config),
+            auto_generation_switch(AutoGenMode::None, LiveMessageKind::Danmu, &config),
             None
         );
         assert_eq!(
-            auto_generation_switch(LiveAutoGenMode::Normal, LiveMessageKind::Danmu, &config),
+            auto_generation_switch(AutoGenMode::Normal, LiveMessageKind::Danmu, &config),
             Some(false)
         );
         assert_eq!(
-            auto_generation_switch(
-                LiveAutoGenMode::Replacement,
-                LiveMessageKind::Danmu,
-                &config
-            ),
+            auto_generation_switch(AutoGenMode::Replacement, LiveMessageKind::Danmu, &config),
             Some(true)
         );
         assert_eq!(
-            auto_generation_switch(LiveAutoGenMode::Replacement, LiveMessageKind::Gift, &config),
+            auto_generation_switch(AutoGenMode::Replacement, LiveMessageKind::Gift, &config),
             Some(false)
         );
 
         config.auto_gen_danmu = false;
         assert_eq!(
-            auto_generation_switch(LiveAutoGenMode::Normal, LiveMessageKind::Danmu, &config),
+            auto_generation_switch(AutoGenMode::Normal, LiveMessageKind::Danmu, &config),
             None
         );
 
         config.auto_gen_gifts = false;
         assert_eq!(
-            auto_generation_switch(LiveAutoGenMode::Replacement, LiveMessageKind::Gift, &config),
+            auto_generation_switch(AutoGenMode::Replacement, LiveMessageKind::Gift, &config),
             None
         );
     }
@@ -637,6 +578,8 @@ mod tests {
             show_guards: true,
             show_likes: true,
             show_enters: true,
+            send_mode: SendMode::Manual,
+            auto_gen_mode: AutoGenMode::None,
             auto_gen_danmu: false,
             auto_gen_gifts: true,
             auto_gen_superchats: true,

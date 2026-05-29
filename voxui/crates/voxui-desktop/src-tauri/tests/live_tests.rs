@@ -6,8 +6,8 @@ use voxui_desktop::live::{
     parse_live_event, render_suggestion, switch_text, LiveLanguage, SuggestionMode,
 };
 use voxui_desktop::types::{
-    AppConfig, LanguageMode, LiveConfigPatch, LiveMessageKind, LiveStatus, ReplacementRule,
-    TemplateConfig,
+    AppConfig, AutoGenMode, LanguageMode, LiveConfigPatch, LiveMessageKind, LiveStatus,
+    ReplacementRule, SendMode, TemplateConfig,
 };
 
 #[test]
@@ -22,6 +22,8 @@ fn live_config_defaults_match_bilibili_monitor_spec() {
     assert!(live.show_guards);
     assert!(!live.show_likes);
     assert!(live.show_enters);
+    assert_eq!(live.send_mode, SendMode::Manual);
+    assert_eq!(live.auto_gen_mode, AutoGenMode::None);
     assert!(!live.auto_gen_danmu);
     assert!(live.auto_gen_gifts);
     assert!(live.auto_gen_superchats);
@@ -65,6 +67,8 @@ fn old_config_json_deserializes_with_live_defaults() {
 
     assert_eq!(decoded.max_input_chars, 123);
     assert!(decoded.live.show_danmu);
+    assert_eq!(decoded.live.send_mode, SendMode::Manual);
+    assert_eq!(decoded.live.auto_gen_mode, AutoGenMode::None);
     assert!(!decoded.live.auto_gen_danmu);
     assert!(decoded.live.auto_gen_gifts);
     assert!(!decoded.live.enable_ceve_server_heartbeat);

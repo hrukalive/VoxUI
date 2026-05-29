@@ -101,6 +101,33 @@ pub enum LiveStatus {
     Error,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SendMode {
+    Manual,
+    AutoEnqueue,
+}
+
+impl Default for SendMode {
+    fn default() -> Self {
+        Self::Manual
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AutoGenMode {
+    None,
+    Normal,
+    Replacement,
+}
+
+impl Default for AutoGenMode {
+    fn default() -> Self {
+        Self::None
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ReplacementRule {
@@ -164,6 +191,8 @@ pub struct LiveConfig {
     pub show_guards: bool,
     pub show_likes: bool,
     pub show_enters: bool,
+    pub send_mode: SendMode,
+    pub auto_gen_mode: AutoGenMode,
     pub auto_gen_danmu: bool,
     pub auto_gen_gifts: bool,
     pub auto_gen_superchats: bool,
@@ -187,6 +216,8 @@ impl Default for LiveConfig {
             show_guards: true,
             show_likes: false,
             show_enters: true,
+            send_mode: SendMode::Manual,
+            auto_gen_mode: AutoGenMode::None,
             auto_gen_danmu: false,
             auto_gen_gifts: true,
             auto_gen_superchats: true,
@@ -265,6 +296,10 @@ pub struct LiveConfigPatch {
     pub show_likes: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub show_enters: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub send_mode: Option<SendMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_gen_mode: Option<AutoGenMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto_gen_danmu: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

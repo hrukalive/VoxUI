@@ -253,6 +253,12 @@ impl AppCore {
         if let Some(show_enters) = patch.show_enters {
             self.config.live.show_enters = show_enters;
         }
+        if let Some(send_mode) = patch.send_mode {
+            self.config.live.send_mode = send_mode;
+        }
+        if let Some(auto_gen_mode) = patch.auto_gen_mode {
+            self.config.live.auto_gen_mode = auto_gen_mode;
+        }
         if let Some(auto_gen_danmu) = patch.auto_gen_danmu {
             self.config.live.auto_gen_danmu = auto_gen_danmu;
         }

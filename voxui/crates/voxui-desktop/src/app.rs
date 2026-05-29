@@ -10,10 +10,11 @@ use crate::components::load_progress_modal::LoadProgressModal;
 use crate::components::settings_modal::{SettingsModal, SettingsPage};
 use crate::i18n::{labels, UiLanguage};
 use crate::tauri_api::{
-    AppConfig, AppSnapshot, AudioState, BackendKind, ConfigPatch, GenerationDoneEvent,
+    AppConfig, AppSnapshot, AudioState, AutoGenMode, BackendKind, ConfigPatch, GenerationDoneEvent,
     GenerationProgressEvent, GenerationSettings, HistoryStatus, LanguageMode, LiveConfig,
     LiveConfigPatch, LiveSnapshot, LiveStatus, LoadUiState, ModelLoadDoneEvent,
-    ModelLoadProgressEvent, PlaybackStateEvent, ReplacementRule, TemplateConfig, ThemeMode,
+    ModelLoadProgressEvent, PlaybackStateEvent, ReplacementRule, SendMode, TemplateConfig,
+    ThemeMode,
 };
 
 #[component]
@@ -191,6 +192,7 @@ pub fn App() -> impl IntoView {
                 <LiveMonitor
                     labels=current_labels
                     snapshot=move || live_snapshot.get()
+                    on_live_patch=commit_live_patch
                     on_send=move |item_id, switch, enqueue_direct| {
                         spawn_local(async move {
                             let mode = if switch { "switch" } else { "normal" }.to_string();
@@ -569,6 +571,8 @@ fn fallback_live_config() -> LiveConfig {
         show_guards: true,
         show_likes: false,
         show_enters: true,
+        send_mode: SendMode::Manual,
+        auto_gen_mode: AutoGenMode::None,
         auto_gen_danmu: false,
         auto_gen_gifts: true,
         auto_gen_superchats: true,
@@ -697,6 +701,12 @@ fn apply_live_optimistic_patch(snapshot: &mut LiveSnapshot, patch: &LiveConfigPa
     }
     if let Some(show_enters) = patch.show_enters {
         snapshot.config.show_enters = show_enters;
+    }
+    if let Some(send_mode) = patch.send_mode {
+        snapshot.config.send_mode = send_mode;
+    }
+    if let Some(auto_gen_mode) = patch.auto_gen_mode {
+        snapshot.config.auto_gen_mode = auto_gen_mode;
     }
     if let Some(auto_gen_danmu) = patch.auto_gen_danmu {
         snapshot.config.auto_gen_danmu = auto_gen_danmu;

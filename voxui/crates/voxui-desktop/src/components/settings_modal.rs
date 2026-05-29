@@ -3,9 +3,9 @@ use leptos::prelude::*;
 use crate::components::controls::{CustomSelect, NumberCounter, SelectOption};
 use crate::i18n::{Labels, UiLanguage};
 use crate::tauri_api::{
-    AppConfig, AudioDevice, AudioHost, AudioState, BackendKind, ConfigPatch, GenerationSettings,
-    LanguageMode, LiveConfigPatch, LiveMessageKind, LiveSnapshot, LiveStatus, ReplacementRule,
-    ThemeMode,
+    AppConfig, AudioDevice, AudioHost, AudioState, AutoGenMode, BackendKind, ConfigPatch,
+    GenerationSettings, LanguageMode, LiveConfigPatch, LiveMessageKind, LiveSnapshot, LiveStatus,
+    ReplacementRule, SendMode, ThemeMode,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -400,6 +400,38 @@ pub fn SettingsModal(
                                             } />
                                             <span>{move || labels().ceve_heartbeat}</span>
                                         </label>
+                                        <label class="settings-field">
+                                            <span>{move || labels().send_mode}</span>
+                                            <CustomSelect
+                                                class="settings-select-control"
+                                                aria_label=labels().send_mode
+                                                value=move || live_snapshot().config.send_mode.value().to_string()
+                                                options=move || live_send_mode_options(labels())
+                                                disabled=move || false
+                                                on_change=move |value| {
+                                                    on_live_patch(LiveConfigPatch {
+                                                        send_mode: Some(SendMode::from_value(&value)),
+                                                        ..LiveConfigPatch::default()
+                                                    });
+                                                }
+                                            />
+                                        </label>
+                                        <label class="settings-field">
+                                            <span>{move || labels().auto_gen_mode}</span>
+                                            <CustomSelect
+                                                class="settings-select-control"
+                                                aria_label=labels().auto_gen_mode
+                                                value=move || live_snapshot().config.auto_gen_mode.value().to_string()
+                                                options=move || live_auto_gen_mode_options(labels())
+                                                disabled=move || false
+                                                on_change=move |value| {
+                                                    on_live_patch(LiveConfigPatch {
+                                                        auto_gen_mode: Some(AutoGenMode::from_value(&value)),
+                                                        ..LiveConfigPatch::default()
+                                                    });
+                                                }
+                                            />
+                                        </label>
                                         <div class="live-checkbox-grid settings-span-2">
                                             {move || {
                                                 let labels = labels();
@@ -789,6 +821,24 @@ fn parse_theme(value: &str) -> ThemeMode {
         "light" => ThemeMode::Light,
         _ => ThemeMode::Dark,
     }
+}
+
+fn live_send_mode_options(labels: Labels) -> Vec<SelectOption> {
+    [SendMode::Manual, SendMode::AutoEnqueue]
+        .into_iter()
+        .map(|mode| SelectOption::new(mode.value(), mode.label(labels)))
+        .collect()
+}
+
+fn live_auto_gen_mode_options(labels: Labels) -> Vec<SelectOption> {
+    [
+        AutoGenMode::None,
+        AutoGenMode::Normal,
+        AutoGenMode::Replacement,
+    ]
+    .into_iter()
+    .map(|mode| SelectOption::new(mode.value(), mode.label(labels)))
+    .collect()
 }
 
 fn language_value(language: LanguageMode) -> &'static str {

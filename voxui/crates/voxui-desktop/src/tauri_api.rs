@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 
+use crate::i18n::Labels;
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 
@@ -189,6 +190,86 @@ pub enum LiveMessageKind {
     Enter,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SendMode {
+    Manual,
+    AutoEnqueue,
+}
+
+impl SendMode {
+    pub fn value(self) -> &'static str {
+        match self {
+            Self::Manual => "manual",
+            Self::AutoEnqueue => "auto_enqueue",
+        }
+    }
+
+    pub fn from_value(value: &str) -> Self {
+        match value {
+            "auto_enqueue" => Self::AutoEnqueue,
+            _ => Self::Manual,
+        }
+    }
+
+    pub fn label(self, labels: Labels) -> &'static str {
+        match self {
+            Self::Manual => labels.send_mode_manual,
+            Self::AutoEnqueue => labels.send_mode_auto_enqueue,
+        }
+    }
+
+    pub fn direct_enqueue_on_click(self) -> bool {
+        matches!(self, Self::AutoEnqueue)
+    }
+}
+
+impl Default for SendMode {
+    fn default() -> Self {
+        Self::Manual
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AutoGenMode {
+    None,
+    Normal,
+    Replacement,
+}
+
+impl AutoGenMode {
+    pub fn value(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Normal => "auto_gen",
+            Self::Replacement => "auto_gen_replacement",
+        }
+    }
+
+    pub fn from_value(value: &str) -> Self {
+        match value {
+            "auto_gen" => Self::Normal,
+            "auto_gen_replacement" => Self::Replacement,
+            _ => Self::None,
+        }
+    }
+
+    pub fn label(self, labels: Labels) -> &'static str {
+        match self {
+            Self::None => labels.auto_gen_mode_none,
+            Self::Normal => labels.auto_gen_mode_normal,
+            Self::Replacement => labels.auto_gen_mode_replacement,
+        }
+    }
+}
+
+impl Default for AutoGenMode {
+    fn default() -> Self {
+        Self::None
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReplacementRule {
     pub enabled: bool,
@@ -221,6 +302,8 @@ pub struct LiveConfig {
     pub show_guards: bool,
     pub show_likes: bool,
     pub show_enters: bool,
+    pub send_mode: SendMode,
+    pub auto_gen_mode: AutoGenMode,
     pub auto_gen_danmu: bool,
     pub auto_gen_gifts: bool,
     pub auto_gen_superchats: bool,
@@ -251,6 +334,10 @@ pub struct LiveConfigPatch {
     pub show_likes: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub show_enters: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub send_mode: Option<SendMode>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auto_gen_mode: Option<AutoGenMode>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub auto_gen_danmu: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
