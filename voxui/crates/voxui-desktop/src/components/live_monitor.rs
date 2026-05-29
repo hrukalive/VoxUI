@@ -1,5 +1,7 @@
 use leptos::html::Div;
 use leptos::prelude::*;
+use wasm_bindgen::closure::Closure;
+use wasm_bindgen::JsCast;
 
 use crate::i18n::Labels;
 use crate::tauri_api::{LiveMessageKind, LiveSnapshot, LiveStatus};
@@ -14,6 +16,10 @@ pub fn LiveMonitor(
     let feed_ref = NodeRef::<Div>::new();
     let (was_near_bottom, set_was_near_bottom) = signal(true);
     let (previous_item_count, set_previous_item_count) = signal(0_usize);
+    let (status_notice, set_status_notice) = signal(None::<String>);
+    let (status_notice_generation, set_status_notice_generation) = signal(0_u64);
+    let (last_status_key, set_last_status_key) =
+        signal(Some((snapshot().status, snapshot().status_message.clone())));
 
     Effect::new(move |_| {
         let item_count = snapshot().items.len();
@@ -37,6 +43,23 @@ pub fn LiveMonitor(
         set_previous_item_count.set(item_count);
     });
 
+    Effect::new(move |_| {
+        let snapshot = snapshot();
+        let current_key = (snapshot.status, snapshot.status_message.clone());
+        if last_status_key.get_untracked() == Some(current_key.clone()) {
+            return;
+        }
+
+        set_last_status_key.set(Some(current_key));
+        set_status_notice.set(Some(status_text_parts(
+            snapshot.status,
+            snapshot.status_message.as_deref(),
+        )));
+        let generation = status_notice_generation.get_untracked().saturating_add(1);
+        set_status_notice_generation.set(generation);
+        schedule_status_notice_clear(set_status_notice, status_notice_generation, generation);
+    });
+
     view! {
         <section class="live-monitor-shell" aria-label=move || labels().live>
             <header class="live-monitor-header">
@@ -54,6 +77,11 @@ pub fn LiveMonitor(
                     {move || labels().clear}
                 </button>
             </header>
+            <Show when=move || status_notice.get().is_some()>
+                <div class="live-status-notice" role="status" aria-live="polite">
+                    {move || status_notice.get().unwrap_or_default()}
+                </div>
+            </Show>
 
             <div
                 class="live-feed"
@@ -187,6 +215,29 @@ fn distance_from_bottom(feed: &web_sys::HtmlElement) -> i32 {
 
 fn scroll_to_bottom(feed: &web_sys::HtmlElement) {
     feed.set_scroll_top(feed.scroll_height());
+}
+
+fn schedule_status_notice_clear(
+    set_status_notice: WriteSignal<Option<String>>,
+    status_notice_generation: ReadSignal<u64>,
+    generation: u64,
+) {
+    let Some(window) = web_sys::window() else {
+        set_status_notice.set(None);
+        return;
+    };
+
+    let callback = Closure::wrap(Box::new(move || {
+        if status_notice_generation.get_untracked() == generation {
+            set_status_notice.set(None);
+        }
+    }) as Box<dyn FnMut()>);
+
+    let _ = window.set_timeout_with_callback_and_timeout_and_arguments_0(
+        callback.as_ref().unchecked_ref(),
+        1800,
+    );
+    callback.forget();
 }
 
 #[cfg(test)]

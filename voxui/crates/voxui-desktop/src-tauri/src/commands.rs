@@ -3,6 +3,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
+use std::time::Duration;
 
 use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder, Window};
 use tauri_plugin_dialog::DialogExt;
@@ -651,7 +652,7 @@ fn handle_openblive_status(
             }
         }
         crate::types::LiveStatus::Disconnected | crate::types::LiveStatus::Error => {
-            close_live_monitor(app);
+            schedule_live_monitor_close(app.clone());
         }
         crate::types::LiveStatus::Connecting | crate::types::LiveStatus::Disconnecting => {}
     }
@@ -715,6 +716,17 @@ fn close_live_monitor(app: &AppHandle) {
             }
         }
     }
+}
+
+fn schedule_live_monitor_close(app: AppHandle) {
+    if app.get_webview_window("live-monitor").is_none() {
+        return;
+    }
+
+    let _ = spawn_background("voxui-live-monitor-close", move || {
+        thread::sleep(Duration::from_millis(2200));
+        close_live_monitor(&app);
+    });
 }
 
 fn send_sidecar_command(

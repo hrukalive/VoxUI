@@ -559,11 +559,27 @@ pub fn handle_websocket_binary(
     bytes: &[u8],
     on_event: &mut impl FnMut(serde_json::Value),
 ) -> anyhow::Result<()> {
-    for packet in unpack_packets(bytes)? {
+    let packets = unpack_packets(bytes)?;
+    tracing::debug!(
+        packet_count = packets.len(),
+        frame_len = bytes.len(),
+        "received OpenLive websocket binary frame"
+    );
+
+    for packet in packets {
         match packet.op {
             OP_MESSAGE => {
                 let value: Value = serde_json::from_slice(&packet.body)
                     .context("failed to decode OpenLive event JSON")?;
+                let cmd = value
+                    .get("cmd")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("<missing>");
+                tracing::debug!(
+                    cmd,
+                    body_len = packet.body.len(),
+                    "received OpenLive callback packet"
+                );
                 on_event(value);
             }
             OP_HEARTBEAT_REPLY | OP_AUTH_REPLY => {}
@@ -636,13 +652,14 @@ fn is_timeout(error: &io::Error) -> bool {
     )
 }
 
-fn sign_body(client: &Client, body: &Value) -> anyhow::Result<HeaderMap> {
+fn sign_body(client: &Client, openlive_path: &str, body: &Value) -> anyhow::Result<HeaderMap> {
     let compact_body = compact_json_body(body)?;
     let mut last_error = None;
 
     for url in SIGN_URLS {
         tracing::debug!(
             url,
+            path = openlive_path,
             request_body = %compact_body,
             "requesting OpenLive signature"
         );
@@ -668,6 +685,7 @@ fn sign_body(client: &Client, body: &Value) -> anyhow::Result<HeaderMap> {
             .with_context(|| format!("failed to read OpenLive signature response from {url}"))?;
         tracing::debug!(
             url,
+            path = openlive_path,
             status = %status,
             response = %response_text,
             "received OpenLive signature response"
@@ -688,6 +706,7 @@ fn sign_body(client: &Client, body: &Value) -> anyhow::Result<HeaderMap> {
             let header_names: Vec<_> = headers.keys().map(|name| name.as_str()).collect();
             tracing::debug!(
                 url,
+                path = openlive_path,
                 header_names = ?header_names,
                 "parsed OpenLive signature response"
             );
@@ -739,7 +758,7 @@ fn is_probable_header_name(key: &str) -> bool {
 }
 
 fn post_openlive(client: &Client, path: &str, body: &Value) -> anyhow::Result<Value> {
-    let headers = sign_body(client, body)?;
+    let headers = sign_body(client, path, body)?;
     let compact_body = compact_json_body(body)?;
     let url = format!("{HOST}{path}");
     let header_names: Vec<_> = headers.keys().map(|name| name.as_str()).collect();
@@ -790,14 +809,7 @@ fn post_openlive(client: &Client, path: &str, body: &Value) -> anyhow::Result<Va
 }
 
 fn start_app(client: &Client, identity_code: &str) -> anyhow::Result<Value> {
-    post_openlive(
-        client,
-        "/v2/app/start",
-        &serde_json::json!({
-            "code": identity_code,
-            "app_id": APP_ID,
-        }),
-    )
+    post_openlive(client, "/v2/app/start", &openlive_start_body(identity_code))
 }
 
 fn parse_start_game_id(data: &Value) -> anyhow::Result<String> {
@@ -836,7 +848,7 @@ fn heartbeat_app_once(client: &Client, game_id: &str) -> anyhow::Result<()> {
     post_openlive(
         client,
         "/v2/app/heartbeat",
-        &serde_json::json!({ "game_id": game_id }),
+        &openlive_heartbeat_body(game_id),
     )
     .map(|_| ())
 }
@@ -857,12 +869,27 @@ fn heartbeat_ceve_once(client: &Client, game_id: &str) -> anyhow::Result<()> {
 
 fn end_app_once(client: &Client, game_id: &str) -> anyhow::Result<()> {
     tracing::debug!(game_id, "ending OpenLive app");
-    post_openlive(
-        client,
-        "/v2/app/end",
-        &serde_json::json!({ "game_id": game_id }),
-    )
-    .map(|_| ())
+    post_openlive(client, "/v2/app/end", &openlive_end_body(game_id)).map(|_| ())
+}
+
+fn openlive_start_body(identity_code: &str) -> Value {
+    serde_json::json!({
+        "code": identity_code,
+        "app_id": APP_ID,
+    })
+}
+
+fn openlive_heartbeat_body(game_id: &str) -> Value {
+    serde_json::json!({
+        "game_id": game_id,
+    })
+}
+
+fn openlive_end_body(game_id: &str) -> Value {
+    serde_json::json!({
+        "game_id": game_id,
+        "app_id": APP_ID,
+    })
 }
 
 fn websocket_url(value: &Value) -> Option<String> {
@@ -1027,5 +1054,29 @@ mod tests {
         .unwrap();
 
         assert_eq!(result, Some(vec![expected]));
+    }
+
+    #[test]
+    fn openlive_request_bodies_match_python_reference_format() {
+        assert_eq!(
+            openlive_start_body("FDQ45WVIMXA81"),
+            json!({
+                "code": "FDQ45WVIMXA81",
+                "app_id": APP_ID,
+            })
+        );
+        assert_eq!(
+            openlive_heartbeat_body("game-1"),
+            json!({
+                "game_id": "game-1",
+            })
+        );
+        assert_eq!(
+            openlive_end_body("game-1"),
+            json!({
+                "game_id": "game-1",
+                "app_id": APP_ID,
+            })
+        );
     }
 }
