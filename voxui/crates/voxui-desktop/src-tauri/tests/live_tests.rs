@@ -27,11 +27,6 @@ fn live_config_defaults_match_bilibili_monitor_spec() {
         vec![
             ReplacementRule {
                 enabled: true,
-                from: "我的".to_string(),
-                to: "你的".to_string(),
-            },
-            ReplacementRule {
-                enabled: true,
                 from: "我".to_string(),
                 to: "你".to_string(),
             },

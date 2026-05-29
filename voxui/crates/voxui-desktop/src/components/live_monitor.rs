@@ -170,9 +170,9 @@ fn compact_send_label(labels: Labels) -> &'static str {
 
 fn compact_switch_label(labels: Labels) -> &'static str {
     if labels.switch_send == "人称替换" {
-        "替换发送"
+        "替换"
     } else {
-        "Replace Send"
+        "Replace"
     }
 }
 

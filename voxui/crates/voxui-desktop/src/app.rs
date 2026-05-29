@@ -303,48 +303,39 @@ pub fn App() -> impl IntoView {
                     />
                 }
             }}
-            {move || {
-                let snapshot = current_snapshot();
-                let labels = labels(ui_language(
-                    snapshot.config.language,
-                    snapshot.system_language,
-                ));
-                view! {
-                    <HistoryList
-                        labels=labels
-                        items=move || current_snapshot().history
-                        on_play=move |item_id| {
-                            spawn_local(async move {
-                                let is_playing = current_snapshot()
-                                    .history
-                                    .iter()
-                                    .any(|item| item.id == item_id && matches!(item.status, HistoryStatus::Playing));
-                                let result = if is_playing {
-                                    crate::tauri_api::stop_audio().await
-                                } else {
-                                    crate::tauri_api::play_audio(item_id).await
-                                };
-                                if result.is_ok() {
-                                    refresh_snapshot();
-                                }
-                            });
+            <HistoryList
+                labels=current_labels
+                items=move || current_snapshot().history
+                on_play=move |item_id| {
+                    spawn_local(async move {
+                        let is_playing = current_snapshot()
+                            .history
+                            .iter()
+                            .any(|item| item.id == item_id && matches!(item.status, HistoryStatus::Playing));
+                        let result = if is_playing {
+                            crate::tauri_api::stop_audio().await
+                        } else {
+                            crate::tauri_api::play_audio(item_id).await
+                        };
+                        if result.is_ok() {
+                            refresh_snapshot();
                         }
-                        on_regenerate=move |item_id| {
-                            spawn_local(async move {
-                                if crate::tauri_api::regenerate(item_id).await.is_ok() {
-                                    refresh_snapshot();
-                                }
-                            });
-                        }
-                        on_cancel=move |item_id| {
-                            spawn_local(async move {
-                                let _ = crate::tauri_api::cancel_generation(item_id).await;
-                                refresh_snapshot();
-                            });
-                        }
-                    />
+                    });
                 }
-            }}
+                on_regenerate=move |item_id| {
+                    spawn_local(async move {
+                        if crate::tauri_api::regenerate(item_id).await.is_ok() {
+                            refresh_snapshot();
+                        }
+                    });
+                }
+                on_cancel=move |item_id| {
+                    spawn_local(async move {
+                        let _ = crate::tauri_api::cancel_generation(item_id).await;
+                        refresh_snapshot();
+                    });
+                }
+            />
             <InputBox
                 labels=current_labels
                 max_chars=move || current_snapshot().config.max_input_chars
@@ -582,11 +573,6 @@ fn fallback_live_config() -> LiveConfig {
         replacement_rules: vec![
             ReplacementRule {
                 enabled: true,
-                from: "我的".to_string(),
-                to: "你的".to_string(),
-            },
-            ReplacementRule {
-                enabled: true,
                 from: "我".to_string(),
                 to: "你".to_string(),
             },
@@ -699,5 +685,19 @@ fn apply_live_optimistic_patch(snapshot: &mut LiveSnapshot, patch: &LiveConfigPa
     }
     if let Some(mapped_unames) = patch.mapped_unames.as_ref() {
         snapshot.config.mapped_unames = mapped_unames.clone();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn history_list_is_not_remounted_by_snapshot_refreshes() {
+        let source = include_str!("app.rs").replace("\r\n", "\n");
+        let snapshot_wrapped_history = "let snapshot = current_snapshot();\n                let labels = labels(ui_language(\n                    snapshot.config.language,\n                    snapshot.system_language,\n                ));\n                view! {\n                    <HistoryList";
+
+        assert!(
+            !source.contains(snapshot_wrapped_history),
+            "HistoryList must stay mounted across snapshot refreshes so progress updates do not reset its scroll state"
+        );
     }
 }
