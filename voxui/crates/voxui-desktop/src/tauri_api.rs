@@ -60,6 +60,7 @@ pub struct AppConfig {
     pub audio_device: Option<String>,
     pub volume: f32,
     pub max_input_chars: usize,
+    pub auto_period: bool,
     pub generation: GenerationSettings,
     pub live: LiveConfig,
 }
@@ -272,6 +273,11 @@ pub struct LiveSnapshot {
     pub items: Vec<LiveMonitorItem>,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LiveSuggestionResult {
+    pub text: String,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
 pub struct ConfigPatch {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -292,6 +298,8 @@ pub struct ConfigPatch {
     pub volume: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_input_chars: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auto_period: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub generation: Option<GenerationSettings>,
 }
@@ -383,6 +391,8 @@ struct LiveSuggestionArgs {
     #[serde(rename = "itemId")]
     item_id: String,
     mode: String,
+    #[serde(rename = "skipReplace")]
+    skip_replace: bool,
 }
 
 pub async fn get_app_state() -> Result<AppSnapshot, String> {
@@ -459,11 +469,23 @@ pub async fn disconnect_openblive() -> Result<LiveSnapshot, String> {
     serde_wasm_bindgen::from_value(value).map_err(|err| err.to_string())
 }
 
-pub async fn send_live_suggestion(item_id: String, mode: String) -> Result<CommandResult, String> {
-    let args = serde_wasm_bindgen::to_value(&LiveSuggestionArgs { item_id, mode })
-        .map_err(|err| err.to_string())?;
+pub async fn send_live_suggestion(
+    item_id: String,
+    mode: String,
+    skip_replace: bool,
+) -> Result<LiveSuggestionResult, String> {
+    let args = serde_wasm_bindgen::to_value(&LiveSuggestionArgs {
+        item_id,
+        mode,
+        skip_replace,
+    })
+    .map_err(|err| err.to_string())?;
 
-    command_result("send_live_suggestion", args).await
+    let value = invoke("send_live_suggestion", args)
+        .await
+        .map_err(stringify_js_error)?;
+
+    serde_wasm_bindgen::from_value(value).map_err(|err| err.to_string())
 }
 
 pub async fn exit_app() -> Result<CommandResult, String> {

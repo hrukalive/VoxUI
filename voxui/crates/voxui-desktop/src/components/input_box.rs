@@ -1,12 +1,14 @@
 use leptos::ev::SubmitEvent;
 use leptos::prelude::*;
 
-use crate::i18n::Labels;
+use crate::i18n::{Labels, UiLanguage};
 
 #[component]
 pub fn InputBox(
     labels: impl Fn() -> Labels + Send + Sync + 'static + Copy,
+    language: impl Fn() -> UiLanguage + Send + Sync + 'static + Copy,
     max_chars: impl Fn() -> usize + Send + Sync + 'static + Copy,
+    auto_period: impl Fn() -> bool + Send + Sync + 'static + Copy,
     disabled: impl Fn() -> bool + Send + Sync + 'static + Copy,
     replacement_text: impl Fn() -> Option<String> + Send + Sync + 'static + Copy,
     on_replacement_consumed: impl Fn() + Send + Sync + 'static + Copy,
@@ -20,8 +22,27 @@ pub fn InputBox(
     let submit = move |event: SubmitEvent| {
         event.prevent_default();
         if !generate_disabled() {
-            on_generate(text.get().trim().to_owned());
+            let raw = text.get().trim().to_owned();
+            let final_text = if auto_period() {
+                ensure_period(&raw, language())
+            } else {
+                raw
+            };
+            on_generate(final_text);
             set_text.set(String::new());
+        }
+
+        fn ensure_period(text: &str, language: UiLanguage) -> String {
+            let period = match language {
+                UiLanguage::Chinese => '。',
+                UiLanguage::English => '.',
+            };
+            let endings = ['?', '!', '.', '…', '？', '！', '。'];
+            if text.is_empty() || text.ends_with(&endings) {
+                text.to_string()
+            } else {
+                format!("{}{}", text, period)
+            }
         }
     };
 

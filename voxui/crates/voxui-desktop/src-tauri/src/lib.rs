@@ -37,14 +37,21 @@ pub fn run() {
             }
             Ok(())
         })
-        .on_window_event(|window, event| {
-            if window.label() == "main" && matches!(event, WindowEvent::CloseRequested { .. }) {
+        .on_window_event(|window, event| match event {
+            WindowEvent::CloseRequested { api, .. } if window.label() == "live-monitor" => {
+                api.prevent_close();
+                if let Err(error) = window.hide() {
+                    tracing::warn!("failed to hide live monitor window: {error}");
+                }
+            }
+            WindowEvent::CloseRequested { .. } if window.label() == "main" => {
                 let app = window.app_handle();
                 if let Some(monitor) = app.get_webview_window("live-monitor") {
-                    let _ = monitor.close();
+                    let _ = monitor.destroy();
                 }
                 commands::shutdown_live_worker_for_app_exit();
             }
+            _ => {}
         })
         .invoke_handler(tauri::generate_handler![
             commands::get_app_state,

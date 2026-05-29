@@ -48,7 +48,8 @@ impl SidecarProcess {
             const CREATE_NO_WINDOW: u32 = 0x08000000;
             cmd.creation_flags(CREATE_NO_WINDOW);
         }
-        let mut child = cmd.spawn()
+        let mut child = cmd
+            .spawn()
             .with_context(|| format!("spawn sidecar {}", sidecar_exe.display()))?;
         let stdin = child.stdin.take().context("sidecar stdin unavailable")?;
         let stdout = child.stdout.take().context("sidecar stdout unavailable")?;

@@ -191,10 +191,19 @@ pub fn App() -> impl IntoView {
                 <LiveMonitor
                     labels=current_labels
                     snapshot=move || live_snapshot.get()
-                    on_send=move |item_id, switch| {
+                    on_send=move |item_id, switch, auto_send| {
                         spawn_local(async move {
                             let mode = if switch { "switch" } else { "normal" }.to_string();
-                            let _ = crate::tauri_api::send_live_suggestion(item_id, mode).await;
+                            if auto_send {
+                                match crate::tauri_api::send_live_suggestion(item_id, mode, true).await {
+                                    Ok(result) => {
+                                        let _ = crate::tauri_api::enqueue_generation(result.text).await;
+                                    }
+                                    _ => {}
+                                }
+                            } else {
+                                let _ = crate::tauri_api::send_live_suggestion(item_id, mode, false).await;
+                            }
                         });
                     }
                     on_clear=move || {
@@ -338,7 +347,9 @@ pub fn App() -> impl IntoView {
             />
             <InputBox
                 labels=current_labels
+                language=current_ui_language
                 max_chars=move || current_snapshot().config.max_input_chars
+                auto_period=move || current_snapshot().config.auto_period
                 disabled=move || {
                     let snapshot = current_snapshot();
                     snapshot.loaded_model_id.is_none() || matches!(snapshot.load_state, LoadUiState::Loading)
@@ -520,6 +531,7 @@ fn fallback_snapshot() -> AppSnapshot {
             audio_device: None,
             volume: 0.8,
             max_input_chars: 280,
+            auto_period: true,
             generation: GenerationSettings {
                 cfg_value: 2.0,
                 inference_timesteps: 10,
@@ -642,6 +654,9 @@ fn apply_optimistic_patch(snapshot: &mut AppSnapshot, patch: &ConfigPatch) {
     }
     if let Some(max_input_chars) = patch.max_input_chars {
         snapshot.config.max_input_chars = max_input_chars.max(1);
+    }
+    if let Some(auto_period) = patch.auto_period {
+        snapshot.config.auto_period = auto_period;
     }
     if let Some(generation) = patch.generation.as_ref() {
         snapshot.config.generation = generation.clone();

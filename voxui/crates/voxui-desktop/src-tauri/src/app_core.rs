@@ -194,6 +194,9 @@ impl AppCore {
         if let Some(max_input_chars) = patch.max_input_chars {
             self.config.max_input_chars = max_input_chars.max(1);
         }
+        if let Some(auto_period) = patch.auto_period {
+            self.config.auto_period = auto_period;
+        }
         if let Some(mut generation) = patch.generation {
             normalize_generation_settings(&mut generation);
             self.config.generation = generation;
@@ -1140,6 +1143,7 @@ mod tests {
         let mut core = AppCore::from_config(AppConfig::default()).unwrap();
         let snapshot = core
             .apply_patch(ConfigPatch {
+                auto_period: None,
                 model_root: Some(Some(temp.path().to_path_buf())),
                 selected_model_id: None,
                 language: Some(LanguageMode::English),
@@ -1295,6 +1299,7 @@ mod tests {
 
         let snapshot = core
             .apply_patch(ConfigPatch {
+                auto_period: None,
                 model_root: Some(None),
                 selected_model_id: Some(None),
                 language: None,
@@ -1329,6 +1334,7 @@ mod tests {
 
         let snapshot = core
             .apply_patch(ConfigPatch {
+                auto_period: None,
                 model_root: None,
                 selected_model_id: Some(Some("missing".to_string())),
                 language: None,

@@ -3,6 +3,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
+use std::time::Duration;
 
 use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder, Window};
 use tauri_plugin_dialog::DialogExt;
@@ -27,6 +28,7 @@ static SIDECAR_PROCESS: OnceLock<Mutex<Option<SidecarProcess>>> = OnceLock::new(
 static LIVE_WORKER: OnceLock<Mutex<Option<LiveWorkerHandle>>> = OnceLock::new();
 static STREAMING_PLAYERS: OnceLock<Mutex<HashMap<String, mpsc::Sender<StreamingPlaybackCommand>>>> =
     OnceLock::new();
+const LIVE_WORKER_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(3);
 
 struct LiveWorkerHandle {
     stop: Arc<AtomicBool>,
@@ -39,9 +41,12 @@ impl LiveWorkerHandle {
         self.stop.store(true, Ordering::SeqCst);
     }
 
-    fn request_stop_and_wait(self) {
+    fn request_stop_and_wait(self, timeout: Duration) -> bool {
         self.request_stop();
-        let _ = self.done.recv();
+        match self.done.recv_timeout(timeout) {
+            Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => true,
+            Err(mpsc::RecvTimeoutError::Timeout) => false,
+        }
     }
 
     fn start_worker(&self) -> Result<(), String> {
@@ -128,7 +133,8 @@ pub fn mock_live_message(
     };
     let event = crate::live::create_mock_live_event(kind).map_err(|e| e.to_string())?;
     let snapshot = with_core(state, |core| {
-        core.add_live_event(event).map(|_| core.live_snapshot_for_current_language())
+        core.add_live_event(event)
+            .map(|_| core.live_snapshot_for_current_language())
     })?;
     emit_live_snapshot(&app, "live_items_changed", &snapshot);
     Ok(snapshot)
@@ -281,7 +287,8 @@ pub fn send_live_suggestion(
     state: State<'_, SharedAppCore>,
     item_id: String,
     mode: String,
-) -> Result<CommandResult, String> {
+    skip_replace: bool,
+) -> Result<crate::types::LiveSuggestionResult, String> {
     let mode = match mode.as_str() {
         "normal" => crate::live::SuggestionMode::Normal,
         "switch" => crate::live::SuggestionMode::Switch,
@@ -291,15 +298,17 @@ pub fn send_live_suggestion(
         core.live_suggestion_for_item_current_language(&item_id, mode)
             .ok_or_else(|| anyhow::anyhow!("live item is unavailable or filtered: {item_id}"))
     })?;
-    let event = MainInputReplaceEvent { text };
-    if let Some(main) = app.get_webview_window("main") {
-        main.emit("main_input_replace", event)
-            .map_err(|error| error.to_string())?;
-    } else {
-        app.emit("main_input_replace", event)
-            .map_err(|error| error.to_string())?;
+    if !skip_replace {
+        let event = MainInputReplaceEvent { text: text.clone() };
+        if let Some(main) = app.get_webview_window("main") {
+            main.emit("main_input_replace", event)
+                .map_err(|error| error.to_string())?;
+        } else {
+            app.emit("main_input_replace", event)
+                .map_err(|error| error.to_string())?;
+        }
     }
-    Ok(CommandResult { ok: true })
+    Ok(crate::types::LiveSuggestionResult { text })
 }
 
 #[tauri::command]
@@ -610,7 +619,12 @@ pub fn shutdown_live_worker_for_app_exit() {
         Err(_) => return,
     };
     if let Some(handle) = handle {
-        handle.request_stop_and_wait();
+        if !handle.request_stop_and_wait(LIVE_WORKER_SHUTDOWN_TIMEOUT) {
+            tracing::warn!(
+                timeout_ms = LIVE_WORKER_SHUTDOWN_TIMEOUT.as_millis(),
+                "OpenLive worker did not stop before app exit timeout"
+            );
+        }
     }
 }
 
@@ -632,8 +646,10 @@ fn handle_openblive_status(
                 tracing::warn!("failed to show live monitor window: {error}");
             }
         }
-        crate::types::LiveStatus::Connecting | crate::types::LiveStatus::Disconnecting
-            | crate::types::LiveStatus::Disconnected | crate::types::LiveStatus::Error => {}
+        crate::types::LiveStatus::Connecting
+        | crate::types::LiveStatus::Disconnecting
+        | crate::types::LiveStatus::Disconnected
+        | crate::types::LiveStatus::Error => {}
     }
 }
 
@@ -1464,7 +1480,6 @@ mod tests {
         assert_eq!(receiver.recv_timeout(Duration::from_secs(2)).unwrap(), 42);
     }
 
-
     #[test]
     fn live_worker_start_gate_blocks_until_slot_registration_signal() {
         let (start_sender, start_receiver) = mpsc::channel();
@@ -1484,5 +1499,20 @@ mod tests {
             Ok(())
         );
         worker.join().unwrap();
+    }
+
+    #[test]
+    fn live_worker_shutdown_wait_is_bounded() {
+        let stop = Arc::new(AtomicBool::new(false));
+        let (_done_sender, done_receiver) = mpsc::channel();
+        let (start_sender, _start_receiver) = mpsc::channel();
+        let handle = LiveWorkerHandle {
+            stop: stop.clone(),
+            done: done_receiver,
+            start: start_sender,
+        };
+
+        assert!(!handle.request_stop_and_wait(Duration::from_millis(1)));
+        assert!(stop.load(Ordering::SeqCst));
     }
 }

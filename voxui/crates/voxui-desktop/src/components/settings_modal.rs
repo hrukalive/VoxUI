@@ -149,6 +149,12 @@ pub fn SettingsModal(
                                                 }
                                             />
                                         </label>
+                                        <label class="settings-checkbox settings-switch" for="settings-auto-period">
+                                            <input id="settings-auto-period" type="checkbox" prop:checked=move || config().auto_period on:change=move |event| {
+                                                on_config_patch(ConfigPatch { auto_period: Some(event_target_checked(&event)), ..ConfigPatch::default() });
+                                            } />
+                                            <span>{move || labels().auto_period}</span>
+                                        </label>
                                     </div>
                                 </section>
                             </Show>
@@ -787,22 +793,10 @@ fn parse_usize(value: &str, fallback: usize) -> usize {
 
 fn live_status_label(labels: Labels, status: LiveStatus) -> &'static str {
     match status {
-        LiveStatus::Disconnected => match labels.english {
-            "English" => "Disconnected",
-            _ => "未连接",
-        },
-        LiveStatus::Connecting => match labels.english {
-            "English" => "Connecting",
-            _ => "连接中",
-        },
-        LiveStatus::Connected => match labels.english {
-            "English" => "Connected",
-            _ => "已连接",
-        },
-        LiveStatus::Disconnecting => match labels.english {
-            "English" => "Disconnecting",
-            _ => "断开中",
-        },
+        LiveStatus::Disconnected => labels.status_disconnected,
+        LiveStatus::Connecting => labels.status_connecting,
+        LiveStatus::Connected => labels.status_connected,
+        LiveStatus::Disconnecting => labels.status_disconnecting,
         LiveStatus::Error => labels.history_status_failed,
     }
 }

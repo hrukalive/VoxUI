@@ -10,12 +10,13 @@ use crate::tauri_api::{LiveMessageKind, LiveMonitorItem, LiveSnapshot, LiveStatu
 pub fn LiveMonitor(
     labels: impl Fn() -> Labels + Send + Sync + 'static + Copy,
     snapshot: impl Fn() -> LiveSnapshot + Send + Sync + 'static + Copy,
-    on_send: impl Fn(String, bool) + Send + Sync + 'static + Copy,
+    on_send: impl Fn(String, bool, bool) + Send + Sync + 'static + Copy,
     on_clear: impl Fn() + Send + Sync + 'static + Copy,
 ) -> impl IntoView {
     let feed_ref = NodeRef::<Div>::new();
     let (was_near_bottom, set_was_near_bottom) = signal(true);
     let (previous_item_count, set_previous_item_count) = signal(0_usize);
+    let (auto_send, set_auto_send) = signal(false);
     let (status_notice, set_status_notice) = signal(None::<String>);
     let (status_notice_generation, set_status_notice_generation) = signal(0_u64);
     let (last_status_key, set_last_status_key) = signal(None::<(LiveStatus, Option<String>)>);
@@ -54,10 +55,7 @@ pub fn LiveMonitor(
         if previous_key.is_none() {
             return;
         }
-        set_status_notice.set(Some(status_text_parts(
-            snapshot.status,
-            snapshot.status_message.as_deref(),
-        )));
+        set_status_notice.set(Some(status_text(&snapshot, labels())));
         let generation = status_notice_generation.get_untracked().saturating_add(1);
         set_status_notice_generation.set(generation);
         schedule_status_notice_clear(set_status_notice, status_notice_generation, generation);
@@ -67,10 +65,15 @@ pub fn LiveMonitor(
         <section class="live-monitor-shell" aria-label=move || labels().live>
             <header class="live-monitor-header">
                 <h1>{move || labels().live}</h1>
-                <span class="live-monitor-status" title=move || status_title(snapshot())>
-                    {move || status_text(snapshot())}
+                <span class="live-monitor-status" title=move || status_title(&snapshot(), labels())>
+                    {move || status_text(&snapshot(), labels())}
                 </span>
-                <button
+                <div class="live-monitor-header-actions">
+                    <label class="live-auto-send-checkbox" title=move || labels().auto_send>
+                        <input type="checkbox" prop:checked=move || auto_send.get() on:change=move |event| set_auto_send.set(event_target_checked(&event)) />
+                        <span>{move || labels().auto_send}</span>
+                    </label>
+                    <button
                     class="live-monitor-button"
                     type="button"
                     title=move || labels().clear
@@ -79,6 +82,7 @@ pub fn LiveMonitor(
                 >
                     {move || labels().clear}
                 </button>
+                </div>
             </header>
             <Show when=move || status_notice.get().is_some()>
                 <div class="live-status-notice" role="status" aria-live="polite">
@@ -114,7 +118,7 @@ pub fn LiveMonitor(
                                     type="button"
                                     title=labels.switch_send
                                     aria-label=labels.switch_send
-                                    on:click=move |_| on_send(item_id_for_switch.clone(), true)
+                                    on:click=move |_| on_send(item_id_for_switch.clone(), true, auto_send.get())
                                 >
                                     {compact_switch_label(labels)}
                                 </button>
@@ -137,7 +141,7 @@ pub fn LiveMonitor(
                                         type="button"
                                         title=labels.send
                                         aria-label=labels.send
-                                        on:click=move |_| on_send(item_id_for_send.clone(), false)
+                                        on:click=move |_| on_send(item_id_for_send.clone(), false, auto_send.get())
                                     >
                                         {compact_send_label(labels)}
                                     </button>
@@ -186,28 +190,26 @@ fn compact_switch_label(labels: Labels) -> &'static str {
     }
 }
 
-fn status_text(snapshot: LiveSnapshot) -> String {
-    status_text_parts(snapshot.status, snapshot.status_message.as_deref())
-}
-
-fn status_title(snapshot: LiveSnapshot) -> String {
-    status_text(snapshot)
-}
-
-fn status_text_parts(status: LiveStatus, message: Option<&str>) -> String {
-    match message {
-        Some(message) if !message.is_empty() => format!("{}: {message}", status_label(status)),
-        _ => status_label(status).to_string(),
+fn status_text(snapshot: &LiveSnapshot, labels: Labels) -> String {
+    match snapshot.status_message.as_deref() {
+        Some(message) if !message.is_empty() => {
+            format!("{}: {message}", status_label(snapshot.status, labels))
+        }
+        _ => status_label(snapshot.status, labels).to_string(),
     }
 }
 
-fn status_label(status: LiveStatus) -> &'static str {
+fn status_title(snapshot: &LiveSnapshot, labels: Labels) -> String {
+    status_text(snapshot, labels)
+}
+
+fn status_label(status: LiveStatus, labels: Labels) -> &'static str {
     match status {
-        LiveStatus::Disconnected => "Disconnected",
-        LiveStatus::Connecting => "Connecting",
-        LiveStatus::Connected => "Connected",
-        LiveStatus::Disconnecting => "Disconnecting",
-        LiveStatus::Error => "Error",
+        LiveStatus::Disconnected => labels.status_disconnected,
+        LiveStatus::Connecting => labels.status_connecting,
+        LiveStatus::Connected => labels.status_connected,
+        LiveStatus::Disconnecting => labels.status_disconnecting,
+        LiveStatus::Error => labels.history_status_failed,
     }
 }
 
@@ -281,11 +283,19 @@ mod tests {
 
     #[test]
     fn renders_status_with_optional_message() {
-        assert_eq!(status_text_parts(LiveStatus::Connected, None), "Connected");
-        assert_eq!(
-            status_text_parts(LiveStatus::Error, Some("bad token")),
-            "Error: bad token"
-        );
+        let labels = labels(UiLanguage::English);
+        let snapshot = LiveSnapshot {
+            status: LiveStatus::Connected,
+            status_message: None,
+            items: Vec::new(),
+        };
+        assert_eq!(status_text(&snapshot, labels), "Connected");
+        let snapshot = LiveSnapshot {
+            status: LiveStatus::Error,
+            status_message: Some("bad token".to_string()),
+            items: Vec::new(),
+        };
+        assert_eq!(status_text(&snapshot, labels), "Failed: bad token");
     }
 
     #[test]

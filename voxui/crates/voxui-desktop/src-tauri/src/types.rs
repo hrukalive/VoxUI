@@ -230,6 +230,11 @@ pub struct LiveSnapshot {
     pub items: Vec<LiveMonitorItemDto>,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LiveSuggestionResult {
+    pub text: String,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct LiveConfigPatch {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -268,6 +273,7 @@ pub struct AppConfig {
     pub audio_device: Option<String>,
     pub volume: f32,
     pub max_input_chars: usize,
+    pub auto_period: bool,
     pub generation: GenerationSettings,
     pub live: LiveConfig,
 }
@@ -284,6 +290,7 @@ impl Default for AppConfig {
             audio_device: None,
             volume: 0.8,
             max_input_chars: 280,
+            auto_period: true,
             generation: GenerationSettings::default(),
             live: LiveConfig::default(),
         }
@@ -364,6 +371,8 @@ pub struct ConfigPatch {
     pub volume: Option<f32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_input_chars: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_period: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub generation: Option<GenerationSettings>,
 }

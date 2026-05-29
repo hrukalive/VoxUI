@@ -1065,7 +1065,7 @@ body:has(.live-monitor-shell) {
 
 .live-monitor-header {
   display: grid;
-  grid-template-columns: minmax(92px, auto) minmax(0, 1fr) 72px;
+  grid-template-columns: minmax(92px, auto) minmax(0, 1fr) auto;
   align-items: center;
   gap: 10px;
   min-width: 0;
@@ -1073,6 +1073,13 @@ body:has(.live-monitor-shell) {
   padding: 6px 10px;
   border-bottom: 1px solid var(--panel-border);
   background: var(--panel-bg);
+}
+
+.live-monitor-header-actions {
+  display: grid;
+  grid-auto-flow: column;
+  align-items: center;
+  gap: 8px;
 }
 
 .live-monitor-header h1 {
@@ -1118,6 +1125,25 @@ body:has(.live-monitor-shell) {
 
 .live-monitor-button:hover:not(:disabled) {
   background: var(--button-hover);
+}
+
+.live-auto-send-checkbox {
+  display: grid;
+  grid-auto-flow: column;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  cursor: pointer;
+  width: fit-content;
+}
+
+.live-auto-send-checkbox input {
+  width: 14px;
+  height: 14px;
+  accent-color: var(--primary-bg);
+  cursor: pointer;
 }
 
 .live-status-notice {

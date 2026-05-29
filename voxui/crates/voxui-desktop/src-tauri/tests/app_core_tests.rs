@@ -93,6 +93,7 @@ fn changing_audio_host_clears_saved_audio_device() {
 
     let snapshot = core
         .apply_patch(ConfigPatch {
+            auto_period: None,
             model_root: None,
             selected_model_id: None,
             language: None,
@@ -172,6 +173,7 @@ fn unsupported_cuda_backend_patch_is_ignored_until_sidecar_reports_cuda() {
 
     let snapshot = core
         .apply_patch(ConfigPatch {
+            auto_period: None,
             model_root: None,
             selected_model_id: None,
             language: None,
@@ -194,6 +196,7 @@ fn unsupported_cuda_backend_patch_is_ignored_until_sidecar_reports_cuda() {
     });
     let snapshot = core
         .apply_patch(ConfigPatch {
+            auto_period: None,
             model_root: None,
             selected_model_id: None,
             language: None,
@@ -221,6 +224,7 @@ fn clearing_audio_host_to_default_clears_host_and_device() {
 
     let snapshot = core
         .apply_patch(ConfigPatch {
+            auto_period: None,
             model_root: None,
             selected_model_id: None,
             language: None,
@@ -249,6 +253,7 @@ fn empty_audio_host_patch_clears_host_and_device() {
 
     let snapshot = core
         .apply_patch(ConfigPatch {
+            auto_period: None,
             model_root: None,
             selected_model_id: None,
             language: None,
@@ -277,6 +282,7 @@ fn clearing_audio_device_to_default_keeps_selected_host() {
 
     let snapshot = core
         .apply_patch(ConfigPatch {
+            auto_period: None,
             model_root: None,
             selected_model_id: None,
             language: None,
@@ -305,6 +311,7 @@ fn empty_audio_device_patch_clears_device_and_keeps_host() {
 
     let snapshot = core
         .apply_patch(ConfigPatch {
+            auto_period: None,
             model_root: None,
             selected_model_id: None,
             language: None,
@@ -626,6 +633,7 @@ fn selection_change_cancels_active_load_and_rejects_stale_completion() {
 
     let (load_id, cancel) = core.begin_model_load_for_test();
     core.apply_patch(ConfigPatch {
+        auto_period: None,
         model_root: None,
         selected_model_id: Some(Some("b-model".to_string())),
         language: None,
@@ -666,6 +674,7 @@ fn applying_config_patch_persists_the_saved_config_to_disk() {
 
     let snapshot = core
         .apply_patch(ConfigPatch {
+            auto_period: None,
             model_root: Some(Some(model_root.clone())),
             selected_model_id: Some(Some("alpha".to_string())),
             language: Some(LanguageMode::Chinese),
@@ -742,6 +751,7 @@ fn volume_patch_updates_active_playback_handle() {
 
     let playback = core.begin_playback(&item.id).unwrap();
     core.apply_patch(ConfigPatch {
+        auto_period: None,
         model_root: None,
         selected_model_id: None,
         language: None,
