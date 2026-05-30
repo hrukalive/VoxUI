@@ -1,9 +1,11 @@
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
+use std::time::Duration;
 
-use tauri::{AppHandle, Emitter, Manager, State, Window};
+use tauri::{AppHandle, Emitter, Manager, State, WebviewWindowBuilder, Window};
 use tauri_plugin_dialog::DialogExt;
 use voxui_audio::{AudioPlayer, AudioSystem, StreamingPlayer, VolumeHandle};
 use voxui_sidecar_protocol::{
@@ -16,14 +18,43 @@ use crate::generation_queue::HistoryItem;
 use crate::inference_sidecar::{SidecarProcess, SidecarReaderEvent};
 use crate::types::{
     AppSnapshot, AudioStateDto, BackendKind, CommandResult, ConfigPatch, GenerationDoneEvent,
-    GenerationProgressEvent, ModelChoice, PlaybackStateEvent, SidecarCapabilities,
+    GenerationProgressEvent, LiveMessageKind, MainInputReplaceEvent, ModelChoice,
+    PlaybackStateEvent, SidecarCapabilities,
 };
 
 pub type SharedAppCore = Arc<Mutex<AppCore>>;
 
 static SIDECAR_PROCESS: OnceLock<Mutex<Option<SidecarProcess>>> = OnceLock::new();
+static LIVE_WORKER: OnceLock<Mutex<Option<LiveWorkerHandle>>> = OnceLock::new();
 static STREAMING_PLAYERS: OnceLock<Mutex<HashMap<String, mpsc::Sender<StreamingPlaybackCommand>>>> =
     OnceLock::new();
+const LIVE_WORKER_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(3);
+
+struct LiveWorkerHandle {
+    stop: Arc<AtomicBool>,
+    done: mpsc::Receiver<()>,
+    start: mpsc::Sender<()>,
+}
+
+impl LiveWorkerHandle {
+    fn request_stop(&self) {
+        self.stop.store(true, Ordering::SeqCst);
+    }
+
+    fn request_stop_and_wait(self, timeout: Duration) -> bool {
+        self.request_stop();
+        match self.done.recv_timeout(timeout) {
+            Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => true,
+            Err(mpsc::RecvTimeoutError::Timeout) => false,
+        }
+    }
+
+    fn start_worker(&self) -> Result<(), String> {
+        self.start
+            .send(())
+            .map_err(|_| "OpenLive worker stopped before start signal".to_string())
+    }
+}
 
 enum StreamingPlaybackCommand {
     Push(Vec<f32>),
@@ -52,6 +83,232 @@ pub fn set_config_patch(
     patch: ConfigPatch,
 ) -> Result<AppSnapshot, String> {
     with_core(state, |core| core.apply_patch(patch))
+}
+
+#[tauri::command]
+pub fn get_live_state(
+    state: State<'_, SharedAppCore>,
+) -> Result<crate::types::LiveSnapshot, String> {
+    with_core(state, |core| Ok(core.live_snapshot_for_current_language()))
+}
+
+#[tauri::command]
+pub fn set_live_config_patch(
+    app: AppHandle,
+    state: State<'_, SharedAppCore>,
+    patch: crate::types::LiveConfigPatch,
+) -> Result<crate::types::LiveSnapshot, String> {
+    let snapshot = with_core(state, |core| core.apply_live_patch(patch))?;
+    emit_live_snapshot(&app, "live_items_changed", &snapshot);
+    Ok(snapshot)
+}
+
+#[tauri::command]
+pub fn clear_live_items(
+    app: AppHandle,
+    state: State<'_, SharedAppCore>,
+) -> Result<crate::types::LiveSnapshot, String> {
+    let snapshot = with_core(state, |core| {
+        core.clear_live_items();
+        Ok(core.live_snapshot_for_current_language())
+    })?;
+    emit_live_snapshot(&app, "live_items_changed", &snapshot);
+    Ok(snapshot)
+}
+
+#[tauri::command]
+pub fn mock_live_message(
+    app: AppHandle,
+    state: State<'_, SharedAppCore>,
+    kind: String,
+) -> Result<crate::types::LiveSnapshot, String> {
+    let kind = match kind.as_str() {
+        "danmu" => LiveMessageKind::Danmu,
+        "gift" => LiveMessageKind::Gift,
+        "superchat" => LiveMessageKind::Superchat,
+        "guard" => LiveMessageKind::Guard,
+        "like" => LiveMessageKind::Like,
+        "enter" => LiveMessageKind::Enter,
+        other => return Err(format!("unsupported live message kind: {other}")),
+    };
+    let event = crate::live::create_mock_live_event(kind).map_err(|e| e.to_string())?;
+    let snapshot = with_core(state, |core| {
+        core.add_live_event(event)
+            .map(|_| core.live_snapshot_for_current_language())
+    })?;
+    emit_live_snapshot(&app, "live_items_changed", &snapshot);
+    Ok(snapshot)
+}
+
+#[tauri::command]
+pub fn exit_app(app: AppHandle) -> Result<CommandResult, String> {
+    if let Some(window) = app.get_webview_window("main") {
+        window.close().map_err(|e| e.to_string())?;
+    }
+    Ok(CommandResult { ok: true })
+}
+
+#[tauri::command]
+pub async fn show_live_monitor(app: AppHandle) -> Result<CommandResult, String> {
+    show_live_monitor_impl(&app)?;
+    Ok(CommandResult { ok: true })
+}
+
+#[tauri::command]
+pub fn connect_openblive(
+    app: AppHandle,
+    state: State<'_, SharedAppCore>,
+    identity_code: String,
+) -> Result<crate::types::LiveSnapshot, String> {
+    let shared = state.inner().clone();
+    let mut guard = live_worker_slot()
+        .lock()
+        .map_err(|_| "OpenLive worker lock poisoned".to_string())?;
+    if guard.is_some() {
+        return shared
+            .lock()
+            .map(|core| core.live_snapshot_for_current_language())
+            .map_err(|_| "app state lock poisoned".to_string());
+    }
+
+    let (identity_code, enable_ceve_server_heartbeat, snapshot) = {
+        let mut core = shared
+            .lock()
+            .map_err(|_| "app state lock poisoned".to_string())?;
+        let identity_code = identity_code.trim().to_string();
+        if identity_code.is_empty() {
+            return Err("OpenLive identity code is empty".to_string());
+        }
+        let config = core
+            .apply_live_patch(crate::types::LiveConfigPatch {
+                identity_code: Some(identity_code),
+                ..crate::types::LiveConfigPatch::default()
+            })
+            .map_err(|error| error.to_string())?
+            .config;
+        let snapshot = core.set_live_status(crate::types::LiveStatus::Connecting, None);
+        (
+            config.identity_code.clone(),
+            config.enable_ceve_server_heartbeat,
+            snapshot,
+        )
+    };
+    emit_live_snapshot(&app, "live_status_changed", &snapshot);
+
+    let stop = Arc::new(AtomicBool::new(false));
+    let worker_stop = stop.clone();
+    let (done_sender, done_receiver) = mpsc::channel();
+    let (start_sender, start_receiver) = mpsc::channel();
+    let worker_app = app.clone();
+    let worker_shared = shared.clone();
+    let spawn_result = thread::Builder::new()
+        .name("voxui-openblive".to_string())
+        .spawn(move || {
+            if start_receiver.recv().is_ok() {
+                crate::openblive::run_openblive_worker(
+                    identity_code,
+                    enable_ceve_server_heartbeat,
+                    {
+                        let app = worker_app.clone();
+                        let shared = worker_shared.clone();
+                        move |raw| handle_openblive_event(&app, shared.clone(), raw)
+                    },
+                    {
+                        let app = worker_app.clone();
+                        let shared = worker_shared.clone();
+                        move |status, message| {
+                            handle_openblive_status(&app, shared.clone(), status, message)
+                        }
+                    },
+                    move || worker_stop.load(Ordering::SeqCst),
+                );
+            }
+            let _ = done_sender.send(());
+            clear_live_worker_slot();
+        });
+    if let Err(error) = spawn_result {
+        let snapshot = match shared.lock() {
+            Ok(mut core) => core.set_live_status(
+                crate::types::LiveStatus::Error,
+                Some(format!("spawn OpenLive worker: {error}")),
+            ),
+            Err(_) => return Err("app state lock poisoned".to_string()),
+        };
+        emit_live_snapshot(&app, "live_status_changed", &snapshot);
+        return Err(format!("spawn OpenLive worker: {error}"));
+    }
+
+    *guard = Some(LiveWorkerHandle {
+        stop,
+        done: done_receiver,
+        start: start_sender,
+    });
+    if let Some(handle) = guard.as_ref() {
+        if let Err(error) = handle.start_worker() {
+            *guard = None;
+            let snapshot = match shared.lock() {
+                Ok(mut core) => {
+                    core.set_live_status(crate::types::LiveStatus::Error, Some(error.clone()))
+                }
+                Err(_) => return Err("app state lock poisoned".to_string()),
+            };
+            emit_live_snapshot(&app, "live_status_changed", &snapshot);
+            return Err(error);
+        }
+    }
+
+    shared
+        .lock()
+        .map(|core| core.live_snapshot_for_current_language())
+        .map_err(|_| "app state lock poisoned".to_string())
+}
+
+#[tauri::command]
+pub fn disconnect_openblive(
+    app: AppHandle,
+    state: State<'_, SharedAppCore>,
+) -> Result<crate::types::LiveSnapshot, String> {
+    let stopping = signal_live_worker_stop()?;
+    let snapshot = with_core(state, |core| {
+        let status = if stopping {
+            crate::types::LiveStatus::Disconnecting
+        } else {
+            crate::types::LiveStatus::Disconnected
+        };
+        Ok(core.set_live_status(status, None))
+    })?;
+    emit_live_snapshot(&app, "live_status_changed", &snapshot);
+    Ok(snapshot)
+}
+
+#[tauri::command]
+pub fn send_live_suggestion(
+    app: AppHandle,
+    state: State<'_, SharedAppCore>,
+    item_id: String,
+    mode: String,
+    skip_replace: bool,
+) -> Result<crate::types::LiveSuggestionResult, String> {
+    let mode = match mode.as_str() {
+        "normal" => crate::live::SuggestionMode::Normal,
+        "switch" => crate::live::SuggestionMode::Switch,
+        other => return Err(format!("unsupported live suggestion mode: {other}")),
+    };
+    let text = with_core(state, |core| {
+        core.live_suggestion_for_item_current_language(&item_id, mode)
+            .ok_or_else(|| anyhow::anyhow!("live item is unavailable or filtered: {item_id}"))
+    })?;
+    if !skip_replace {
+        let event = MainInputReplaceEvent { text: text.clone() };
+        if let Some(main) = app.get_webview_window("main") {
+            main.emit("main_input_replace", event)
+                .map_err(|error| error.to_string())?;
+        } else {
+            app.emit("main_input_replace", event)
+                .map_err(|error| error.to_string())?;
+        }
+    }
+    Ok(crate::types::LiveSuggestionResult { text })
 }
 
 #[tauri::command]
@@ -333,6 +590,118 @@ fn desktop_backend(backend: ProtocolBackendKind) -> BackendKind {
 
 fn sidecar_slot() -> &'static Mutex<Option<SidecarProcess>> {
     SIDECAR_PROCESS.get_or_init(|| Mutex::new(None))
+}
+
+fn live_worker_slot() -> &'static Mutex<Option<LiveWorkerHandle>> {
+    LIVE_WORKER.get_or_init(|| Mutex::new(None))
+}
+
+fn signal_live_worker_stop() -> Result<bool, String> {
+    let guard = live_worker_slot()
+        .lock()
+        .map_err(|_| "OpenLive worker lock poisoned".to_string())?;
+    let Some(handle) = guard.as_ref() else {
+        return Ok(false);
+    };
+    handle.request_stop();
+    Ok(true)
+}
+
+fn clear_live_worker_slot() {
+    if let Ok(mut guard) = live_worker_slot().lock() {
+        *guard = None;
+    }
+}
+
+pub fn shutdown_live_worker_for_app_exit() {
+    let handle = match live_worker_slot().lock() {
+        Ok(mut guard) => guard.take(),
+        Err(_) => return,
+    };
+    if let Some(handle) = handle {
+        if !handle.request_stop_and_wait(LIVE_WORKER_SHUTDOWN_TIMEOUT) {
+            tracing::warn!(
+                timeout_ms = LIVE_WORKER_SHUTDOWN_TIMEOUT.as_millis(),
+                "OpenLive worker did not stop before app exit timeout"
+            );
+        }
+    }
+}
+
+fn handle_openblive_status(
+    app: &AppHandle,
+    shared: SharedAppCore,
+    status: crate::types::LiveStatus,
+    status_message: Option<String>,
+) {
+    let snapshot = match shared.lock() {
+        Ok(mut core) => core.set_live_status(status, status_message),
+        Err(_) => return,
+    };
+    emit_live_snapshot(app, "live_status_changed", &snapshot);
+
+    match status {
+        crate::types::LiveStatus::Connected => {
+            if let Err(error) = show_live_monitor_impl(app) {
+                tracing::warn!("failed to show live monitor window: {error}");
+            }
+        }
+        crate::types::LiveStatus::Connecting
+        | crate::types::LiveStatus::Disconnecting
+        | crate::types::LiveStatus::Disconnected
+        | crate::types::LiveStatus::Error => {}
+    }
+}
+
+fn handle_openblive_event(app: &AppHandle, shared: SharedAppCore, raw: serde_json::Value) {
+    let event = match crate::live::parse_live_event(raw) {
+        Ok(Some(event)) => event,
+        Ok(None) => return,
+        Err(error) => {
+            tracing::warn!("failed to parse OpenLive event: {error}");
+            return;
+        }
+    };
+
+    let snapshot = match shared.lock() {
+        Ok(mut core) => match core.add_live_event(event) {
+            Ok(_) => core.live_snapshot_for_current_language(),
+            Err(error) => {
+                tracing::warn!("failed to add OpenLive event: {error}");
+                return;
+            }
+        },
+        Err(_) => return,
+    };
+    emit_live_snapshot(app, "live_items_changed", &snapshot);
+}
+
+fn emit_live_snapshot(app: &AppHandle, event: &str, snapshot: &crate::types::LiveSnapshot) {
+    let _ = app.emit(event, snapshot.clone());
+}
+
+fn show_live_monitor_impl(app: &AppHandle) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window("live-monitor") {
+        window.show().map_err(|error| error.to_string())?;
+        window.set_focus().map_err(|error| error.to_string())?;
+        return Ok(());
+    }
+
+    let config = app
+        .config()
+        .app
+        .windows
+        .iter()
+        .find(|window| window.label == "live-monitor")
+        .cloned()
+        .ok_or_else(|| "live-monitor window config is missing".to_string())?;
+    let window = WebviewWindowBuilder::from_config(app, &config)
+        .map_err(|error| error.to_string())?
+        .build()
+        .map_err(|error| error.to_string())?;
+    window.show().map_err(|error| error.to_string())?;
+    window.set_focus().map_err(|error| error.to_string())?;
+    Ok(())
 }
 
 fn send_sidecar_command(
@@ -1101,18 +1470,79 @@ fn spawn_background(
 
 #[cfg(test)]
 mod tests {
+    use super::{spawn_background, LiveWorkerHandle};
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::mpsc;
+    use std::sync::Arc;
     use std::time::Duration;
 
     #[test]
     fn background_tasks_do_not_require_tokio_runtime() {
         let (sender, receiver) = mpsc::channel();
 
-        super::spawn_background("voxui-test-background", move || {
+        spawn_background("voxui-test-background", move || {
             sender.send(42).unwrap();
         })
         .unwrap();
 
         assert_eq!(receiver.recv_timeout(Duration::from_secs(2)).unwrap(), 42);
+    }
+
+    #[test]
+    fn live_worker_start_gate_blocks_until_slot_registration_signal() {
+        let (start_sender, start_receiver) = mpsc::channel();
+        let (entered_sender, entered_receiver) = mpsc::channel();
+
+        let worker = std::thread::spawn(move || {
+            start_receiver.recv().unwrap();
+            entered_sender.send(()).unwrap();
+        });
+
+        assert!(entered_receiver
+            .recv_timeout(Duration::from_millis(20))
+            .is_err());
+        start_sender.send(()).unwrap();
+        assert_eq!(
+            entered_receiver.recv_timeout(Duration::from_secs(1)),
+            Ok(())
+        );
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn live_worker_shutdown_wait_is_bounded() {
+        let stop = Arc::new(AtomicBool::new(false));
+        let (_done_sender, done_receiver) = mpsc::channel();
+        let (start_sender, _start_receiver) = mpsc::channel();
+        let handle = LiveWorkerHandle {
+            stop: stop.clone(),
+            done: done_receiver,
+            start: start_sender,
+        };
+
+        assert!(!handle.request_stop_and_wait(Duration::from_millis(1)));
+        assert!(stop.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn live_monitor_window_creation_uses_async_configured_window_path() {
+        let source = include_str!("commands.rs").replace("\r\n", "\n");
+        let implementation = source
+            .split("#[cfg(test)]\nmod tests")
+            .next()
+            .expect("commands implementation source");
+
+        assert!(
+            implementation.contains("pub async fn show_live_monitor"),
+            "show_live_monitor must be async because creating WebView2 windows from a synchronous command can deadlock on Windows"
+        );
+        assert!(
+            implementation.contains("WebviewWindowBuilder::from_config"),
+            "live monitor fallback creation should use the configured live-monitor window"
+        );
+        assert!(
+            !implementation.contains("WebviewWindowBuilder::new(app, \"live-monitor\""),
+            "live monitor fallback creation should not dynamically create an ad-hoc WebView2 window"
+        );
     }
 }

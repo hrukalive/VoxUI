@@ -8,6 +8,7 @@ pub fn ErrorModal(
     open: impl Fn() -> bool + Send + Sync + 'static + Copy,
     title: impl Fn() -> String + Send + Sync + 'static + Copy,
     message: impl Fn() -> String + Send + Sync + 'static + Copy,
+    #[prop(optional)] danger: bool,
     on_close: impl Fn() + Send + Sync + 'static + Copy,
 ) -> impl IntoView {
     view! {
@@ -23,6 +24,7 @@ pub fn ErrorModal(
                         <h2>{move || title()}</h2>
                         <button
                             class="primary-button"
+                            class:danger-button=danger
                             type="button"
                             aria-label={labels.close}
                             on:click=move |_| { on_close() }

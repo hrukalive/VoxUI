@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::collections::{btree_map::Entry, BTreeMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc};
@@ -7,10 +7,12 @@ use anyhow::{bail, Context, Result};
 use voxui_audio::VolumeHandle;
 
 use crate::generation_queue::{GenerationQueue, HistoryItem, HistoryStatus};
+use crate::live::{LiveEvent, LiveLanguage, LiveState, SuggestionMode};
 use crate::model_discovery::discover_models;
 use crate::playback::{GeneratedAudio, GeneratedAudioCache};
 use crate::types::{
-    AppConfig, AppSnapshot, ConfigPatch, LoadUiState, ModelChoice, SidecarCapabilities,
+    AppConfig, AppSnapshot, ConfigPatch, LanguageMode, LiveConfigPatch, LiveSnapshot, LiveStatus,
+    LoadUiState, ModelChoice, SidecarCapabilities,
 };
 use voxui_inference::SynthesisRequest;
 
@@ -52,6 +54,8 @@ pub struct AppCore {
     active_generation_audio_backup: Option<(String, GeneratedAudio)>,
     active_playback: Option<ActivePlayback>,
     pending_auto_playback: VecDeque<String>,
+    live: LiveState,
+    sidecar_init_error: Option<String>,
 }
 
 #[derive(Debug)]
@@ -95,7 +99,6 @@ impl AppCore {
 
     pub fn from_loaded_config(mut config: AppConfig, backend_saved: bool) -> Result<Self> {
         let sidecar_capabilities = SidecarCapabilities::default();
-        normalize_backend_for_sidecar(&mut config, backend_saved, sidecar_capabilities);
         normalize_generation_settings(&mut config.generation);
         let models = match config.model_root.as_deref() {
             Some(root) => discover_models(root)?,
@@ -123,6 +126,8 @@ impl AppCore {
             active_generation_audio_backup: None,
             active_playback: None,
             pending_auto_playback: VecDeque::new(),
+            live: LiveState::default(),
+            sidecar_init_error: None,
         })
     }
 
@@ -131,6 +136,7 @@ impl AppCore {
             config: self.config.clone(),
             system_language: crate::config::detect_system_language(),
             cuda_available: self.sidecar_capabilities.cuda_available,
+            sidecar_init_error: self.sidecar_init_error.clone(),
             models: self.models.clone(),
             selected_model_id: self.selected_model_id.clone(),
             loaded_model_id: self.loaded_model_id.clone(),
@@ -188,6 +194,9 @@ impl AppCore {
         if let Some(max_input_chars) = patch.max_input_chars {
             self.config.max_input_chars = max_input_chars.max(1);
         }
+        if let Some(auto_period) = patch.auto_period {
+            self.config.auto_period = auto_period;
+        }
         if let Some(mut generation) = patch.generation {
             normalize_generation_settings(&mut generation);
             self.config.generation = generation;
@@ -197,8 +206,161 @@ impl AppCore {
         Ok(self.snapshot())
     }
 
+    pub fn add_live_event(&mut self, event: LiveEvent) -> Result<String> {
+        let username_mapping_changed = if !event.open_id.is_empty() && !event.uname.is_empty() {
+            initialize_uname_mapping(
+                &mut self.config.live.original_unames,
+                &event.open_id,
+                &event.uname,
+            ) | initialize_uname_mapping(
+                &mut self.config.live.mapped_unames,
+                &event.open_id,
+                &event.uname,
+            )
+        } else {
+            false
+        };
+
+        let item_id = self.live.add_event(event);
+        if username_mapping_changed {
+            self.persist_config()?;
+        }
+        Ok(item_id)
+    }
+
+    pub fn apply_live_patch(&mut self, patch: LiveConfigPatch) -> Result<LiveSnapshot> {
+        if let Some(identity_code) = patch.identity_code {
+            self.config.live.identity_code = identity_code;
+        }
+        if let Some(enable_ceve_server_heartbeat) = patch.enable_ceve_server_heartbeat {
+            self.config.live.enable_ceve_server_heartbeat = enable_ceve_server_heartbeat;
+        }
+        if let Some(show_danmu) = patch.show_danmu {
+            self.config.live.show_danmu = show_danmu;
+        }
+        if let Some(show_gifts) = patch.show_gifts {
+            self.config.live.show_gifts = show_gifts;
+        }
+        if let Some(show_superchats) = patch.show_superchats {
+            self.config.live.show_superchats = show_superchats;
+        }
+        if let Some(show_guards) = patch.show_guards {
+            self.config.live.show_guards = show_guards;
+        }
+        if let Some(show_likes) = patch.show_likes {
+            self.config.live.show_likes = show_likes;
+        }
+        if let Some(show_enters) = patch.show_enters {
+            self.config.live.show_enters = show_enters;
+        }
+        if let Some(send_mode) = patch.send_mode {
+            self.config.live.send_mode = send_mode;
+        }
+        if let Some(auto_gen_mode) = patch.auto_gen_mode {
+            self.config.live.auto_gen_mode = auto_gen_mode;
+        }
+        if let Some(auto_gen_danmu) = patch.auto_gen_danmu {
+            self.config.live.auto_gen_danmu = auto_gen_danmu;
+        }
+        if let Some(auto_gen_gifts) = patch.auto_gen_gifts {
+            self.config.live.auto_gen_gifts = auto_gen_gifts;
+        }
+        if let Some(auto_gen_superchats) = patch.auto_gen_superchats {
+            self.config.live.auto_gen_superchats = auto_gen_superchats;
+        }
+        if let Some(auto_gen_guards) = patch.auto_gen_guards {
+            self.config.live.auto_gen_guards = auto_gen_guards;
+        }
+        if let Some(auto_gen_likes) = patch.auto_gen_likes {
+            self.config.live.auto_gen_likes = auto_gen_likes;
+        }
+        if let Some(auto_gen_enters) = patch.auto_gen_enters {
+            self.config.live.auto_gen_enters = auto_gen_enters;
+        }
+        if let Some(templates) = patch.templates {
+            self.config.live.templates = templates;
+        }
+        if let Some(replacement_rules) = patch.replacement_rules {
+            self.config.live.replacement_rules = replacement_rules;
+        }
+        if let Some(mapped_unames) = patch.mapped_unames {
+            self.config.live.mapped_unames = mapped_unames;
+        }
+
+        self.persist_config()?;
+        Ok(self.live_snapshot_for_current_language())
+    }
+
+    pub fn live_snapshot(&self, language: LiveLanguage) -> LiveSnapshot {
+        self.live
+            .snapshot(&self.config.live, language, self.config.auto_period)
+    }
+
+    pub fn live_language(&self) -> LiveLanguage {
+        live_language_for_modes(
+            self.config.language,
+            crate::config::detect_system_language(),
+        )
+    }
+
+    pub fn live_snapshot_for_current_language(&self) -> LiveSnapshot {
+        self.live_snapshot(self.live_language())
+    }
+
+    pub fn set_live_status(
+        &mut self,
+        status: LiveStatus,
+        status_message: Option<String>,
+    ) -> LiveSnapshot {
+        self.live.set_status(status, status_message);
+        self.live_snapshot_for_current_language()
+    }
+
+    pub fn clear_live_items(&mut self) {
+        self.live.clear_items();
+    }
+
+    pub fn live_suggestion_for_item(
+        &self,
+        item_id: &str,
+        language: LiveLanguage,
+        mode: SuggestionMode,
+    ) -> Option<String> {
+        self.live.suggestion_for_item(
+            item_id,
+            &self.config.live,
+            language,
+            mode,
+            self.config.auto_period,
+        )
+    }
+
+    pub fn live_suggestion_for_item_current_language(
+        &self,
+        item_id: &str,
+        mode: SuggestionMode,
+    ) -> Option<String> {
+        self.live_suggestion_for_item(item_id, self.live_language(), mode)
+    }
+
+    pub fn add_live_event_for_test(&mut self, event: LiveEvent) -> Result<String> {
+        self.add_live_event(event)
+    }
+
+    pub fn live_snapshot_for_test(&self, language: LiveLanguage) -> LiveSnapshot {
+        self.live_snapshot(language)
+    }
+
+    pub fn live_status_for_test(&self) -> LiveStatus {
+        self.live.status()
+    }
+
     pub fn set_config_path(&mut self, path: PathBuf) {
         self.config_path = Some(path);
+    }
+
+    pub fn set_sidecar_init_error(&mut self, error: String) {
+        self.sidecar_init_error = Some(error);
     }
 
     pub fn rescan_models(&mut self) -> Result<Vec<ModelChoice>> {
@@ -923,6 +1085,35 @@ fn empty_string_as_none(value: Option<String>) -> Option<String> {
     value.filter(|value| !value.is_empty())
 }
 
+fn initialize_uname_mapping(
+    mappings: &mut BTreeMap<String, String>,
+    open_id: &str,
+    uname: &str,
+) -> bool {
+    match mappings.entry(open_id.to_string()) {
+        Entry::Vacant(entry) => {
+            entry.insert(uname.to_string());
+            true
+        }
+        Entry::Occupied(mut entry) if entry.get().is_empty() => {
+            entry.insert(uname.to_string());
+            true
+        }
+        Entry::Occupied(_) => false,
+    }
+}
+
+fn live_language_for_modes(configured: LanguageMode, detected: LanguageMode) -> LiveLanguage {
+    match configured {
+        LanguageMode::Chinese => LiveLanguage::Chinese,
+        LanguageMode::English => LiveLanguage::English,
+        LanguageMode::System => match detected {
+            LanguageMode::Chinese => LiveLanguage::Chinese,
+            LanguageMode::System | LanguageMode::English => LiveLanguage::English,
+        },
+    }
+}
+
 fn normalize_generation_settings(generation: &mut crate::types::GenerationSettings) {
     generation.stream_consolidate_n = generation.stream_consolidate_n.max(1);
 }
@@ -951,6 +1142,30 @@ mod tests {
     use crate::types::{BackendKind, ConfigPatch, GenerationSettings, LanguageMode, ThemeMode};
 
     #[test]
+    fn live_language_resolves_system_language_from_detected_language() {
+        assert_eq!(
+            live_language_for_modes(LanguageMode::Chinese, LanguageMode::English),
+            LiveLanguage::Chinese
+        );
+        assert_eq!(
+            live_language_for_modes(LanguageMode::English, LanguageMode::Chinese),
+            LiveLanguage::English
+        );
+        assert_eq!(
+            live_language_for_modes(LanguageMode::System, LanguageMode::Chinese),
+            LiveLanguage::Chinese
+        );
+        assert_eq!(
+            live_language_for_modes(LanguageMode::System, LanguageMode::English),
+            LiveLanguage::English
+        );
+        assert_eq!(
+            live_language_for_modes(LanguageMode::System, LanguageMode::System),
+            LiveLanguage::English
+        );
+    }
+
+    #[test]
     fn apply_patch_rescans_model_root_and_clamps_values() {
         let temp = TempDir::new().unwrap();
         write_model(temp.path(), "alpha");
@@ -958,6 +1173,7 @@ mod tests {
         let mut core = AppCore::from_config(AppConfig::default()).unwrap();
         let snapshot = core
             .apply_patch(ConfigPatch {
+                auto_period: None,
                 model_root: Some(Some(temp.path().to_path_buf())),
                 selected_model_id: None,
                 language: Some(LanguageMode::English),
@@ -1113,6 +1329,7 @@ mod tests {
 
         let snapshot = core
             .apply_patch(ConfigPatch {
+                auto_period: None,
                 model_root: Some(None),
                 selected_model_id: Some(None),
                 language: None,
@@ -1147,6 +1364,7 @@ mod tests {
 
         let snapshot = core
             .apply_patch(ConfigPatch {
+                auto_period: None,
                 model_root: None,
                 selected_model_id: Some(Some("missing".to_string())),
                 language: None,

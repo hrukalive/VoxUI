@@ -13,11 +13,21 @@
     "withGlobalTauri": true,
     "windows": [
       {
+        "label": "main",
         "title": "AhanSays",
         "width": 876,
         "height": 520,
         "minWidth": 876,
         "minHeight": 520
+      },
+      {
+        "label": "live-monitor",
+        "title": "Bilibili Live Monitor",
+        "width": 500,
+        "height": 640,
+        "minWidth": 360,
+        "minHeight": 500,
+        "visible": false
       }
     ],
     "security": {
@@ -28,7 +38,7 @@
     "active": false,
     "targets": "all",
     "externalBin": [
-      "../../../target/release/voxui-inference-sidecar"
+      "binaries/voxui-inference-sidecar"
     ],
     "icon": [
       "icons/32x32.png",

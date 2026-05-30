@@ -698,5 +698,4 @@ mod tests {
     fn streaming_buffer_capacity_has_minimum_size() {
         assert_eq!(super::streaming_buffer_capacity(16_000, 48_000, 0.0), 4_800);
     }
-
 }

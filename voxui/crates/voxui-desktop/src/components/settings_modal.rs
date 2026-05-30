@@ -1,10 +1,11 @@
 use leptos::prelude::*;
 
 use crate::components::controls::{CustomSelect, NumberCounter, SelectOption};
-use crate::i18n::Labels;
+use crate::i18n::{Labels, UiLanguage};
 use crate::tauri_api::{
-    AppConfig, AudioDevice, AudioHost, AudioState, BackendKind, ConfigPatch, GenerationSettings,
-    LanguageMode, ThemeMode,
+    AppConfig, AudioDevice, AudioHost, AudioState, AutoGenMode, BackendKind, ConfigPatch,
+    GenerationSettings, LanguageMode, LiveConfigPatch, LiveMessageKind, LiveSnapshot, LiveStatus,
+    ReplacementRule, SendMode, ThemeMode,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -12,6 +13,7 @@ pub enum SettingsPage {
     General,
     Inference,
     Audio,
+    Live,
     About,
 }
 
@@ -20,7 +22,9 @@ const DEFAULT_AUDIO_CHOICE: &str = "__voxui_default_audio__";
 #[component]
 pub fn SettingsModal(
     labels: impl Fn() -> Labels + Send + Sync + 'static + Copy,
+    language: impl Fn() -> UiLanguage + Send + Sync + 'static + Copy,
     config: impl Fn() -> AppConfig + Send + Sync + 'static + Copy,
+    live_snapshot: impl Fn() -> LiveSnapshot + Send + Sync + 'static + Copy,
     cuda_available: impl Fn() -> bool + Send + Sync + 'static + Copy,
     audio_state: impl Fn() -> AudioState + Send + Sync + 'static + Copy,
     open: impl Fn() -> bool + Send + Sync + 'static + Copy,
@@ -28,6 +32,10 @@ pub fn SettingsModal(
     on_close: impl Fn() + Send + Sync + 'static + Copy,
     on_page_select: impl Fn(SettingsPage) + Send + Sync + 'static + Copy,
     on_config_patch: impl Fn(ConfigPatch) + Send + Sync + 'static + Copy,
+    on_live_patch: impl Fn(LiveConfigPatch) + Send + Sync + 'static + Copy,
+    on_live_connect: impl Fn() + Send + Sync + 'static + Copy,
+    on_live_disconnect: impl Fn() + Send + Sync + 'static + Copy,
+    on_live_mock_message: impl Fn(LiveMessageKind) + Send + Sync + 'static + Copy,
     on_browse_model_dir: impl Fn() + Send + Sync + 'static + Copy,
     on_browse_prompt_wav: impl Fn() + Send + Sync + 'static + Copy,
     on_browse_reference_wav: impl Fn() + Send + Sync + 'static + Copy,
@@ -42,13 +50,27 @@ pub fn SettingsModal(
         });
     };
 
+    let initial = untrack(live_snapshot);
+    let (pending_templates, set_pending_templates) = signal(initial.config.templates.clone());
+    let (pending_rules, set_pending_rules) = signal(initial.config.replacement_rules.clone());
+    let (pending_mapped, set_pending_mapped) = signal(initial.config.mapped_unames.clone());
+
+    let flush_live = move || {
+        on_live_patch(LiveConfigPatch {
+            templates: Some(pending_templates.get()),
+            replacement_rules: Some(pending_rules.get()),
+            mapped_unames: Some(pending_mapped.get()),
+            ..LiveConfigPatch::default()
+        });
+    };
+
     view! {
         <Show when=open>
             <div class="modal-backdrop" role="presentation">
                 <section class="modal settings-modal" role="dialog" aria-modal="true" aria-label=move || labels().settings>
                     <header class="modal-header">
                         <h2>{move || labels().settings}</h2>
-                        <button class="primary-button" type="button" aria-label=move || labels().save on:click=move |_| { on_close() }>
+                        <button class="primary-button" type="button" aria-label=move || labels().save on:click=move |_| { flush_live(); on_close() }>
                             {move || labels().save}
                         </button>
                     </header>
@@ -58,6 +80,7 @@ pub fn SettingsModal(
                             <button type="button" class:active=move || active_page() == SettingsPage::General on:click=move |_| on_page_select(SettingsPage::General)>{move || labels().settings_general}</button>
                             <button type="button" class:active=move || active_page() == SettingsPage::Inference on:click=move |_| on_page_select(SettingsPage::Inference)>{move || labels().settings_inference}</button>
                             <button type="button" class:active=move || active_page() == SettingsPage::Audio on:click=move |_| on_page_select(SettingsPage::Audio)>{move || labels().settings_audio}</button>
+                            <button type="button" class:active=move || active_page() == SettingsPage::Live on:click=move |_| on_page_select(SettingsPage::Live)>{move || labels().live}</button>
                             <button type="button" class:active=move || active_page() == SettingsPage::About on:click=move |_| on_page_select(SettingsPage::About)>{move || labels().settings_about}</button>
                         </nav>
 
@@ -125,6 +148,12 @@ pub fn SettingsModal(
                                                     });
                                                 }
                                             />
+                                        </label>
+                                        <label class="settings-checkbox settings-switch" for="settings-auto-period">
+                                            <input id="settings-auto-period" type="checkbox" prop:checked=move || config().auto_period on:change=move |event| {
+                                                on_config_patch(ConfigPatch { auto_period: Some(event_target_checked(&event)), ..ConfigPatch::default() });
+                                            } />
+                                            <span>{move || labels().auto_period}</span>
                                         </label>
                                     </div>
                                 </section>
@@ -327,6 +356,295 @@ pub fn SettingsModal(
                                 </section>
                             </Show>
 
+                            <Show when=move || active_page() == SettingsPage::Live>
+                                <section class="settings-section live-settings-section">
+                                    <h3>{move || labels().live}</h3>
+                                    <div class="settings-grid live-settings-grid">
+                                        <div class="settings-field live-connection-row settings-span-2">
+                                            <label class="live-identity-field" for="settings-live-identity-code">
+                                                <span>{move || labels().identity_code}</span>
+                                                <input
+                                                    id="settings-live-identity-code"
+                                                    type="text"
+                                                    prop:value=move || live_snapshot().config.identity_code
+                                                    on:change=move |event| {
+                                                        on_live_patch(LiveConfigPatch {
+                                                            identity_code: Some(event_target_value(&event)),
+                                                            ..LiveConfigPatch::default()
+                                                        });
+                                                    }
+                                                />
+                                            </label>
+                                            <button
+                                                class="primary-button"
+                                                type="button"
+                                                disabled=move || matches!(live_snapshot().status, LiveStatus::Connecting | LiveStatus::Disconnecting)
+                                                on:click=move |_| {
+                                                    if live_snapshot().status == LiveStatus::Connected {
+                                                        on_live_disconnect();
+                                                    } else {
+                                                        on_live_connect();
+                                                    }
+                                                }
+                                            >
+                                                {move || if live_snapshot().status == LiveStatus::Connected { labels().disconnect } else { labels().connect }}
+                                            </button>
+                                            <strong>{move || live_status_label(labels(), live_snapshot().status)}</strong>
+                                        </div>
+                                        <label class="settings-checkbox settings-switch live-checkbox" for="settings-live-ceve-heartbeat">
+                                            <input id="settings-live-ceve-heartbeat" type="checkbox" prop:checked=move || live_snapshot().config.enable_ceve_server_heartbeat on:change=move |event| {
+                                                on_live_patch(LiveConfigPatch {
+                                                    enable_ceve_server_heartbeat: Some(event_target_checked(&event)),
+                                                    ..LiveConfigPatch::default()
+                                                });
+                                            } />
+                                            <span>{move || labels().ceve_heartbeat}</span>
+                                        </label>
+                                        <label class="settings-field">
+                                            <span>{move || labels().send_mode}</span>
+                                            <CustomSelect
+                                                class="settings-select-control"
+                                                aria_label=labels().send_mode
+                                                value=move || live_snapshot().config.send_mode.value().to_string()
+                                                options=move || live_send_mode_options(labels())
+                                                disabled=move || false
+                                                on_change=move |value| {
+                                                    on_live_patch(LiveConfigPatch {
+                                                        send_mode: Some(SendMode::from_value(&value)),
+                                                        ..LiveConfigPatch::default()
+                                                    });
+                                                }
+                                            />
+                                        </label>
+                                        <label class="settings-field">
+                                            <span>{move || labels().auto_gen_mode}</span>
+                                            <CustomSelect
+                                                class="settings-select-control"
+                                                aria_label=labels().auto_gen_mode
+                                                value=move || live_snapshot().config.auto_gen_mode.value().to_string()
+                                                options=move || live_auto_gen_mode_options(labels())
+                                                disabled=move || false
+                                                on_change=move |value| {
+                                                    on_live_patch(LiveConfigPatch {
+                                                        auto_gen_mode: Some(AutoGenMode::from_value(&value)),
+                                                        ..LiveConfigPatch::default()
+                                                    });
+                                                }
+                                            />
+                                        </label>
+                                        <div class="live-subsection live-message-subsection settings-span-2">
+                                            <div class="live-message-grid">
+                                                {move || {
+                                                    let current_labels = labels();
+                                                    vec![
+                                                        (LiveMessageKind::Danmu, current_labels.danmu),
+                                                        (LiveMessageKind::Gift, current_labels.gift),
+                                                        (LiveMessageKind::Superchat, current_labels.superchat),
+                                                        (LiveMessageKind::Guard, current_labels.guard),
+                                                        (LiveMessageKind::Like, current_labels.like),
+                                                        (LiveMessageKind::Enter, current_labels.enter),
+                                                    ].into_iter().map(|(kind, label)| {
+                                                        let checked = match kind {
+                                                            LiveMessageKind::Danmu => live_snapshot().config.show_danmu,
+                                                            LiveMessageKind::Gift => live_snapshot().config.show_gifts,
+                                                            LiveMessageKind::Superchat => live_snapshot().config.show_superchats,
+                                                            LiveMessageKind::Guard => live_snapshot().config.show_guards,
+                                                            LiveMessageKind::Like => live_snapshot().config.show_likes,
+                                                            LiveMessageKind::Enter => live_snapshot().config.show_enters,
+                                                        };
+                                                        let auto_gen_checked = match kind {
+                                                            LiveMessageKind::Danmu => live_snapshot().config.auto_gen_danmu,
+                                                            LiveMessageKind::Gift => live_snapshot().config.auto_gen_gifts,
+                                                            LiveMessageKind::Superchat => live_snapshot().config.auto_gen_superchats,
+                                                            LiveMessageKind::Guard => live_snapshot().config.auto_gen_guards,
+                                                            LiveMessageKind::Like => live_snapshot().config.auto_gen_likes,
+                                                            LiveMessageKind::Enter => live_snapshot().config.auto_gen_enters,
+                                                        };
+                                                        let kind_for_test = kind;
+                                                        let kind_for_filter = kind;
+                                                        let kind_for_auto_gen = kind;
+                                                        view! {
+                                                            <div class="live-message-row">
+                                                                <label class="live-message-checkbox live-filter-checkbox">
+                                                                    <input type="checkbox" prop:checked=checked on:change=move |event| {
+                                                                        let checked = event_target_checked(&event);
+                                                                        match kind_for_filter {
+                                                                            LiveMessageKind::Danmu => on_live_patch(LiveConfigPatch { show_danmu: Some(checked), ..LiveConfigPatch::default() }),
+                                                                            LiveMessageKind::Gift => on_live_patch(LiveConfigPatch { show_gifts: Some(checked), ..LiveConfigPatch::default() }),
+                                                                            LiveMessageKind::Superchat => on_live_patch(LiveConfigPatch { show_superchats: Some(checked), ..LiveConfigPatch::default() }),
+                                                                            LiveMessageKind::Guard => on_live_patch(LiveConfigPatch { show_guards: Some(checked), ..LiveConfigPatch::default() }),
+                                                                            LiveMessageKind::Like => on_live_patch(LiveConfigPatch { show_likes: Some(checked), ..LiveConfigPatch::default() }),
+                                                                            LiveMessageKind::Enter => on_live_patch(LiveConfigPatch { show_enters: Some(checked), ..LiveConfigPatch::default() }),
+                                                                        };
+                                                                    } />
+                                                                    <span>{label}</span>
+                                                                </label>
+                                                                <label class="live-message-checkbox live-auto-gen-checkbox">
+                                                                    <input type="checkbox" prop:checked=auto_gen_checked on:change=move |event| {
+                                                                        let checked = event_target_checked(&event);
+                                                                        match kind_for_auto_gen {
+                                                                            LiveMessageKind::Danmu => on_live_patch(LiveConfigPatch { auto_gen_danmu: Some(checked), ..LiveConfigPatch::default() }),
+                                                                            LiveMessageKind::Gift => on_live_patch(LiveConfigPatch { auto_gen_gifts: Some(checked), ..LiveConfigPatch::default() }),
+                                                                            LiveMessageKind::Superchat => on_live_patch(LiveConfigPatch { auto_gen_superchats: Some(checked), ..LiveConfigPatch::default() }),
+                                                                            LiveMessageKind::Guard => on_live_patch(LiveConfigPatch { auto_gen_guards: Some(checked), ..LiveConfigPatch::default() }),
+                                                                            LiveMessageKind::Like => on_live_patch(LiveConfigPatch { auto_gen_likes: Some(checked), ..LiveConfigPatch::default() }),
+                                                                            LiveMessageKind::Enter => on_live_patch(LiveConfigPatch { auto_gen_enters: Some(checked), ..LiveConfigPatch::default() }),
+                                                                        };
+                                                                    } />
+                                                                    <span>{move || labels().enable_auto_gen}</span>
+                                                                </label>
+                                                                <button
+                                                                    class="live-test-button"
+                                                                    type="button"
+                                                                    title="Test"
+                                                                    aria-label="Test"
+                                                                    on:click=move |_| on_live_mock_message(kind_for_test)
+                                                                >
+                                                                    {current_labels.test}
+                                                                </button>
+                                                            </div>
+                                                        }
+                                                    }).collect_view()
+                                                }}
+                                            </div>
+                                        </div>
+
+                                        <div class="live-subsection settings-span-2">
+                                            <h4>{move || labels().danmu_template}</h4>
+                                            <div class="live-template-grid">
+                                                {template_textarea("settings-live-template-danmu", move || labels().danmu.to_string(), move || pending_templates.get().danmu, move |value| set_pending_templates.update(|t| t.danmu = value))}
+                                                <Show when=move || language() != UiLanguage::English>
+                                                    {template_textarea("settings-live-template-gift-zh", move || format!("{}", labels().gift), move || pending_templates.get().gift_zh, move |value| set_pending_templates.update(|t| t.gift_zh = value))}
+                                                </Show>
+                                                <Show when=move || language() == UiLanguage::English>
+                                                    {template_textarea("settings-live-template-gift-en", move || format!("{}", labels().gift), move || pending_templates.get().gift_en, move |value| set_pending_templates.update(|t| t.gift_en = value))}
+                                                </Show>
+                                                <Show when=move || language() != UiLanguage::English>
+                                                    {template_textarea("settings-live-template-superchat-zh", move || format!("{}", labels().superchat), move || pending_templates.get().superchat_zh, move |value| set_pending_templates.update(|t| t.superchat_zh = value))}
+                                                </Show>
+                                                <Show when=move || language() == UiLanguage::English>
+                                                    {template_textarea("settings-live-template-superchat-en", move || format!("{}", labels().superchat), move || pending_templates.get().superchat_en, move |value| set_pending_templates.update(|t| t.superchat_en = value))}
+                                                </Show>
+                                                <Show when=move || language() != UiLanguage::English>
+                                                    {template_textarea("settings-live-template-guard-zh", move || format!("{}", labels().guard), move || pending_templates.get().guard_zh, move |value| set_pending_templates.update(|t| t.guard_zh = value))}
+                                                </Show>
+                                                <Show when=move || language() == UiLanguage::English>
+                                                    {template_textarea("settings-live-template-guard-en", move || format!("{}", labels().guard), move || pending_templates.get().guard_en, move |value| set_pending_templates.update(|t| t.guard_en = value))}
+                                                </Show>
+                                                <Show when=move || language() != UiLanguage::English>
+                                                    {template_textarea("settings-live-template-like-zh", move || format!("{}", labels().like), move || pending_templates.get().like_zh, move |value| set_pending_templates.update(|t| t.like_zh = value))}
+                                                </Show>
+                                                <Show when=move || language() == UiLanguage::English>
+                                                    {template_textarea("settings-live-template-like-en", move || format!("{}", labels().like), move || pending_templates.get().like_en, move |value| set_pending_templates.update(|t| t.like_en = value))}
+                                                </Show>
+                                                <Show when=move || language() != UiLanguage::English>
+                                                    {template_textarea("settings-live-template-enter-zh", move || format!("{}", labels().enter), move || pending_templates.get().enter_zh, move |value| set_pending_templates.update(|t| t.enter_zh = value))}
+                                                </Show>
+                                                <Show when=move || language() == UiLanguage::English>
+                                                    {template_textarea("settings-live-template-enter-en", move || format!("{}", labels().enter), move || pending_templates.get().enter_en, move |value| set_pending_templates.update(|t| t.enter_en = value))}
+                                                </Show>
+                                            </div>
+                                        </div>
+
+                                        <div class="live-subsection settings-span-2">
+                                            <div class="live-subsection-header">
+                                                <h4>{move || labels().replacement_rule}</h4>
+                                                <button class="secondary-button live-symbol-button" type="button" aria-label=move || labels().replacement_rule on:click=move |_| {
+                                                    set_pending_rules.update(|rules| rules.push(ReplacementRule { enabled: true, from: String::new(), to: String::new() }));
+                                                }>
+                                                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                                        <line x1="12" y1="5" x2="12" y2="19"></line>
+                                                        <line x1="5" y1="12" x2="19" y2="12"></line>
+                                                    </svg>
+                                                </button>
+                                            </div>
+                                            <div class="live-list">
+                                                {move || {
+                                                    pending_rules.get()
+                                                        .into_iter()
+                                                        .enumerate()
+                                                        .map(|(index, rule)| {
+                                                        view! {
+                                                            <div class="live-replacement-row">
+                                                                <label class="live-inline-checkbox">
+                                                                    <input type="checkbox" prop:checked=rule.enabled on:change=move |event| {
+                                                                        set_pending_rules.update(|rules| {
+                                                                            if let Some(rule) = rules.get_mut(index) {
+                                                                                rule.enabled = event_target_checked(&event);
+                                                                            }
+                                                                        });
+                                                                    } />
+                                                                </label>
+                                                                <input type="text" aria-label=move || labels().replacement_rule prop:value=rule.from.clone() on:change=move |event| {
+                                                                    set_pending_rules.update(|rules| {
+                                                                        if let Some(rule) = rules.get_mut(index) {
+                                                                            rule.from = event_target_value(&event);
+                                                                        }
+                                                                    });
+                                                                } />
+                                                                <input type="text" aria-label=move || labels().replacement_rule prop:value=rule.to.clone() on:change=move |event| {
+                                                                    set_pending_rules.update(|rules| {
+                                                                        if let Some(rule) = rules.get_mut(index) {
+                                                                            rule.to = event_target_value(&event);
+                                                                        }
+                                                                    });
+                                                                } />
+                                                                <button class="secondary-button live-remove-button" type="button" aria-label=move || labels().clear on:click=move |_| {
+                                                                    set_pending_rules.update(|rules| {
+                                                                        if index < rules.len() {
+                                                                            rules.remove(index);
+                                                                        }
+                                                                    });
+                                                                }>
+                                                                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                                                        <polyline points="3 6 5 6 21 6"></polyline>
+                                                                        <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                                                                    </svg>
+                                                                </button>
+                                                            </div>
+                                                        }
+                                                        })
+                                                        .collect_view()
+                                                }}
+                                            </div>
+                                        </div>
+
+                                        <div class="live-subsection settings-span-2">
+                                            <h4>{move || labels().uname_map}</h4>
+                                            <div class="live-list">
+                                                {move || {
+                                                    let snapshot = live_snapshot();
+                                                    let pending = pending_mapped.get();
+                                                    let mut rows = snapshot.config.original_unames
+                                                        .iter()
+                                                        .map(|(open_id, original)| {
+                                                            let mapped = pending.get(open_id).cloned().unwrap_or_else(|| original.clone());
+                                                            (open_id.clone(), original.clone(), mapped)
+                                                        })
+                                                        .collect::<Vec<_>>();
+                                                    for (open_id, mapped) in &pending {
+                                                        if !rows.iter().any(|(oid, _, _)| oid == open_id) {
+                                                            rows.push((open_id.clone(), open_id.clone(), mapped.clone()));
+                                                        }
+                                                    }
+                                                    rows.into_iter().map(|(open_id, original, mapped)| {
+                                                        view! {
+                                                            <div class="live-name-row">
+                                                                <code class="live-open-id">{open_id.clone()}</code>
+                                                                <span>{original}</span>
+                                                                <input type="text" aria-label=move || labels().uname_map prop:value=mapped on:change=move |event| {
+                                                                    set_pending_mapped.update(|m| { m.insert(open_id.clone(), event_target_value(&event)); });
+                                                                } />
+                                                            </div>
+                                                        }
+                                                    }).collect_view()
+                                                }}
+                                            </div>
+                                        </div>
+                                    </div>
+                                </section>
+                            </Show>
+
                             <Show when=move || active_page() == SettingsPage::About>
                                 <section class="settings-section">
                                     <h3>{move || labels().settings_about}</h3>
@@ -488,6 +806,24 @@ fn parse_theme(value: &str) -> ThemeMode {
     }
 }
 
+fn live_send_mode_options(labels: Labels) -> Vec<SelectOption> {
+    [SendMode::Manual, SendMode::AutoEnqueue]
+        .into_iter()
+        .map(|mode| SelectOption::new(mode.value(), mode.label(labels)))
+        .collect()
+}
+
+fn live_auto_gen_mode_options(labels: Labels) -> Vec<SelectOption> {
+    [
+        AutoGenMode::None,
+        AutoGenMode::Normal,
+        AutoGenMode::Replacement,
+    ]
+    .into_iter()
+    .map(|mode| SelectOption::new(mode.value(), mode.label(labels)))
+    .collect()
+}
+
 fn language_value(language: LanguageMode) -> &'static str {
     match language {
         LanguageMode::System => "system",
@@ -528,4 +864,121 @@ fn parse_f32(value: &str, fallback: f32) -> f32 {
 
 fn parse_usize(value: &str, fallback: usize) -> usize {
     value.parse().unwrap_or(fallback)
+}
+
+fn live_status_label(labels: Labels, status: LiveStatus) -> &'static str {
+    match status {
+        LiveStatus::Disconnected => labels.status_disconnected,
+        LiveStatus::Connecting => labels.status_connecting,
+        LiveStatus::Connected => labels.status_connected,
+        LiveStatus::Disconnecting => labels.status_disconnecting,
+        LiveStatus::Error => labels.history_status_failed,
+    }
+}
+
+fn template_textarea(
+    id: &'static str,
+    label: impl Fn() -> String + Send + Sync + 'static + Copy,
+    value: impl Fn() -> String + Send + Sync + 'static + Copy,
+    on_change: impl Fn(String) + Send + Sync + 'static + Copy,
+) -> impl IntoView {
+    view! {
+        <label class="settings-field live-template-field" for=id>
+            <span>{label}</span>
+            <textarea
+                id=id
+                rows="2"
+                prop:value=value
+                on:change=move |event| on_change(event_target_value(&event))
+            ></textarea>
+        </label>
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    fn css_block<'a>(css: &'a str, selector: &str) -> &'a str {
+        let start = css
+            .find(selector)
+            .unwrap_or_else(|| panic!("missing CSS selector: {selector}"));
+        let tail = &css[start..];
+        let end = tail
+            .find("\n}")
+            .unwrap_or_else(|| panic!("missing CSS block end for: {selector}"));
+        &tail[..end]
+    }
+
+    #[test]
+    fn live_settings_merge_filter_auto_generation_and_test_controls() {
+        let source = include_str!("settings_modal.rs");
+        let connection_row = ["live", "-connection-row"].concat();
+        let mode_row = ["live", "-mode-row"].concat();
+        let message_subsection = ["live", "-message-subsection"].concat();
+        let message_row = ["live", "-message-row"].concat();
+        let auto_gen_checkbox = ["live", "-auto-gen-checkbox"].concat();
+        let enable_auto_gen_label = ["labels().enable", "_auto_gen"].concat();
+        let separated_auto_gen_heading = ["labels().auto", "_gen_messages}</h4>"].concat();
+
+        assert!(
+            source.contains(&connection_row),
+            "Live settings should put identity, connect action, and status in one fixed row"
+        );
+        assert!(
+            source.contains(&mode_row),
+            "Live settings should use a fixed full-width row for mode controls"
+        );
+        assert!(
+            source.contains(&message_subsection),
+            "Live message controls should be wrapped in one larger subsection"
+        );
+        assert!(
+            source.contains(&message_row),
+            "Live message filters, auto generation, and test actions should share one row"
+        );
+        assert!(
+            source.contains(&auto_gen_checkbox),
+            "Each message row should expose auto generation beside its filter checkbox"
+        );
+        assert!(
+            source.contains(&enable_auto_gen_label),
+            "Auto generation checkboxes should use the compact Enable auto gen label"
+        );
+        assert!(
+            !source.contains(&separated_auto_gen_heading),
+            "Auto generation should no longer be separated into its own checkbox section"
+        );
+    }
+
+    #[test]
+    fn live_settings_css_uses_fixed_compact_rows() {
+        let css = include_str!("../styles.css");
+        let template_grid = css_block(css, ".live-template-grid");
+        let message_subsection = [".live", "-message-subsection"].concat();
+
+        assert!(
+            css.contains(".live-settings-grid {\r\n  grid-template-columns: minmax(0, 1fr);")
+                || css.contains(".live-settings-grid {\n  grid-template-columns: minmax(0, 1fr);"),
+            "Live settings should not inherit the generic two-column settings grid"
+        );
+        assert!(
+            css.contains(".live-connection-row"),
+            "CSS should define the compact identity/connect/status row"
+        );
+        assert!(
+            css.contains(".live-mode-row"),
+            "CSS should define the fixed mode-control row"
+        );
+        assert!(
+            css.contains(".live-message-row"),
+            "CSS should define merged filter/auto-generation/test rows"
+        );
+        assert!(
+            css.contains(&message_subsection),
+            "CSS should define the larger wrapper around message controls"
+        );
+        assert!(
+            template_grid.contains("grid-template-columns: minmax(0, 1fr);"),
+            "Template controls should render one template per row"
+        );
+    }
 }

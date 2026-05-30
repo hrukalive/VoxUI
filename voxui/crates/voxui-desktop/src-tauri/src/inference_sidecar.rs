@@ -5,6 +5,9 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+
 use anyhow::{Context, Result};
 use voxui_sidecar_protocol::{
     f32_samples_from_le_bytes, read_frame, write_frame, Frame, SidecarCommand, SidecarEvent,
@@ -28,16 +31,26 @@ impl SidecarProcess {
     pub fn spawn(
         sidecar_path: impl AsRef<Path>,
     ) -> Result<(Self, mpsc::Receiver<SidecarReaderEvent>)> {
-        tracing::info!(
-            "spawning inference sidecar: {}",
-            sidecar_path.as_ref().display()
-        );
-        let mut child = Command::new(sidecar_path.as_ref())
+        let sidecar_dir = sidecar_path
+            .as_ref()
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| Path::new(".").to_path_buf());
+        let sidecar_exe = sidecar_path.as_ref().to_path_buf();
+        tracing::info!("spawning inference sidecar: {}", sidecar_exe.display());
+        let mut cmd = Command::new(&sidecar_exe);
+        cmd.current_dir(&sidecar_dir)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
+            .stderr(Stdio::null());
+        #[cfg(windows)]
+        {
+            const CREATE_NO_WINDOW: u32 = 0x08000000;
+            cmd.creation_flags(CREATE_NO_WINDOW);
+        }
+        let mut child = cmd
             .spawn()
-            .with_context(|| format!("spawn sidecar {}", sidecar_path.as_ref().display()))?;
+            .with_context(|| format!("spawn sidecar {}", sidecar_exe.display()))?;
         let stdin = child.stdin.take().context("sidecar stdin unavailable")?;
         let stdout = child.stdout.take().context("sidecar stdout unavailable")?;
         let (sender, receiver) = mpsc::channel();
