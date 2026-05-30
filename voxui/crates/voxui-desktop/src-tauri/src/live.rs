@@ -145,6 +145,7 @@ impl LiveState {
             uname: item.event.uname.clone(),
             mapped_uname,
             suggestion,
+            raw_message: None,
             raw_json: item.event.raw.clone(),
         })
     }
