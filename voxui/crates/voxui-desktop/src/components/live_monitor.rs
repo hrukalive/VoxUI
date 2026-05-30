@@ -867,9 +867,12 @@ mod tests {
         let styles = include_str!("../styles.css");
         let selectors = [
             [".live", "-map-button"].concat(),
+            [".live", "-map-button", ".primary-button"].concat(),
             [".live", "-send-actions"].concat(),
             [".mapped", "-uname-modal"].concat(),
+            [".mapped", "-uname-form"].concat(),
             [".mapped", "-uname-field"].concat(),
+            [".mapped", "-uname-field input"].concat(),
             [".mapped", "-uname-actions"].concat(),
         ];
 
