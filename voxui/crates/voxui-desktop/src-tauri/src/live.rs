@@ -137,6 +137,12 @@ impl LiveState {
             .cloned()
             .unwrap_or_else(|| item.event.uname.clone());
 
+        let raw_message = match item.event.kind {
+            LiveMessageKind::Danmu => item.event.msg.clone(),
+            LiveMessageKind::Superchat => item.event.superchat_message.clone(),
+            _ => None,
+        };
+
         Some(LiveMonitorItemDto {
             id: item.id.clone(),
             kind: item.event.kind,
@@ -145,7 +151,7 @@ impl LiveState {
             uname: item.event.uname.clone(),
             mapped_uname,
             suggestion,
-            raw_message: None,
+            raw_message,
             raw_json: item.event.raw.clone(),
         })
     }

@@ -1645,3 +1645,91 @@ body:has(.live-monitor-shell) {
   text-align: right;
   font-size: 13px;
 }
+
+/* Translation Bar (main window, left of input) */
+.composer-row {
+  display: flex;
+  gap: 10px;
+  align-items: stretch;
+}
+
+.composer-translation-column {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  min-width: 120px;
+  max-width: 140px;
+  flex-shrink: 0;
+}
+
+.translation-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.translation-target-select {
+  width: 100%;
+}
+
+.translation-button {
+  width: 100%;
+  white-space: nowrap;
+}
+
+.translation-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.translation-checkbox input[type="checkbox"] {
+  margin: 0;
+}
+
+/* Live Monitor Translation Panel */
+.live-translation-panel {
+  margin-top: 8px;
+  padding: 8px;
+  border-top: 1px solid var(--border-color);
+  background: var(--bg-hover);
+  border-radius: 4px;
+}
+
+.live-translation-controls {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.live-translation-source-select,
+.live-translation-target-select {
+  min-width: 100px;
+}
+
+.live-translation-do-button {
+  flex-shrink: 0;
+}
+
+.live-translation-result {
+  margin-top: 8px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  word-break: break-word;
+}
+
+.live-translation-loading {
+  font-style: italic;
+  opacity: 0.7;
+}
+
+/* Settings Translation section */
+.settings-section-desc {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin: 0 0 10px 0;
+}

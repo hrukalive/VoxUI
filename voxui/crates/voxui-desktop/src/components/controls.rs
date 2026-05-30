@@ -235,3 +235,34 @@ fn format_number(value: f64, precision: usize) -> String {
             .to_string()
     }
 }
+
+pub fn translation_lang_options(include_auto: bool, labels: &crate::i18n::Labels) -> Vec<SelectOption> {
+    let mut options = Vec::new();
+
+    if include_auto {
+        options.push(SelectOption::new("auto", labels.auto_detect));
+    }
+
+    options.push(SelectOption::new("ZH", "中文"));
+    options.push(SelectOption::new("EN", "English"));
+    options.push(SelectOption::new("JA", "日本語"));
+
+    let rest: &[(&str, &str)] = &[
+        ("AR", "العربية"), ("BG", "Български"), ("CS", "Čeština"), ("DA", "Dansk"),
+        ("DE", "Deutsch"), ("EL", "Ελληνικά"), ("EN-GB", "English (UK)"), ("EN-US", "English (US)"),
+        ("ES", "Español"), ("ES-419", "Español (Latinoamérica)"), ("ET", "Eesti"),
+        ("FI", "Suomi"), ("FR", "Français"), ("HE", "עברית"), ("HU", "Magyar"),
+        ("ID", "Bahasa Indonesia"), ("IT", "Italiano"), ("KO", "한국어"), ("LT", "Lietuvių"),
+        ("LV", "Latviešu"), ("NB", "Norsk"), ("NL", "Nederlands"), ("PL", "Polski"),
+        ("PT-BR", "Português (Brasil)"), ("PT-PT", "Português (Portugal)"),
+        ("RO", "Română"), ("RU", "Русский"), ("SK", "Slovenčina"), ("SL", "Slovenščina"),
+        ("SV", "Svenska"), ("TR", "Türkçe"), ("UK", "Українська"), ("VI", "Tiếng Việt"),
+        ("ZH-HANT", "繁體中文"),
+    ];
+
+    for (code, label) in rest {
+        options.push(SelectOption::new(*code, *label));
+    }
+
+    options
+}

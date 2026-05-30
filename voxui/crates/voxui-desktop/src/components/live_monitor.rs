@@ -1,15 +1,15 @@
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use leptos::html::Div;
 use leptos::prelude::*;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
 
-use crate::components::controls::{CustomSelect, SelectOption};
+use crate::components::controls::{translation_lang_options, CustomSelect, SelectOption};
 use crate::i18n::Labels;
 use crate::tauri_api::{
     AutoGenMode, LiveConfig, LiveConfigPatch, LiveMessageKind, LiveMonitorItem, LiveSnapshot,
-    LiveStatus, SendMode,
+    LiveStatus, SendMode, TranslationSettings,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -26,6 +26,8 @@ pub fn LiveMonitor(
     on_live_patch: impl Fn(LiveConfigPatch) + Send + Sync + 'static + Copy,
     on_send: impl Fn(String, bool, bool) + Send + Sync + 'static + Copy,
     on_clear: impl Fn() + Send + Sync + 'static + Copy,
+    translation_config: impl Fn() -> TranslationSettings + Send + Sync + 'static + Copy,
+    on_translation_patch: impl Fn(TranslationSettings) + Send + Sync + 'static + Copy,
 ) -> impl IntoView {
     let feed_ref = NodeRef::<Div>::new();
     let (was_near_bottom, set_was_near_bottom) = signal(true);
@@ -35,6 +37,8 @@ pub fn LiveMonitor(
     let (status_notice_generation, set_status_notice_generation) = signal(0_u64);
     let (last_status_key, set_last_status_key) = signal(None::<(LiveStatus, Option<String>)>);
     let (mapped_uname_draft, set_mapped_uname_draft) = signal(None::<MappedUnameDraft>);
+    let (expanded_translations, set_expanded_translations) = signal(HashSet::<String>::new());
+    let (translation_results, set_translation_results) = signal(HashMap::<String, (String, bool)>::new());
 
     let open_mapped_uname_modal = move |item: LiveMonitorItem| {
         let initial_value = mapped_uname_initial_value(
@@ -269,6 +273,39 @@ pub fn LiveMonitor(
                                     <p>{suggestion}</p>
                                 </div>
                                 <div class="live-item-actions">
+                                    {
+                                        let supports_translation = matches!(kind, LiveMessageKind::Danmu | LiveMessageKind::Superchat);
+                                        let has_raw_message = item.raw_message.is_some();
+                                        if supports_translation && has_raw_message {
+                                            let translate_item_id = item.id.clone();
+                                            view! {
+                                                <button
+                                                    class="live-monitor-button"
+                                                    type="button"
+                                                    title=labels.translate
+                                                    aria-label=labels.translate
+                                                    on:click=move |_| {
+                                                        let id = translate_item_id.clone();
+                                                        set_expanded_translations.update(|set| {
+                                                            if set.contains(&id) {
+                                                                set.remove(&id);
+                                                            } else {
+                                                                set.insert(id);
+                                                            }
+                                                        });
+                                                    }
+                                                >
+                                                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                                        <path d="M5 8l6-6 6 6"></path>
+                                                        <path d="M5 16l6 6 6-6"></path>
+                                                        <line x1="12" y1="2" x2="12" y2="22"></line>
+                                                    </svg>
+                                                </button>
+                                            }.into_any()
+                                        } else {
+                                            ().into_any()
+                                        }
+                                    }
                                     {mapped_uname_button}
                                     <div
                                         class="live-send-actions"
@@ -305,6 +342,96 @@ pub fn LiveMonitor(
                                         {switch_button}
                                     </div>
                                 </div>
+                                {
+                                    let supports_translation = matches!(kind, LiveMessageKind::Danmu | LiveMessageKind::Superchat);
+                                    let has_raw_message = item.raw_message.is_some();
+                                    if supports_translation && has_raw_message {
+                                        let item_id_for_panel = item.id.clone();
+                                        let raw_msg = item.raw_message.clone().unwrap_or_default();
+                                        let trans_config = translation_config.clone();
+                                        let trans_patch = on_translation_patch.clone();
+                                        view! {
+                                            <Show when=move || expanded_translations.get().contains(&item_id_for_panel)>
+                                                <div class="live-translation-panel">
+                                                    <div class="live-translation-controls">
+                                                        <CustomSelect
+                                                            class="live-translation-source-select"
+                                                            aria_label=move || labels().source_language
+                                                            value=move || trans_config().inbound.source_lang.clone()
+                                                            options=move || translation_lang_options(true, &labels())
+                                                            disabled=move || false
+                                                            on_change=move |value| {
+                                                                let mut cfg = trans_config();
+                                                                cfg.inbound.source_lang = value;
+                                                                trans_patch(cfg);
+                                                            }
+                                                        />
+                                                        <CustomSelect
+                                                            class="live-translation-target-select"
+                                                            aria_label=move || labels().target_language
+                                                            value=move || trans_config().inbound.target_lang.clone()
+                                                            options=move || translation_lang_options(false, &labels())
+                                                            disabled=move || false
+                                                            on_change=move |value| {
+                                                                let mut cfg = trans_config();
+                                                                cfg.inbound.target_lang = value;
+                                                                trans_patch(cfg);
+                                                            }
+                                                        />
+                                                        <button
+                                                            class="primary-button live-translation-do-button"
+                                                            type="button"
+                                                            disabled=move || {
+                                                                translation_results.get()
+                                                                    .get(&item_id_for_panel)
+                                                                    .map(|(_, loading)| *loading)
+                                                                    .unwrap_or(false)
+                                                            }
+                                                            on:click=move |_| {
+                                                                let item_id = item_id_for_panel.clone();
+                                                                let msg = raw_msg.clone();
+                                                                let source = trans_config().inbound.source_lang.clone();
+                                                                let target = trans_config().inbound.target_lang.clone();
+                                                                set_translation_results.update(|results| {
+                                                                    results.insert(item_id.clone(), (String::new(), true));
+                                                                });
+                                                                spawn_local(async move {
+                                                                    match crate::tauri_api::translate_text(msg, source, target).await {
+                                                                        Ok(translated) => {
+                                                                            set_translation_results.update(|results| {
+                                                                                results.insert(item_id, (translated, false));
+                                                                            });
+                                                                        }
+                                                                        Err(_) => {
+                                                                            set_translation_results.update(|results| {
+                                                                                results.remove(&item_id);
+                                                                            });
+                                                                        }
+                                                                    }
+                                                                });
+                                                            }
+                                                        >
+                                                            {move || labels().translate}
+                                                        </button>
+                                                    </div>
+                                                    {move || {
+                                                        translation_results.get()
+                                                            .get(&item_id_for_panel)
+                                                            .map(|(result, loading)| {
+                                                                if *loading {
+                                                                    view! { <p class="live-translation-result live-translation-loading">{labels().translating}</p> }.into_any()
+                                                                } else {
+                                                                    view! { <p class="live-translation-result">{result.clone()}</p> }.into_any()
+                                                                }
+                                                            })
+                                                    }}
+                                                </div>
+                                            </Show>
+                                        }.into_any()
+                                    } else {
+                                        ().into_any()
+                                    }
+                                }
                             </article>
                         }
                     }

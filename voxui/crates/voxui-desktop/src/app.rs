@@ -8,6 +8,7 @@ use crate::components::input_box::InputBox;
 use crate::components::live_monitor::LiveMonitor;
 use crate::components::load_progress_modal::LoadProgressModal;
 use crate::components::settings_modal::{SettingsModal, SettingsPage};
+use crate::components::translation_bar::TranslationBar;
 use crate::i18n::{labels, UiLanguage};
 use crate::tauri_api::{
     AppConfig, AppSnapshot, AudioState, AutoGenMode, BackendKind, ConfigPatch, GenerationDoneEvent,
@@ -31,6 +32,7 @@ pub fn App() -> impl IntoView {
     let (live_snapshot, set_live_snapshot) = signal(fallback_live_snapshot());
     let (audio_state, set_audio_state) = signal(AudioState::default());
     let (input_replacement, set_input_replacement) = signal(None::<String>);
+    let (input_text, set_input_text) = signal(String::new());
 
     // Root component is mounted once; Tauri event listeners intentionally live for the app lifetime.
     spawn_local(async move {
@@ -238,6 +240,13 @@ pub fn App() -> impl IntoView {
                             }
                         });
                     }
+                    translation_config=move || current_snapshot().config.translation.clone()
+                    on_translation_patch=move |translation| {
+                        commit_config_patch(ConfigPatch {
+                            translation: Some(translation),
+                            ..ConfigPatch::default()
+                        });
+                    }
                 />
             </div>
         }
@@ -385,6 +394,29 @@ pub fn App() -> impl IntoView {
                 }
                 replacement_text=move || input_replacement.get()
                 on_replacement_consumed=move || set_input_replacement.set(None)
+                on_text_change=move |text| set_input_text.set(text)
+                translation_bar=Some(
+                    view! {
+                        <TranslationBar
+                            labels=current_labels
+                            config=move || current_snapshot().config.clone()
+                            input_text=move || input_text.get()
+                            disabled=move || {
+                                let snapshot = current_snapshot();
+                                snapshot.loaded_model_id.is_none() || matches!(snapshot.load_state, LoadUiState::Loading)
+                            }
+                            on_replace_text=move |text| set_input_replacement.set(Some(text))
+                            on_enqueue=move |text| {
+                                spawn_local(async move {
+                                    if crate::tauri_api::enqueue_generation(text).await.is_ok() {
+                                        refresh_snapshot();
+                                    }
+                                });
+                            }
+                            on_config_patch=commit_config_patch
+                        />
+                    }.into_any()
+                )
                 on_generate=move |text| {
                     spawn_local(async move {
                         if crate::tauri_api::enqueue_generation(text).await.is_ok() {
@@ -712,6 +744,9 @@ fn apply_optimistic_patch(snapshot: &mut AppSnapshot, patch: &ConfigPatch) {
     }
     if let Some(generation) = patch.generation.as_ref() {
         snapshot.config.generation = generation.clone();
+    }
+    if let Some(translation) = patch.translation.as_ref() {
+        snapshot.config.translation = translation.clone();
     }
 }
 

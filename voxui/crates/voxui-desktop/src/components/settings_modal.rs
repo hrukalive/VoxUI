@@ -1,6 +1,6 @@
 use leptos::prelude::*;
 
-use crate::components::controls::{CustomSelect, NumberCounter, SelectOption};
+use crate::components::controls::{translation_lang_options, CustomSelect, NumberCounter, SelectOption};
 use crate::i18n::{Labels, UiLanguage};
 use crate::tauri_api::{
     AppConfig, AudioDevice, AudioHost, AudioState, AutoGenMode, BackendKind, ConfigPatch,
@@ -100,6 +100,7 @@ pub fn SettingsModal(
                             <button type="button" class:active=move || active_page() == SettingsPage::Inference on:click=move |_| on_page_select(SettingsPage::Inference)>{move || labels().settings_inference}</button>
                             <button type="button" class:active=move || active_page() == SettingsPage::Audio on:click=move |_| on_page_select(SettingsPage::Audio)>{move || labels().settings_audio}</button>
                             <button type="button" class:active=move || active_page() == SettingsPage::Live on:click=move |_| on_page_select(SettingsPage::Live)>{move || labels().live}</button>
+                            <button type="button" class:active=move || active_page() == SettingsPage::Translation on:click=move |_| on_page_select(SettingsPage::Translation)>{move || labels().translation_tab}</button>
                             <button type="button" class:active=move || active_page() == SettingsPage::About on:click=move |_| on_page_select(SettingsPage::About)>{move || labels().settings_about}</button>
                         </nav>
 
@@ -699,6 +700,106 @@ pub fn SettingsModal(
                                                 }}
                                             </div>
                                         </div>
+                                    </div>
+                                </section>
+                            </Show>
+
+                            <Show when=move || active_page() == SettingsPage::Translation>
+                                <section class="settings-section">
+                                    <h3>{move || labels().outbound_translation}</h3>
+                                    <p class="settings-section-desc">{move || labels().outbound_description}</p>
+                                    <div class="settings-grid">
+                                        <label class="settings-field">
+                                            <span>{move || labels().source_language}</span>
+                                            <CustomSelect
+                                                class="settings-select-control"
+                                                aria_label=move || labels().source_language
+                                                value=move || config().translation.outbound.source_lang.clone()
+                                                options=move || translation_lang_options(true, &labels())
+                                                disabled=move || false
+                                                on_change=move |value| {
+                                                    let mut translation = config().translation.clone();
+                                                    translation.outbound.source_lang = value;
+                                                    on_config_patch(ConfigPatch {
+                                                        translation: Some(translation),
+                                                        ..ConfigPatch::default()
+                                                    });
+                                                }
+                                            />
+                                        </label>
+                                        <label class="settings-field">
+                                            <span>{move || labels().target_language}</span>
+                                            <CustomSelect
+                                                class="settings-select-control"
+                                                aria_label=move || labels().target_language
+                                                value=move || config().translation.outbound.target_lang.clone()
+                                                options=move || translation_lang_options(false, &labels())
+                                                disabled=move || false
+                                                on_change=move |value| {
+                                                    let mut translation = config().translation.clone();
+                                                    translation.outbound.target_lang = value;
+                                                    on_config_patch(ConfigPatch {
+                                                        translation: Some(translation),
+                                                        ..ConfigPatch::default()
+                                                    });
+                                                }
+                                            />
+                                        </label>
+                                        <label class="settings-checkbox settings-switch">
+                                            <input
+                                                type="checkbox"
+                                                prop:checked=move || config().translation.translate_enqueue
+                                                on:change=move |event| {
+                                                    let mut translation = config().translation.clone();
+                                                    translation.translate_enqueue = event_target_checked(&event);
+                                                    on_config_patch(ConfigPatch {
+                                                        translation: Some(translation),
+                                                        ..ConfigPatch::default()
+                                                    });
+                                                }
+                                            />
+                                            <span>{move || labels().enqueue_translation}</span>
+                                        </label>
+                                    </div>
+                                    <h3>{move || labels().inbound_translation}</h3>
+                                    <p class="settings-section-desc">{move || labels().inbound_description}</p>
+                                    <div class="settings-grid">
+                                        <label class="settings-field">
+                                            <span>{move || labels().source_language}</span>
+                                            <CustomSelect
+                                                class="settings-select-control"
+                                                aria_label=move || labels().source_language
+                                                value=move || config().translation.inbound.source_lang.clone()
+                                                options=move || translation_lang_options(true, &labels())
+                                                disabled=move || false
+                                                on_change=move |value| {
+                                                    let mut translation = config().translation.clone();
+                                                    translation.inbound.source_lang = value;
+                                                    on_config_patch(ConfigPatch {
+                                                        translation: Some(translation),
+                                                        ..ConfigPatch::default()
+                                                    });
+                                                }
+                                            />
+                                        </label>
+                                        <label class="settings-field">
+                                            <span>{move || labels().target_language}</span>
+                                            <CustomSelect
+                                                class="settings-select-control"
+                                                aria_label=move || labels().target_language
+                                                value=move || config().translation.inbound.target_lang.clone()
+                                                options=move || translation_lang_options(false, &labels())
+                                                disabled=move || false
+                                                on_change=move |value| {
+                                                    let mut translation = config().translation.clone();
+                                                    translation.inbound.target_lang = value;
+                                                    on_config_patch(ConfigPatch {
+                                                        translation: Some(translation),
+                                                        ..ConfigPatch::default()
+                                                    });
+                                                }
+                                            />
+                                        </label>
                                     </div>
                                 </section>
                             </Show>
