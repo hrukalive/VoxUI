@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 
 use leptos::html::Div;
 use leptos::prelude::*;
@@ -313,6 +313,43 @@ fn live_item_render_key(item: &LiveMonitorItem) -> String {
     )
 }
 
+fn mapped_uname_initial_value(
+    mapped_unames: &BTreeMap<String, String>,
+    open_id: &str,
+    uname: &str,
+) -> String {
+    mapped_unames
+        .get(open_id)
+        .cloned()
+        .unwrap_or_else(|| uname.to_string())
+}
+
+fn mapped_uname_needs_attention(
+    mapped_unames: &BTreeMap<String, String>,
+    original_unames: &BTreeMap<String, String>,
+    open_id: &str,
+    uname: &str,
+) -> bool {
+    !mapped_unames.contains_key(open_id)
+        || original_unames
+            .get(open_id)
+            .map(|original| original != uname)
+            .unwrap_or(true)
+}
+
+fn mapped_uname_button_class(
+    mapped_unames: &BTreeMap<String, String>,
+    original_unames: &BTreeMap<String, String>,
+    open_id: &str,
+    uname: &str,
+) -> &'static str {
+    if mapped_uname_needs_attention(mapped_unames, original_unames, open_id, uname) {
+        "primary-button live-map-button"
+    } else {
+        "live-monitor-button live-map-button"
+    }
+}
+
 fn status_text(snapshot: &LiveSnapshot, labels: Labels) -> String {
     match snapshot.status_message.as_deref() {
         Some(message) if !message.is_empty() => {
@@ -479,6 +516,67 @@ mod tests {
         let second_key = live_item_render_key(&item);
         item.mapped_uname = "A-chan".to_string();
         assert_ne!(second_key, live_item_render_key(&item));
+    }
+
+    #[test]
+    fn mapped_uname_input_prefers_existing_mapping() {
+        let mut mapped_unames = BTreeMap::new();
+        mapped_unames.insert("u1".to_string(), "A-chan".to_string());
+
+        assert_eq!(
+            mapped_uname_initial_value(&mapped_unames, "u1", "Alice"),
+            "A-chan"
+        );
+        assert_eq!(
+            mapped_uname_initial_value(&mapped_unames, "u2", "Bob"),
+            "Bob"
+        );
+    }
+
+    #[test]
+    fn mapped_uname_attention_tracks_missing_or_changed_names() {
+        let mut mapped_unames = BTreeMap::new();
+        mapped_unames.insert("u1".to_string(), "A-chan".to_string());
+
+        let mut original_unames = BTreeMap::new();
+        original_unames.insert("u1".to_string(), "Alice".to_string());
+
+        assert!(!mapped_uname_needs_attention(
+            &mapped_unames,
+            &original_unames,
+            "u1",
+            "Alice"
+        ));
+        assert!(mapped_uname_needs_attention(
+            &mapped_unames,
+            &original_unames,
+            "u2",
+            "Bob"
+        ));
+        assert!(mapped_uname_needs_attention(
+            &mapped_unames,
+            &original_unames,
+            "u1",
+            "AliceNew"
+        ));
+    }
+
+    #[test]
+    fn mapped_uname_button_class_matches_attention_state() {
+        let mut mapped_unames = BTreeMap::new();
+        mapped_unames.insert("u1".to_string(), "A-chan".to_string());
+
+        let mut original_unames = BTreeMap::new();
+        original_unames.insert("u1".to_string(), "Alice".to_string());
+
+        assert_eq!(
+            mapped_uname_button_class(&mapped_unames, &original_unames, "u1", "Alice"),
+            "live-monitor-button live-map-button"
+        );
+        assert_eq!(
+            mapped_uname_button_class(&mapped_unames, &original_unames, "u1", "AliceNew"),
+            "primary-button live-map-button"
+        );
     }
 
     #[test]
