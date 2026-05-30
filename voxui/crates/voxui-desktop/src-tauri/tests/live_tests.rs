@@ -755,9 +755,18 @@ fn adding_live_event_persists_only_when_name_mapping_changes() {
         .unwrap();
 
     let replaced_snapshot = empty_mapping_core.live_snapshot_for_test(LiveLanguage::English);
+    let replaced_saved = voxui_desktop::config::load_config(&empty_mapping_path).unwrap();
     assert_eq!(
         replaced_snapshot
             .config
+            .original_unames
+            .get("u-existing-empty")
+            .map(String::as_str),
+        Some("Alice")
+    );
+    assert_eq!(
+        replaced_saved
+            .live
             .original_unames
             .get("u-existing-empty")
             .map(String::as_str),
@@ -797,9 +806,53 @@ fn adding_live_event_persists_only_when_name_mapping_changes() {
     })).unwrap().unwrap();
     core.add_live_event_for_test(named_event.clone()).unwrap();
     assert!(config_path.exists());
+    let saved = voxui_desktop::config::load_config(&config_path).unwrap();
+    assert_eq!(
+        saved.live.original_unames.get("u1").map(String::as_str),
+        Some("Alice")
+    );
+    assert!(
+        !saved.live.mapped_unames.contains_key("u1"),
+        "first-seen users should not be persisted as configured mapped names"
+    );
 
     fs::write(&config_path, "sentinel").unwrap();
     core.add_live_event_for_test(named_event).unwrap();
 
     assert_eq!(fs::read_to_string(&config_path).unwrap(), "sentinel");
+}
+
+#[test]
+fn mapped_uname_patch_persists_acknowledged_original_uname() {
+    let temp = TempDir::new().unwrap();
+    let config_path = temp.path().join("voxui_config.json");
+    let mut core = voxui_desktop::app_core::AppCore::from_config(AppConfig::default()).unwrap();
+    core.set_config_path(config_path.clone());
+    let event = parse_live_event(json!({
+        "cmd": "LIVE_OPEN_PLATFORM_SEND_GIFT",
+        "data": { "paid": true, "gift_name": "flower", "gift_num": 1, "open_id": "u1", "uname": "AliceNew" }
+    }))
+    .unwrap()
+    .unwrap();
+
+    core.add_live_event_for_test(event).unwrap();
+    core.apply_live_patch(LiveConfigPatch {
+        mapped_unames: Some(
+            [("u1".to_string(), "A-chan".to_string())]
+                .into_iter()
+                .collect(),
+        ),
+        ..LiveConfigPatch::default()
+    })
+    .unwrap();
+
+    let saved = voxui_desktop::config::load_config(&config_path).unwrap();
+    assert_eq!(
+        saved.live.original_unames.get("u1").map(String::as_str),
+        Some("AliceNew")
+    );
+    assert_eq!(
+        saved.live.mapped_unames.get("u1").map(String::as_str),
+        Some("A-chan")
+    );
 }

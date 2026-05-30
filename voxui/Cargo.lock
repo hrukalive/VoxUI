@@ -6770,8 +6770,6 @@ name = "voxui-desktop"
 version = "0.1.1"
 dependencies = [
  "anyhow",
- "candle-core",
- "dirs",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
@@ -6781,12 +6779,9 @@ dependencies = [
  "tauri-plugin-dialog",
  "tauri-plugin-opener",
  "tempfile",
- "thiserror 2.0.18",
- "tokio",
  "tracing",
  "tracing-subscriber",
  "tungstenite",
- "url",
  "uuid",
  "voxui-audio",
  "voxui-inference",

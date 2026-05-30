@@ -323,14 +323,6 @@ pub fn LiveMonitor(
                             <section class="modal mapped-uname-modal" role="dialog" aria-modal="true" aria-label=move || labels().uname_map>
                                 <header class="modal-header">
                                     <h2>{move || labels().uname_map}</h2>
-                                    <button
-                                        class="secondary-button"
-                                        type="button"
-                                        aria-label=move || labels().close
-                                        on:click=move |_| set_mapped_uname_draft.set(None)
-                                    >
-                                        {move || labels().close}
-                                    </button>
                                 </header>
                                 <div class="mapped-uname-form">
                                     <label class="mapped-uname-field">
