@@ -296,17 +296,18 @@ pub fn App() -> impl IntoView {
                         }
                         on_open_settings=move || set_settings_open.set(true)
                         on_open_live_monitor=move || {
-                            let identity_code = live_snapshot.get_untracked().config.identity_code.trim().to_string();
+                            spawn_local(async move {
+                                if let Err(error) = crate::tauri_api::show_live_monitor().await {
+                                    set_live_error.set(Some(error));
+                                }
+                            });
+                            let live_snapshot = live_snapshot.get_untracked();
+                            let identity_code = live_snapshot.config.identity_code.trim().to_string();
                             if identity_code.is_empty() {
                                 set_live_error.set(Some("Identity code not provided".to_string()));
                                 return;
                             }
-                            if live_snapshot.get_untracked().status == LiveStatus::Connected {
-                                spawn_local(async move {
-                                    if let Err(error) = crate::tauri_api::show_live_monitor().await {
-                                        set_live_error.set(Some(error));
-                                    }
-                                });
+                            if matches!(live_snapshot.status, LiveStatus::Connected | LiveStatus::Connecting | LiveStatus::Disconnecting) {
                                 return;
                             }
                             spawn_local(async move {
@@ -385,7 +386,20 @@ pub fn App() -> impl IntoView {
                 on_config_patch=commit_config_patch
                 on_live_patch=commit_live_patch
                 on_live_connect=move || {
-                    let identity_code = live_snapshot.get_untracked().config.identity_code;
+                    spawn_local(async move {
+                        if let Err(error) = crate::tauri_api::show_live_monitor().await {
+                            set_live_error.set(Some(error));
+                        }
+                    });
+                    let live_snapshot = live_snapshot.get_untracked();
+                    let identity_code = live_snapshot.config.identity_code.trim().to_string();
+                    if identity_code.is_empty() {
+                        set_live_error.set(Some("Identity code not provided".to_string()));
+                        return;
+                    }
+                    if matches!(live_snapshot.status, LiveStatus::Connected | LiveStatus::Connecting | LiveStatus::Disconnecting) {
+                        return;
+                    }
                     spawn_local(async move {
                         match crate::tauri_api::connect_openblive(identity_code).await {
                             Ok(next_snapshot) => set_live_snapshot.set(next_snapshot),
@@ -746,6 +760,17 @@ fn apply_live_optimistic_patch(snapshot: &mut LiveSnapshot, patch: &LiveConfigPa
 
 #[cfg(test)]
 mod tests {
+    fn closure_body<'a>(source: &'a str, start: &str, end: &str) -> &'a str {
+        let start_index = source
+            .find(start)
+            .unwrap_or_else(|| panic!("missing closure start: {start}"));
+        let tail = &source[start_index..];
+        let end_index = tail
+            .find(end)
+            .unwrap_or_else(|| panic!("missing closure end after {start}: {end}"));
+        &tail[..end_index]
+    }
+
     #[test]
     fn history_list_is_not_remounted_by_snapshot_refreshes() {
         let source = include_str!("app.rs").replace("\r\n", "\n");
@@ -754,6 +779,75 @@ mod tests {
         assert!(
             !source.contains(snapshot_wrapped_history),
             "HistoryList must stay mounted across snapshot refreshes so progress updates do not reset its scroll state"
+        );
+    }
+
+    #[test]
+    fn monitor_button_shows_window_before_connection_checks() {
+        let source = include_str!("app.rs").replace("\r\n", "\n");
+        let body = closure_body(
+            &source,
+            "on_open_live_monitor=move || {",
+            "                    />",
+        );
+        let show_index = body
+            .find("crate::tauri_api::show_live_monitor().await")
+            .expect("monitor button must show the live monitor window");
+        let identity_index = body
+            .find("identity_code.is_empty()")
+            .expect("monitor button should still validate identity before connecting");
+        let connect_index = body
+            .find("crate::tauri_api::connect_openblive(identity_code).await")
+            .expect("monitor button should connect when needed");
+
+        assert!(
+            show_index < identity_index && show_index < connect_index,
+            "monitor button must show the window before identity/status connection decisions"
+        );
+    }
+
+    #[test]
+    fn settings_live_connect_shows_monitor_before_connecting() {
+        let source = include_str!("app.rs").replace("\r\n", "\n");
+        let body = closure_body(
+            &source,
+            "on_live_connect=move || {",
+            "                }\n                on_live_disconnect=",
+        );
+        let show_index = body
+            .find("crate::tauri_api::show_live_monitor().await")
+            .expect("settings connect must show the live monitor window");
+        let connect_index = body
+            .find("crate::tauri_api::connect_openblive(identity_code).await")
+            .expect("settings connect should still connect to OpenLive");
+
+        assert!(
+            show_index < connect_index,
+            "settings connect must show the monitor window before connecting"
+        );
+    }
+
+    #[test]
+    fn live_connect_handlers_do_not_suppress_connecting_snapshots() {
+        let source = include_str!("app.rs").replace("\r\n", "\n");
+        let monitor_body = closure_body(
+            &source,
+            "on_open_live_monitor=move || {",
+            "                    />",
+        );
+        let settings_body = closure_body(
+            &source,
+            "on_live_connect=move || {",
+            "                }\n                on_live_disconnect=",
+        );
+
+        assert!(
+            !monitor_body.contains("LiveStatus::Connecting"),
+            "monitor button should still call connect_openblive for a Connecting snapshot; backend worker guard handles true duplicates"
+        );
+        assert!(
+            !settings_body.contains("LiveStatus::Connecting"),
+            "settings connect should still call connect_openblive for a Connecting snapshot; backend worker guard handles true duplicates"
         );
     }
 }

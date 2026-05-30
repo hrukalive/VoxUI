@@ -62,7 +62,8 @@ fn tauri_config_defines_hidden_live_monitor_window() {
         .expect("live-monitor window config");
 
     assert_eq!(live["title"], "Bilibili Live Monitor");
-    assert_eq!(live["create"], false);
+    assert_eq!(live["visible"], false);
+    assert!(live.get("create").is_none());
     assert_eq!(live["width"], 500);
     assert_eq!(live["height"], 640);
     assert_eq!(live["minWidth"], 360);

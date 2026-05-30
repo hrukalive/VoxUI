@@ -7,7 +7,7 @@ use types::AppConfig;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CloseRequestHandling {
-    LetWindowClose,
+    HideWindow,
     ShutdownApp,
 }
 
@@ -46,7 +46,7 @@ pub fn run() {
         .on_window_event(|window, event| {
             if let WindowEvent::CloseRequested { api, .. } = event {
                 match close_request_handling(window.label()) {
-                    CloseRequestHandling::LetWindowClose => {
+                    CloseRequestHandling::HideWindow => {
                         api.prevent_close();
                         if let Err(error) = window.hide() {
                             tracing::warn!("failed to hide live monitor window: {error}");
@@ -100,7 +100,7 @@ pub fn run() {
 fn close_request_handling(window_label: &str) -> CloseRequestHandling {
     match window_label {
         "main" => CloseRequestHandling::ShutdownApp,
-        _ => CloseRequestHandling::LetWindowClose,
+        _ => CloseRequestHandling::HideWindow,
     }
 }
 
@@ -135,10 +135,10 @@ mod tests {
     use super::{close_request_handling, config_path_next_to_exe, CloseRequestHandling};
 
     #[test]
-    fn live_monitor_close_is_not_intercepted() {
+    fn live_monitor_close_hides_window_to_keep_webview_reusable() {
         assert_eq!(
             close_request_handling("live-monitor"),
-            CloseRequestHandling::LetWindowClose
+            CloseRequestHandling::HideWindow
         );
     }
 

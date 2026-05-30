@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::Duration;
 
-use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder, Window};
+use tauri::{AppHandle, Emitter, Manager, State, WebviewWindowBuilder, Window};
 use tauri_plugin_dialog::DialogExt;
 use voxui_audio::{AudioPlayer, AudioSystem, StreamingPlayer, VolumeHandle};
 use voxui_sidecar_protocol::{
@@ -149,7 +149,7 @@ pub fn exit_app(app: AppHandle) -> Result<CommandResult, String> {
 }
 
 #[tauri::command]
-pub fn show_live_monitor(app: AppHandle) -> Result<CommandResult, String> {
+pub async fn show_live_monitor(app: AppHandle) -> Result<CommandResult, String> {
     show_live_monitor_impl(&app)?;
     Ok(CommandResult { ok: true })
 }
@@ -687,12 +687,20 @@ fn show_live_monitor_impl(app: &AppHandle) -> Result<(), String> {
         return Ok(());
     }
 
-    WebviewWindowBuilder::new(app, "live-monitor", WebviewUrl::App("index.html".into()))
-        .title("Live Monitor")
-        .inner_size(480.0, 640.0)
-        .min_inner_size(360.0, 420.0)
+    let config = app
+        .config()
+        .app
+        .windows
+        .iter()
+        .find(|window| window.label == "live-monitor")
+        .cloned()
+        .ok_or_else(|| "live-monitor window config is missing".to_string())?;
+    let window = WebviewWindowBuilder::from_config(app, &config)
+        .map_err(|error| error.to_string())?
         .build()
         .map_err(|error| error.to_string())?;
+    window.show().map_err(|error| error.to_string())?;
+    window.set_focus().map_err(|error| error.to_string())?;
     Ok(())
 }
 
@@ -1514,5 +1522,27 @@ mod tests {
 
         assert!(!handle.request_stop_and_wait(Duration::from_millis(1)));
         assert!(stop.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn live_monitor_window_creation_uses_async_configured_window_path() {
+        let source = include_str!("commands.rs").replace("\r\n", "\n");
+        let implementation = source
+            .split("#[cfg(test)]\nmod tests")
+            .next()
+            .expect("commands implementation source");
+
+        assert!(
+            implementation.contains("pub async fn show_live_monitor"),
+            "show_live_monitor must be async because creating WebView2 windows from a synchronous command can deadlock on Windows"
+        );
+        assert!(
+            implementation.contains("WebviewWindowBuilder::from_config"),
+            "live monitor fallback creation should use the configured live-monitor window"
+        );
+        assert!(
+            !implementation.contains("WebviewWindowBuilder::new(app, \"live-monitor\""),
+            "live monitor fallback creation should not dynamically create an ad-hoc WebView2 window"
+        );
     }
 }

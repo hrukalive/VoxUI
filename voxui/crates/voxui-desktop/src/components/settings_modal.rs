@@ -360,24 +360,25 @@ pub fn SettingsModal(
                                 <section class="settings-section live-settings-section">
                                     <h3>{move || labels().live}</h3>
                                     <div class="settings-grid live-settings-grid">
-                                        <label class="settings-field" for="settings-live-identity-code">
-                                            <span>{move || labels().identity_code}</span>
-                                            <input
-                                                id="settings-live-identity-code"
-                                                type="text"
-                                                prop:value=move || live_snapshot().config.identity_code
-                                                on:change=move |event| {
-                                                    on_live_patch(LiveConfigPatch {
-                                                        identity_code: Some(event_target_value(&event)),
-                                                        ..LiveConfigPatch::default()
-                                                    });
-                                                }
-                                            />
-                                        </label>
-                                        <label class="settings-field" for="settings-live-connect-to-service">
+                                        <div class="settings-field live-connection-row settings-span-2">
+                                            <label class="live-identity-field" for="settings-live-identity-code">
+                                                <span>{move || labels().identity_code}</span>
+                                                <input
+                                                    id="settings-live-identity-code"
+                                                    type="text"
+                                                    prop:value=move || live_snapshot().config.identity_code
+                                                    on:change=move |event| {
+                                                        on_live_patch(LiveConfigPatch {
+                                                            identity_code: Some(event_target_value(&event)),
+                                                            ..LiveConfigPatch::default()
+                                                        });
+                                                    }
+                                                />
+                                            </label>
                                             <button
                                                 class="primary-button"
                                                 type="button"
+                                                disabled=move || matches!(live_snapshot().status, LiveStatus::Connecting | LiveStatus::Disconnecting)
                                                 on:click=move |_| {
                                                     if live_snapshot().status == LiveStatus::Connected {
                                                         on_live_disconnect();
@@ -389,6 +390,15 @@ pub fn SettingsModal(
                                                 {move || if live_snapshot().status == LiveStatus::Connected { labels().disconnect } else { labels().connect }}
                                             </button>
                                             <strong>{move || live_status_label(labels(), live_snapshot().status)}</strong>
+                                        </div>
+                                        <label class="settings-checkbox settings-switch live-checkbox" for="settings-live-ceve-heartbeat">
+                                            <input id="settings-live-ceve-heartbeat" type="checkbox" prop:checked=move || live_snapshot().config.enable_ceve_server_heartbeat on:change=move |event| {
+                                                on_live_patch(LiveConfigPatch {
+                                                    enable_ceve_server_heartbeat: Some(event_target_checked(&event)),
+                                                    ..LiveConfigPatch::default()
+                                                });
+                                            } />
+                                            <span>{move || labels().ceve_heartbeat}</span>
                                         </label>
                                         <label class="settings-field">
                                             <span>{move || labels().send_mode}</span>
@@ -422,81 +432,27 @@ pub fn SettingsModal(
                                                 }
                                             />
                                         </label>
-                                        <label class="settings-checkbox settings-switch live-checkbox" for="settings-live-ceve-heartbeat">
-                                            <input id="settings-live-ceve-heartbeat" type="checkbox" prop:checked=move || live_snapshot().config.enable_ceve_server_heartbeat on:change=move |event| {
-                                                on_live_patch(LiveConfigPatch {
-                                                    enable_ceve_server_heartbeat: Some(event_target_checked(&event)),
-                                                    ..LiveConfigPatch::default()
-                                                });
-                                            } />
-                                            <span>{move || labels().ceve_heartbeat}</span>
-                                        </label>
-                                        <div class="live-checkbox-grid settings-span-2">
-                                            {move || {
-                                                let labels = labels();
-                                                vec![
-                                                    (LiveMessageKind::Danmu, labels.danmu),
-                                                    (LiveMessageKind::Gift, labels.gift),
-                                                    (LiveMessageKind::Superchat, labels.superchat),
-                                                    (LiveMessageKind::Guard, labels.guard),
-                                                    (LiveMessageKind::Like, labels.like),
-                                                    (LiveMessageKind::Enter, labels.enter),
-                                                ].into_iter().map(|(kind, label)| {
-                                                    let checked = match kind {
-                                                        LiveMessageKind::Danmu => live_snapshot().config.show_danmu,
-                                                        LiveMessageKind::Gift => live_snapshot().config.show_gifts,
-                                                        LiveMessageKind::Superchat => live_snapshot().config.show_superchats,
-                                                        LiveMessageKind::Guard => live_snapshot().config.show_guards,
-                                                        LiveMessageKind::Like => live_snapshot().config.show_likes,
-                                                        LiveMessageKind::Enter => live_snapshot().config.show_enters,
-                                                    };
-                                                    let kind_for_test = kind;
-                                                    let kind_for_checkbox = kind;
-                                                    view! {
-                                                        <div class="live-checkbox-row">
-                                                            <label class="settings-checkbox live-checkbox">
-                                                                <input type="checkbox" prop:checked=checked on:change=move |event| {
-                                                                    let checked = event_target_checked(&event);
-                                                                    match kind_for_checkbox {
-                                                                        LiveMessageKind::Danmu => on_live_patch(LiveConfigPatch { show_danmu: Some(checked), ..LiveConfigPatch::default() }),
-                                                                        LiveMessageKind::Gift => on_live_patch(LiveConfigPatch { show_gifts: Some(checked), ..LiveConfigPatch::default() }),
-                                                                        LiveMessageKind::Superchat => on_live_patch(LiveConfigPatch { show_superchats: Some(checked), ..LiveConfigPatch::default() }),
-                                                                        LiveMessageKind::Guard => on_live_patch(LiveConfigPatch { show_guards: Some(checked), ..LiveConfigPatch::default() }),
-                                                                        LiveMessageKind::Like => on_live_patch(LiveConfigPatch { show_likes: Some(checked), ..LiveConfigPatch::default() }),
-                                                                        LiveMessageKind::Enter => on_live_patch(LiveConfigPatch { show_enters: Some(checked), ..LiveConfigPatch::default() }),
-                                                                    };
-                                                                } />
-                                                                <span>{label}</span>
-                                                            </label>
-                                                            <button
-                                                                class="live-test-button"
-                                                                type="button"
-                                                                title="Test"
-                                                                aria-label="Test"
-                                                                on:click=move |_| on_live_mock_message(kind_for_test)
-                                                            >
-                                                                {labels.test}
-                                                            </button>
-                                                        </div>
-                                                    }
-                                                }).collect_view()
-                                            }}
-                                        </div>
-
-                                        <div class="live-subsection settings-span-2">
-                                            <h4>{move || labels().auto_gen_messages}</h4>
-                                            <div class="live-checkbox-grid">
+                                        <div class="live-subsection live-message-subsection settings-span-2">
+                                            <div class="live-message-grid">
                                                 {move || {
-                                                    let labels = labels();
+                                                    let current_labels = labels();
                                                     vec![
-                                                        (LiveMessageKind::Danmu, labels.danmu),
-                                                        (LiveMessageKind::Gift, labels.gift),
-                                                        (LiveMessageKind::Superchat, labels.superchat),
-                                                        (LiveMessageKind::Guard, labels.guard),
-                                                        (LiveMessageKind::Like, labels.like),
-                                                        (LiveMessageKind::Enter, labels.enter),
+                                                        (LiveMessageKind::Danmu, current_labels.danmu),
+                                                        (LiveMessageKind::Gift, current_labels.gift),
+                                                        (LiveMessageKind::Superchat, current_labels.superchat),
+                                                        (LiveMessageKind::Guard, current_labels.guard),
+                                                        (LiveMessageKind::Like, current_labels.like),
+                                                        (LiveMessageKind::Enter, current_labels.enter),
                                                     ].into_iter().map(|(kind, label)| {
                                                         let checked = match kind {
+                                                            LiveMessageKind::Danmu => live_snapshot().config.show_danmu,
+                                                            LiveMessageKind::Gift => live_snapshot().config.show_gifts,
+                                                            LiveMessageKind::Superchat => live_snapshot().config.show_superchats,
+                                                            LiveMessageKind::Guard => live_snapshot().config.show_guards,
+                                                            LiveMessageKind::Like => live_snapshot().config.show_likes,
+                                                            LiveMessageKind::Enter => live_snapshot().config.show_enters,
+                                                        };
+                                                        let auto_gen_checked = match kind {
                                                             LiveMessageKind::Danmu => live_snapshot().config.auto_gen_danmu,
                                                             LiveMessageKind::Gift => live_snapshot().config.auto_gen_gifts,
                                                             LiveMessageKind::Superchat => live_snapshot().config.auto_gen_superchats,
@@ -504,21 +460,49 @@ pub fn SettingsModal(
                                                             LiveMessageKind::Like => live_snapshot().config.auto_gen_likes,
                                                             LiveMessageKind::Enter => live_snapshot().config.auto_gen_enters,
                                                         };
+                                                        let kind_for_test = kind;
+                                                        let kind_for_filter = kind;
+                                                        let kind_for_auto_gen = kind;
                                                         view! {
-                                                            <label class="settings-checkbox live-checkbox">
-                                                                <input type="checkbox" prop:checked=checked on:change=move |event| {
-                                                                    let checked = event_target_checked(&event);
-                                                                    match kind {
-                                                                        LiveMessageKind::Danmu => on_live_patch(LiveConfigPatch { auto_gen_danmu: Some(checked), ..LiveConfigPatch::default() }),
-                                                                        LiveMessageKind::Gift => on_live_patch(LiveConfigPatch { auto_gen_gifts: Some(checked), ..LiveConfigPatch::default() }),
-                                                                        LiveMessageKind::Superchat => on_live_patch(LiveConfigPatch { auto_gen_superchats: Some(checked), ..LiveConfigPatch::default() }),
-                                                                        LiveMessageKind::Guard => on_live_patch(LiveConfigPatch { auto_gen_guards: Some(checked), ..LiveConfigPatch::default() }),
-                                                                        LiveMessageKind::Like => on_live_patch(LiveConfigPatch { auto_gen_likes: Some(checked), ..LiveConfigPatch::default() }),
-                                                                        LiveMessageKind::Enter => on_live_patch(LiveConfigPatch { auto_gen_enters: Some(checked), ..LiveConfigPatch::default() }),
-                                                                    };
-                                                                } />
-                                                                <span>{label}</span>
-                                                            </label>
+                                                            <div class="live-message-row">
+                                                                <label class="live-message-checkbox live-filter-checkbox">
+                                                                    <input type="checkbox" prop:checked=checked on:change=move |event| {
+                                                                        let checked = event_target_checked(&event);
+                                                                        match kind_for_filter {
+                                                                            LiveMessageKind::Danmu => on_live_patch(LiveConfigPatch { show_danmu: Some(checked), ..LiveConfigPatch::default() }),
+                                                                            LiveMessageKind::Gift => on_live_patch(LiveConfigPatch { show_gifts: Some(checked), ..LiveConfigPatch::default() }),
+                                                                            LiveMessageKind::Superchat => on_live_patch(LiveConfigPatch { show_superchats: Some(checked), ..LiveConfigPatch::default() }),
+                                                                            LiveMessageKind::Guard => on_live_patch(LiveConfigPatch { show_guards: Some(checked), ..LiveConfigPatch::default() }),
+                                                                            LiveMessageKind::Like => on_live_patch(LiveConfigPatch { show_likes: Some(checked), ..LiveConfigPatch::default() }),
+                                                                            LiveMessageKind::Enter => on_live_patch(LiveConfigPatch { show_enters: Some(checked), ..LiveConfigPatch::default() }),
+                                                                        };
+                                                                    } />
+                                                                    <span>{label}</span>
+                                                                </label>
+                                                                <label class="live-message-checkbox live-auto-gen-checkbox">
+                                                                    <input type="checkbox" prop:checked=auto_gen_checked on:change=move |event| {
+                                                                        let checked = event_target_checked(&event);
+                                                                        match kind_for_auto_gen {
+                                                                            LiveMessageKind::Danmu => on_live_patch(LiveConfigPatch { auto_gen_danmu: Some(checked), ..LiveConfigPatch::default() }),
+                                                                            LiveMessageKind::Gift => on_live_patch(LiveConfigPatch { auto_gen_gifts: Some(checked), ..LiveConfigPatch::default() }),
+                                                                            LiveMessageKind::Superchat => on_live_patch(LiveConfigPatch { auto_gen_superchats: Some(checked), ..LiveConfigPatch::default() }),
+                                                                            LiveMessageKind::Guard => on_live_patch(LiveConfigPatch { auto_gen_guards: Some(checked), ..LiveConfigPatch::default() }),
+                                                                            LiveMessageKind::Like => on_live_patch(LiveConfigPatch { auto_gen_likes: Some(checked), ..LiveConfigPatch::default() }),
+                                                                            LiveMessageKind::Enter => on_live_patch(LiveConfigPatch { auto_gen_enters: Some(checked), ..LiveConfigPatch::default() }),
+                                                                        };
+                                                                    } />
+                                                                    <span>{move || labels().enable_auto_gen}</span>
+                                                                </label>
+                                                                <button
+                                                                    class="live-test-button"
+                                                                    type="button"
+                                                                    title="Test"
+                                                                    aria-label="Test"
+                                                                    on:click=move |_| on_live_mock_message(kind_for_test)
+                                                                >
+                                                                    {current_labels.test}
+                                                                </button>
+                                                            </div>
                                                         }
                                                     }).collect_view()
                                                 }}
@@ -908,5 +892,93 @@ fn template_textarea(
                 on:change=move |event| on_change(event_target_value(&event))
             ></textarea>
         </label>
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    fn css_block<'a>(css: &'a str, selector: &str) -> &'a str {
+        let start = css
+            .find(selector)
+            .unwrap_or_else(|| panic!("missing CSS selector: {selector}"));
+        let tail = &css[start..];
+        let end = tail
+            .find("\n}")
+            .unwrap_or_else(|| panic!("missing CSS block end for: {selector}"));
+        &tail[..end]
+    }
+
+    #[test]
+    fn live_settings_merge_filter_auto_generation_and_test_controls() {
+        let source = include_str!("settings_modal.rs");
+        let connection_row = ["live", "-connection-row"].concat();
+        let mode_row = ["live", "-mode-row"].concat();
+        let message_subsection = ["live", "-message-subsection"].concat();
+        let message_row = ["live", "-message-row"].concat();
+        let auto_gen_checkbox = ["live", "-auto-gen-checkbox"].concat();
+        let enable_auto_gen_label = ["labels().enable", "_auto_gen"].concat();
+        let separated_auto_gen_heading = ["labels().auto", "_gen_messages}</h4>"].concat();
+
+        assert!(
+            source.contains(&connection_row),
+            "Live settings should put identity, connect action, and status in one fixed row"
+        );
+        assert!(
+            source.contains(&mode_row),
+            "Live settings should use a fixed full-width row for mode controls"
+        );
+        assert!(
+            source.contains(&message_subsection),
+            "Live message controls should be wrapped in one larger subsection"
+        );
+        assert!(
+            source.contains(&message_row),
+            "Live message filters, auto generation, and test actions should share one row"
+        );
+        assert!(
+            source.contains(&auto_gen_checkbox),
+            "Each message row should expose auto generation beside its filter checkbox"
+        );
+        assert!(
+            source.contains(&enable_auto_gen_label),
+            "Auto generation checkboxes should use the compact Enable auto gen label"
+        );
+        assert!(
+            !source.contains(&separated_auto_gen_heading),
+            "Auto generation should no longer be separated into its own checkbox section"
+        );
+    }
+
+    #[test]
+    fn live_settings_css_uses_fixed_compact_rows() {
+        let css = include_str!("../styles.css");
+        let template_grid = css_block(css, ".live-template-grid");
+        let message_subsection = [".live", "-message-subsection"].concat();
+
+        assert!(
+            css.contains(".live-settings-grid {\r\n  grid-template-columns: minmax(0, 1fr);")
+                || css.contains(".live-settings-grid {\n  grid-template-columns: minmax(0, 1fr);"),
+            "Live settings should not inherit the generic two-column settings grid"
+        );
+        assert!(
+            css.contains(".live-connection-row"),
+            "CSS should define the compact identity/connect/status row"
+        );
+        assert!(
+            css.contains(".live-mode-row"),
+            "CSS should define the fixed mode-control row"
+        );
+        assert!(
+            css.contains(".live-message-row"),
+            "CSS should define merged filter/auto-generation/test rows"
+        );
+        assert!(
+            css.contains(&message_subsection),
+            "CSS should define the larger wrapper around message controls"
+        );
+        assert!(
+            template_grid.contains("grid-template-columns: minmax(0, 1fr);"),
+            "Template controls should render one template per row"
+        );
     }
 }
