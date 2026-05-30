@@ -67,6 +67,13 @@ pub fn App() -> impl IntoView {
             }
         });
     };
+    let refresh_live_snapshot = move || {
+        spawn_local(async move {
+            if let Ok(next_live_snapshot) = crate::tauri_api::get_live_state().await {
+                set_live_snapshot.set(next_live_snapshot);
+            }
+        });
+    };
     let cancel_load = move || {
         set_load_open.set(false);
         spawn_local(async move {
@@ -128,6 +135,17 @@ pub fn App() -> impl IntoView {
         .await;
         refresh_snapshot();
         set_sidecar_ready.set(true);
+    });
+    spawn_local(async move {
+        let _ = crate::tauri_api::listen_app_event("app_config_changed", move |event| {
+            if let Ok(snapshot) = crate::tauri_api::decode_app_event::<AppSnapshot>(event) {
+                set_snapshot.set(Some(snapshot));
+            } else {
+                refresh_snapshot();
+            }
+            refresh_live_snapshot();
+        })
+        .await;
     });
     spawn_local(async move {
         let _ = crate::tauri_api::listen_app_event("main_input_replace", move |event| {
@@ -753,8 +771,21 @@ fn apply_live_optimistic_patch(snapshot: &mut LiveSnapshot, patch: &LiveConfigPa
     if let Some(replacement_rules) = patch.replacement_rules.as_ref() {
         snapshot.config.replacement_rules = replacement_rules.clone();
     }
+    let mapped_unames_changed = patch.mapped_unames.is_some();
     if let Some(mapped_unames) = patch.mapped_unames.as_ref() {
         snapshot.config.mapped_unames = mapped_unames.clone();
+    }
+    if let Some(original_unames) = patch.original_unames.as_ref() {
+        snapshot.config.original_unames = original_unames.clone();
+    } else if mapped_unames_changed {
+        for item in &snapshot.items {
+            if snapshot.config.mapped_unames.contains_key(&item.open_id) {
+                snapshot
+                    .config
+                    .original_unames
+                    .insert(item.open_id.clone(), item.uname.clone());
+            }
+        }
     }
 }
 
@@ -848,6 +879,26 @@ mod tests {
         assert!(
             !settings_body.contains("LiveStatus::Connecting"),
             "settings connect should still call connect_openblive for a Connecting snapshot; backend worker guard handles true duplicates"
+        );
+    }
+
+    #[test]
+    fn app_listens_for_config_and_live_snapshot_refresh_events() {
+        let source = include_str!("app.rs").replace("\r\n", "\n");
+        let implementation = source
+            .split("#[cfg(test)]\nmod tests")
+            .next()
+            .expect("app implementation source");
+        let app_config_changed = ["app", "_config", "_changed"].concat();
+        let refresh_live_snapshot = ["refresh", "_live", "_snapshot"].concat();
+
+        assert!(
+            implementation.contains(&app_config_changed),
+            "all windows should listen for app config changes so language/theme updates reach the live monitor"
+        );
+        assert!(
+            implementation.contains(&refresh_live_snapshot),
+            "config changes that affect live rendering should refresh live snapshots"
         );
     }
 }

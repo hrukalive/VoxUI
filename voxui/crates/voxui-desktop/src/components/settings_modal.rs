@@ -50,10 +50,26 @@ pub fn SettingsModal(
         });
     };
 
-    let initial = untrack(live_snapshot);
-    let (pending_templates, set_pending_templates) = signal(initial.config.templates.clone());
-    let (pending_rules, set_pending_rules) = signal(initial.config.replacement_rules.clone());
-    let (pending_mapped, set_pending_mapped) = signal(initial.config.mapped_unames.clone());
+    let current_live = untrack(live_snapshot);
+    let (pending_templates, set_pending_templates) = signal(current_live.config.templates.clone());
+    let (pending_rules, set_pending_rules) = signal(current_live.config.replacement_rules.clone());
+    let (pending_mapped, set_pending_mapped) = signal(current_live.config.mapped_unames.clone());
+    let (pending_templates_dirty, set_pending_templates_dirty) = signal(false);
+    let (pending_rules_dirty, set_pending_rules_dirty) = signal(false);
+    let (pending_mapped_dirty, set_pending_mapped_dirty) = signal(false);
+
+    Effect::new(move |_| {
+        let live = live_snapshot();
+        if !pending_templates_dirty.get_untracked() {
+            set_pending_templates.set(live.config.templates);
+        }
+        if !pending_rules_dirty.get_untracked() {
+            set_pending_rules.set(live.config.replacement_rules);
+        }
+        if !pending_mapped_dirty.get_untracked() {
+            set_pending_mapped.set(live.config.mapped_unames);
+        }
+    });
 
     let flush_live = move || {
         on_live_patch(LiveConfigPatch {
@@ -62,6 +78,9 @@ pub fn SettingsModal(
             mapped_unames: Some(pending_mapped.get()),
             ..LiveConfigPatch::default()
         });
+        set_pending_templates_dirty.set(false);
+        set_pending_rules_dirty.set(false);
+        set_pending_mapped_dirty.set(false);
     };
 
     view! {
@@ -512,36 +531,69 @@ pub fn SettingsModal(
                                         <div class="live-subsection settings-span-2">
                                             <h4>{move || labels().danmu_template}</h4>
                                             <div class="live-template-grid">
-                                                {template_textarea("settings-live-template-danmu", move || labels().danmu.to_string(), move || pending_templates.get().danmu, move |value| set_pending_templates.update(|t| t.danmu = value))}
+                                                {template_textarea("settings-live-template-danmu", move || labels().danmu.to_string(), move || pending_templates.get().danmu, move |value| {
+                                                    set_pending_templates_dirty.set(true);
+                                                    set_pending_templates.update(|t| t.danmu = value);
+                                                })}
                                                 <Show when=move || language() != UiLanguage::English>
-                                                    {template_textarea("settings-live-template-gift-zh", move || format!("{}", labels().gift), move || pending_templates.get().gift_zh, move |value| set_pending_templates.update(|t| t.gift_zh = value))}
+                                                    {template_textarea("settings-live-template-gift-zh", move || format!("{}", labels().gift), move || pending_templates.get().gift_zh, move |value| {
+                                                        set_pending_templates_dirty.set(true);
+                                                        set_pending_templates.update(|t| t.gift_zh = value);
+                                                    })}
                                                 </Show>
                                                 <Show when=move || language() == UiLanguage::English>
-                                                    {template_textarea("settings-live-template-gift-en", move || format!("{}", labels().gift), move || pending_templates.get().gift_en, move |value| set_pending_templates.update(|t| t.gift_en = value))}
+                                                    {template_textarea("settings-live-template-gift-en", move || format!("{}", labels().gift), move || pending_templates.get().gift_en, move |value| {
+                                                        set_pending_templates_dirty.set(true);
+                                                        set_pending_templates.update(|t| t.gift_en = value);
+                                                    })}
                                                 </Show>
                                                 <Show when=move || language() != UiLanguage::English>
-                                                    {template_textarea("settings-live-template-superchat-zh", move || format!("{}", labels().superchat), move || pending_templates.get().superchat_zh, move |value| set_pending_templates.update(|t| t.superchat_zh = value))}
+                                                    {template_textarea("settings-live-template-superchat-zh", move || format!("{}", labels().superchat), move || pending_templates.get().superchat_zh, move |value| {
+                                                        set_pending_templates_dirty.set(true);
+                                                        set_pending_templates.update(|t| t.superchat_zh = value);
+                                                    })}
                                                 </Show>
                                                 <Show when=move || language() == UiLanguage::English>
-                                                    {template_textarea("settings-live-template-superchat-en", move || format!("{}", labels().superchat), move || pending_templates.get().superchat_en, move |value| set_pending_templates.update(|t| t.superchat_en = value))}
+                                                    {template_textarea("settings-live-template-superchat-en", move || format!("{}", labels().superchat), move || pending_templates.get().superchat_en, move |value| {
+                                                        set_pending_templates_dirty.set(true);
+                                                        set_pending_templates.update(|t| t.superchat_en = value);
+                                                    })}
                                                 </Show>
                                                 <Show when=move || language() != UiLanguage::English>
-                                                    {template_textarea("settings-live-template-guard-zh", move || format!("{}", labels().guard), move || pending_templates.get().guard_zh, move |value| set_pending_templates.update(|t| t.guard_zh = value))}
+                                                    {template_textarea("settings-live-template-guard-zh", move || format!("{}", labels().guard), move || pending_templates.get().guard_zh, move |value| {
+                                                        set_pending_templates_dirty.set(true);
+                                                        set_pending_templates.update(|t| t.guard_zh = value);
+                                                    })}
                                                 </Show>
                                                 <Show when=move || language() == UiLanguage::English>
-                                                    {template_textarea("settings-live-template-guard-en", move || format!("{}", labels().guard), move || pending_templates.get().guard_en, move |value| set_pending_templates.update(|t| t.guard_en = value))}
+                                                    {template_textarea("settings-live-template-guard-en", move || format!("{}", labels().guard), move || pending_templates.get().guard_en, move |value| {
+                                                        set_pending_templates_dirty.set(true);
+                                                        set_pending_templates.update(|t| t.guard_en = value);
+                                                    })}
                                                 </Show>
                                                 <Show when=move || language() != UiLanguage::English>
-                                                    {template_textarea("settings-live-template-like-zh", move || format!("{}", labels().like), move || pending_templates.get().like_zh, move |value| set_pending_templates.update(|t| t.like_zh = value))}
+                                                    {template_textarea("settings-live-template-like-zh", move || format!("{}", labels().like), move || pending_templates.get().like_zh, move |value| {
+                                                        set_pending_templates_dirty.set(true);
+                                                        set_pending_templates.update(|t| t.like_zh = value);
+                                                    })}
                                                 </Show>
                                                 <Show when=move || language() == UiLanguage::English>
-                                                    {template_textarea("settings-live-template-like-en", move || format!("{}", labels().like), move || pending_templates.get().like_en, move |value| set_pending_templates.update(|t| t.like_en = value))}
+                                                    {template_textarea("settings-live-template-like-en", move || format!("{}", labels().like), move || pending_templates.get().like_en, move |value| {
+                                                        set_pending_templates_dirty.set(true);
+                                                        set_pending_templates.update(|t| t.like_en = value);
+                                                    })}
                                                 </Show>
                                                 <Show when=move || language() != UiLanguage::English>
-                                                    {template_textarea("settings-live-template-enter-zh", move || format!("{}", labels().enter), move || pending_templates.get().enter_zh, move |value| set_pending_templates.update(|t| t.enter_zh = value))}
+                                                    {template_textarea("settings-live-template-enter-zh", move || format!("{}", labels().enter), move || pending_templates.get().enter_zh, move |value| {
+                                                        set_pending_templates_dirty.set(true);
+                                                        set_pending_templates.update(|t| t.enter_zh = value);
+                                                    })}
                                                 </Show>
                                                 <Show when=move || language() == UiLanguage::English>
-                                                    {template_textarea("settings-live-template-enter-en", move || format!("{}", labels().enter), move || pending_templates.get().enter_en, move |value| set_pending_templates.update(|t| t.enter_en = value))}
+                                                    {template_textarea("settings-live-template-enter-en", move || format!("{}", labels().enter), move || pending_templates.get().enter_en, move |value| {
+                                                        set_pending_templates_dirty.set(true);
+                                                        set_pending_templates.update(|t| t.enter_en = value);
+                                                    })}
                                                 </Show>
                                             </div>
                                         </div>
@@ -550,6 +602,7 @@ pub fn SettingsModal(
                                             <div class="live-subsection-header">
                                                 <h4>{move || labels().replacement_rule}</h4>
                                                 <button class="secondary-button live-symbol-button" type="button" aria-label=move || labels().replacement_rule on:click=move |_| {
+                                                    set_pending_rules_dirty.set(true);
                                                     set_pending_rules.update(|rules| rules.push(ReplacementRule { enabled: true, from: String::new(), to: String::new() }));
                                                 }>
                                                     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -568,6 +621,7 @@ pub fn SettingsModal(
                                                             <div class="live-replacement-row">
                                                                 <label class="live-inline-checkbox">
                                                                     <input type="checkbox" prop:checked=rule.enabled on:change=move |event| {
+                                                                        set_pending_rules_dirty.set(true);
                                                                         set_pending_rules.update(|rules| {
                                                                             if let Some(rule) = rules.get_mut(index) {
                                                                                 rule.enabled = event_target_checked(&event);
@@ -576,6 +630,7 @@ pub fn SettingsModal(
                                                                     } />
                                                                 </label>
                                                                 <input type="text" aria-label=move || labels().replacement_rule prop:value=rule.from.clone() on:change=move |event| {
+                                                                    set_pending_rules_dirty.set(true);
                                                                     set_pending_rules.update(|rules| {
                                                                         if let Some(rule) = rules.get_mut(index) {
                                                                             rule.from = event_target_value(&event);
@@ -583,6 +638,7 @@ pub fn SettingsModal(
                                                                     });
                                                                 } />
                                                                 <input type="text" aria-label=move || labels().replacement_rule prop:value=rule.to.clone() on:change=move |event| {
+                                                                    set_pending_rules_dirty.set(true);
                                                                     set_pending_rules.update(|rules| {
                                                                         if let Some(rule) = rules.get_mut(index) {
                                                                             rule.to = event_target_value(&event);
@@ -590,6 +646,7 @@ pub fn SettingsModal(
                                                                     });
                                                                 } />
                                                                 <button class="secondary-button live-remove-button" type="button" aria-label=move || labels().clear on:click=move |_| {
+                                                                    set_pending_rules_dirty.set(true);
                                                                     set_pending_rules.update(|rules| {
                                                                         if index < rules.len() {
                                                                             rules.remove(index);
@@ -633,6 +690,7 @@ pub fn SettingsModal(
                                                                 <code class="live-open-id">{open_id.clone()}</code>
                                                                 <span>{original}</span>
                                                                 <input type="text" aria-label=move || labels().uname_map prop:value=mapped on:change=move |event| {
+                                                                    set_pending_mapped_dirty.set(true);
                                                                     set_pending_mapped.update(|m| { m.insert(open_id.clone(), event_target_value(&event)); });
                                                                 } />
                                                             </div>
@@ -979,6 +1037,27 @@ mod tests {
         assert!(
             template_grid.contains("grid-template-columns: minmax(0, 1fr);"),
             "Template controls should render one template per row"
+        );
+    }
+
+    #[test]
+    fn live_settings_pending_live_config_tracks_snapshot_updates() {
+        let source = include_str!("settings_modal.rs");
+        let sync_effect = [
+            "Effect::new(move |_| {\n",
+            "        let live = live_snapshot();",
+        ]
+        .concat();
+
+        assert!(
+            source.contains(&sync_effect),
+            "Live settings drafts should react to live snapshot config changes"
+        );
+        assert!(
+            source.contains("pending_templates_dirty")
+                && source.contains("pending_rules_dirty")
+                && source.contains("pending_mapped_dirty"),
+            "Live settings should avoid clobbering dirty local edits while syncing external config changes"
         );
     }
 }

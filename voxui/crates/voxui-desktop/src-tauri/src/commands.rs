@@ -79,10 +79,18 @@ pub fn get_app_state(state: State<'_, SharedAppCore>) -> Result<AppSnapshot, Str
 
 #[tauri::command]
 pub fn set_config_patch(
+    app: AppHandle,
     state: State<'_, SharedAppCore>,
     patch: ConfigPatch,
 ) -> Result<AppSnapshot, String> {
-    with_core(state, |core| core.apply_patch(patch))
+    let (snapshot, live_snapshot) = with_core(state, |core| {
+        let snapshot = core.apply_patch(patch)?;
+        let live_snapshot = core.live_snapshot_for_current_language();
+        Ok((snapshot, live_snapshot))
+    })?;
+    let _ = app.emit("app_config_changed", snapshot.clone());
+    emit_live_snapshot(&app, "live_items_changed", &live_snapshot);
+    Ok(snapshot)
 }
 
 #[tauri::command]
@@ -1543,6 +1551,25 @@ mod tests {
         assert!(
             !implementation.contains("WebviewWindowBuilder::new(app, \"live-monitor\""),
             "live monitor fallback creation should not dynamically create an ad-hoc WebView2 window"
+        );
+    }
+
+    #[test]
+    fn config_patch_emits_app_config_and_live_snapshot_updates() {
+        let source = include_str!("commands.rs").replace("\r\n", "\n");
+        let implementation = source
+            .split("#[cfg(test)]\nmod tests")
+            .next()
+            .expect("commands implementation source");
+        let app_config_changed = ["app", "_config", "_changed"].concat();
+
+        assert!(
+            implementation.contains(&app_config_changed),
+            "set_config_patch should broadcast app config changes to every window"
+        );
+        assert!(
+            implementation.contains("emit_live_snapshot(&app, \"live_items_changed\", &live_snapshot"),
+            "set_config_patch should refresh live snapshots because language and auto-period can change rendered live rows"
         );
     }
 }
