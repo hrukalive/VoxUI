@@ -602,6 +602,52 @@ body:has(.live-monitor-shell) {
   font-weight: 500;
 }
 
+.mapped-uname-modal {
+  width: min(440px, calc(100vw - 48px));
+}
+
+.mapped-uname-form {
+  display: grid;
+  gap: 12px;
+  padding: 18px 20px;
+}
+
+.mapped-uname-field {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.mapped-uname-field code,
+.mapped-uname-field strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.mapped-uname-field input {
+  width: 100%;
+  min-width: 0;
+  height: 34px;
+  border: 1px solid var(--control-border);
+  border-radius: 5px;
+  background: var(--control-bg);
+  color: var(--text);
+  padding: 0 10px;
+  font: inherit;
+}
+
+.mapped-uname-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 0 20px 18px;
+}
+
 .settings-modal {
   width: 1080px;
   height: 680px;
@@ -1227,6 +1273,19 @@ body:has(.live-monitor-shell) {
   background: var(--button-hover);
 }
 
+.live-map-button {
+  width: 30px;
+  height: 30px;
+  min-width: 0;
+  padding: 0;
+}
+
+.live-map-button.primary-button {
+  border-color: var(--primary-bg);
+  background: var(--primary-bg);
+  color: var(--primary-text);
+}
+
 .live-monitor-header .live-monitor-button {
   width: 34px;
   height: 34px;
@@ -1357,6 +1416,13 @@ body:has(.live-monitor-shell) {
 }
 
 .live-item-actions {
+  display: grid;
+  grid-auto-flow: column;
+  gap: 6px;
+  align-items: center;
+}
+
+.live-send-actions {
   display: grid;
   grid-auto-flow: column;
   gap: 6px;

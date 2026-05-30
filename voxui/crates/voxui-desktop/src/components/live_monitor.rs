@@ -862,6 +862,25 @@ mod tests {
         );
     }
 
+    #[test]
+    fn mapped_uname_modal_styles_are_present() {
+        let styles = include_str!("../styles.css");
+        let selectors = [
+            [".live", "-map-button"].concat(),
+            [".live", "-send-actions"].concat(),
+            [".mapped", "-uname-modal"].concat(),
+            [".mapped", "-uname-field"].concat(),
+            [".mapped", "-uname-actions"].concat(),
+        ];
+
+        for selector in selectors {
+            assert!(
+                styles.contains(&selector),
+                "Expected styles to contain selector {selector}"
+            );
+        }
+    }
+
     fn test_live_config() -> LiveConfig {
         LiveConfig {
             identity_code: String::new(),
