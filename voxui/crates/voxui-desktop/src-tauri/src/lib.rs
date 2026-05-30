@@ -87,6 +87,7 @@ pub fn run() {
             commands::play_audio,
             commands::stop_audio,
             commands::exit_app,
+            commands::translate_text,
         ])
         .build(tauri::generate_context!())
         .expect("failed to build AhanSays desktop app")

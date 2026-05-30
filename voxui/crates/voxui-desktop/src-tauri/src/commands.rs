@@ -539,6 +539,69 @@ pub fn stop_audio(
     Ok(CommandResult { ok: true })
 }
 
+#[tauri::command]
+pub async fn translate_text(
+    text: String,
+    source_lang: String,
+    target_lang: String,
+) -> Result<String, String> {
+    if text.trim().is_empty() {
+        return Err("No text to translate".to_string());
+    }
+
+    let client = reqwest::Client::new();
+    let mut body = serde_json::json!({
+        "text": text,
+        "target_lang": target_lang,
+    });
+    if source_lang != "auto" && !source_lang.is_empty() {
+        body["source_lang"] = serde_json::Value::String(source_lang.clone());
+    }
+
+    let response = client
+        .post("https://www2.deepl.com/jsonrpc")
+        .header("Content-Type", "application/json")
+        .json(&serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "LMT_handle_jobs",
+            "params": {
+                "jobs": [{
+                    "kind": "default",
+                    "raw_en_sentence": &body["text"],
+                    "raw_en_context_before": [],
+                    "raw_en_context_after": [],
+                    "preferred_num_beams": 4,
+                }],
+                "lang": {
+                    "user_preferred_langs": [&body["target_lang"]],
+                    "source_lang_user_selected": &body["source_lang"],
+                },
+                "priority": -1,
+                "commonJobParams": {},
+            },
+            "id": 1,
+        }))
+        .send()
+        .await
+        .map_err(|e| format!("Translation request failed: {}", e))?;
+
+    if !response.status().is_success() {
+        return Err(format!("Translation service returned status {}", response.status()));
+    }
+
+    let json: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse translation response: {}", e))?;
+
+    let translated = json["result"]["translations"][0]["beams"][0]["postprocessed_sentence"]
+        .as_str()
+        .ok_or_else(|| "Unexpected translation response format".to_string())?
+        .to_string();
+
+    Ok(translated)
+}
+
 fn kick_generation_queue(app: &AppHandle, shared: SharedAppCore) {
     let next_run = match shared.lock() {
         Ok(mut core) => core.begin_next_generation_run(),
