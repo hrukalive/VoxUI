@@ -212,7 +212,7 @@ impl AppCore {
                 &mut self.config.live.original_unames,
                 &event.open_id,
                 &event.uname,
-            ) | initialize_uname_mapping(
+            ) | fill_empty_uname_mapping(
                 &mut self.config.live.mapped_unames,
                 &event.open_id,
                 &event.uname,
@@ -283,8 +283,18 @@ impl AppCore {
         if let Some(replacement_rules) = patch.replacement_rules {
             self.config.live.replacement_rules = replacement_rules;
         }
+        let mapped_unames_changed = patch.mapped_unames.is_some();
         if let Some(mapped_unames) = patch.mapped_unames {
             self.config.live.mapped_unames = mapped_unames;
+        }
+        if let Some(original_unames) = patch.original_unames {
+            self.config.live.original_unames = original_unames;
+        } else if mapped_unames_changed {
+            for (open_id, uname) in self.live.current_unames() {
+                if self.config.live.mapped_unames.contains_key(&open_id) {
+                    self.config.live.original_unames.insert(open_id, uname);
+                }
+            }
         }
 
         self.persist_config()?;
@@ -1100,6 +1110,20 @@ fn initialize_uname_mapping(
             true
         }
         Entry::Occupied(_) => false,
+    }
+}
+
+fn fill_empty_uname_mapping(
+    mappings: &mut BTreeMap<String, String>,
+    open_id: &str,
+    uname: &str,
+) -> bool {
+    match mappings.entry(open_id.to_string()) {
+        Entry::Occupied(mut entry) if entry.get().is_empty() => {
+            entry.insert(uname.to_string());
+            true
+        }
+        Entry::Vacant(_) | Entry::Occupied(_) => false,
     }
 }
 

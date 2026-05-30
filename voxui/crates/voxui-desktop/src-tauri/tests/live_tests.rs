@@ -526,6 +526,122 @@ fn adding_live_event_initializes_name_mapping_and_recomputes_after_patch() {
 }
 
 #[test]
+fn adding_first_seen_live_event_does_not_configure_mapped_uname() {
+    let mut core = voxui_desktop::app_core::AppCore::from_config(AppConfig::default()).unwrap();
+    let event = parse_live_event(json!({
+        "cmd": "LIVE_OPEN_PLATFORM_SEND_GIFT",
+        "data": { "paid": true, "gift_name": "flower", "gift_num": 1, "open_id": "u-new", "uname": "Alice" }
+    }))
+    .unwrap()
+    .unwrap();
+
+    core.add_live_event_for_test(event).unwrap();
+    let snapshot = core.live_snapshot_for_test(LiveLanguage::English);
+
+    assert_eq!(
+        snapshot
+            .config
+            .original_unames
+            .get("u-new")
+            .map(String::as_str),
+        Some("Alice")
+    );
+    assert!(
+        !snapshot.config.mapped_unames.contains_key("u-new"),
+        "new viewers should not be treated as streamer-configured mapped names"
+    );
+    assert_eq!(snapshot.items[0].mapped_uname, "Alice");
+    assert_eq!(
+        snapshot.items[0].suggestion,
+        "Thank you Alice for 1 flower."
+    );
+}
+
+#[test]
+fn live_patch_can_acknowledge_current_uname_for_existing_mapping() {
+    let mut core = voxui_desktop::app_core::AppCore::from_config(AppConfig::default()).unwrap();
+    let event = parse_live_event(json!({
+        "cmd": "LIVE_OPEN_PLATFORM_SEND_GIFT",
+        "data": { "paid": true, "gift_name": "flower", "gift_num": 1, "open_id": "u1", "uname": "AliceNew" }
+    }))
+    .unwrap()
+    .unwrap();
+
+    core.add_live_event_for_test(event).unwrap();
+    core.apply_live_patch(LiveConfigPatch {
+        mapped_unames: Some(
+            [("u1".to_string(), "A-chan".to_string())]
+                .into_iter()
+                .collect(),
+        ),
+        original_unames: Some(
+            [("u1".to_string(), "AliceNew".to_string())]
+                .into_iter()
+                .collect(),
+        ),
+        ..LiveConfigPatch::default()
+    })
+    .unwrap();
+
+    let snapshot = core.live_snapshot_for_test(LiveLanguage::English);
+    assert_eq!(
+        snapshot
+            .config
+            .original_unames
+            .get("u1")
+            .map(String::as_str),
+        Some("AliceNew")
+    );
+    assert_eq!(
+        snapshot.config.mapped_unames.get("u1").map(String::as_str),
+        Some("A-chan")
+    );
+    assert_eq!(
+        snapshot.items[0].suggestion,
+        "Thank you A-chan for 1 flower."
+    );
+}
+
+#[test]
+fn mapped_uname_patch_acknowledges_latest_live_uname() {
+    let mut core = voxui_desktop::app_core::AppCore::from_config(AppConfig::default()).unwrap();
+    let first = parse_live_event(json!({
+        "cmd": "LIVE_OPEN_PLATFORM_SEND_GIFT",
+        "data": { "paid": true, "gift_name": "flower", "gift_num": 1, "open_id": "u1", "uname": "Alice" }
+    }))
+    .unwrap()
+    .unwrap();
+    let renamed = parse_live_event(json!({
+        "cmd": "LIVE_OPEN_PLATFORM_SEND_GIFT",
+        "data": { "paid": true, "gift_name": "flower", "gift_num": 1, "open_id": "u1", "uname": "AliceNew" }
+    }))
+    .unwrap()
+    .unwrap();
+
+    core.add_live_event_for_test(first).unwrap();
+    core.add_live_event_for_test(renamed).unwrap();
+    core.apply_live_patch(LiveConfigPatch {
+        mapped_unames: Some(
+            [("u1".to_string(), "A-chan".to_string())]
+                .into_iter()
+                .collect(),
+        ),
+        ..LiveConfigPatch::default()
+    })
+    .unwrap();
+
+    let snapshot = core.live_snapshot_for_test(LiveLanguage::English);
+    assert_eq!(
+        snapshot
+            .config
+            .original_unames
+            .get("u1")
+            .map(String::as_str),
+        Some("AliceNew")
+    );
+}
+
+#[test]
 fn live_snapshot_filters_likes_by_default_until_enabled() {
     let mut core = voxui_desktop::app_core::AppCore::from_config(AppConfig::default()).unwrap();
     let like = parse_live_event(json!({

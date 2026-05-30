@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use serde_json::Value;
 
 use crate::types::{LiveConfig, LiveMessageKind, LiveMonitorItemDto, LiveSnapshot, LiveStatus};
@@ -74,6 +76,13 @@ impl LiveState {
     pub fn set_status(&mut self, status: LiveStatus, status_message: Option<String>) {
         self.status = status;
         self.status_message = status_message;
+    }
+
+    pub fn current_unames(&self) -> BTreeMap<String, String> {
+        self.items
+            .iter()
+            .map(|item| (item.event.open_id.clone(), item.event.uname.clone()))
+            .collect()
     }
 
     pub fn snapshot(

@@ -771,8 +771,21 @@ fn apply_live_optimistic_patch(snapshot: &mut LiveSnapshot, patch: &LiveConfigPa
     if let Some(replacement_rules) = patch.replacement_rules.as_ref() {
         snapshot.config.replacement_rules = replacement_rules.clone();
     }
+    let mapped_unames_changed = patch.mapped_unames.is_some();
     if let Some(mapped_unames) = patch.mapped_unames.as_ref() {
         snapshot.config.mapped_unames = mapped_unames.clone();
+    }
+    if let Some(original_unames) = patch.original_unames.as_ref() {
+        snapshot.config.original_unames = original_unames.clone();
+    } else if mapped_unames_changed {
+        for item in &snapshot.items {
+            if snapshot.config.mapped_unames.contains_key(&item.open_id) {
+                snapshot
+                    .config
+                    .original_unames
+                    .insert(item.open_id.clone(), item.uname.clone());
+            }
+        }
     }
 }
 

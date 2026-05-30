@@ -55,9 +55,12 @@ pub fn LiveMonitor(
         };
 
         let mut mapped_unames = snapshot().config.mapped_unames.clone();
-        mapped_unames.insert(draft.open_id, draft.value);
+        let mut original_unames = snapshot().config.original_unames.clone();
+        mapped_unames.insert(draft.open_id.clone(), draft.value);
+        original_unames.insert(draft.open_id, draft.uname);
         on_live_patch(LiveConfigPatch {
             mapped_unames: Some(mapped_unames),
+            original_unames: Some(original_unames),
             ..LiveConfigPatch::default()
         });
         set_mapped_uname_draft.set(None);
@@ -719,6 +722,12 @@ mod tests {
             mapped_uname_button_class(&mapped_unames, &original_unames, "u1", "AliceNew"),
             "primary-button live-map-button"
         );
+
+        original_unames.insert("u1".to_string(), "AliceNew".to_string());
+        assert_eq!(
+            mapped_uname_button_class(&mapped_unames, &original_unames, "u1", "AliceNew"),
+            "live-monitor-button live-map-button"
+        );
     }
 
     #[test]
@@ -837,6 +846,8 @@ mod tests {
         .concat();
         let modal_save_click = ["on:click=move |_| ", "save", "_mapped", "_uname()"].concat();
         let live_patch_write = ["mapped", "_unames: Some(", "mapped", "_unames)"].concat();
+        let original_name_patch_write =
+            ["original", "_unames: Some(", "original", "_unames)"].concat();
         let row_button_class_helper = ["mapped", "_uname", "_button", "_class", "("].concat();
 
         assert!(
@@ -854,6 +865,10 @@ mod tests {
         assert!(
             source.contains(&live_patch_write),
             "Monitor should save mapped usernames through the live patch pipeline"
+        );
+        assert!(
+            source.contains(&original_name_patch_write),
+            "Monitor should acknowledge the current uname so row button styling can update"
         );
         assert!(
             source.contains(&row_button_class_helper),

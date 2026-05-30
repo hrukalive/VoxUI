@@ -318,6 +318,8 @@ pub struct LiveConfigPatch {
     pub replacement_rules: Option<Vec<ReplacementRule>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mapped_unames: Option<BTreeMap<String, String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub original_unames: Option<BTreeMap<String, String>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
