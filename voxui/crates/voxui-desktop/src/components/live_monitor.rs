@@ -537,6 +537,7 @@ mod tests {
     fn mapped_uname_attention_tracks_missing_or_changed_names() {
         let mut mapped_unames = BTreeMap::new();
         mapped_unames.insert("u1".to_string(), "A-chan".to_string());
+        mapped_unames.insert("u3".to_string(), "C-chan".to_string());
 
         let mut original_unames = BTreeMap::new();
         original_unames.insert("u1".to_string(), "Alice".to_string());
@@ -558,6 +559,12 @@ mod tests {
             &original_unames,
             "u1",
             "AliceNew"
+        ));
+        assert!(mapped_uname_needs_attention(
+            &mapped_unames,
+            &original_unames,
+            "u3",
+            "Charlie"
         ));
     }
 
