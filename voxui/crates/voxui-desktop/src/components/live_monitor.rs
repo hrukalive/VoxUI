@@ -865,15 +865,24 @@ mod tests {
     #[test]
     fn mapped_uname_modal_styles_are_present() {
         let styles = include_str!("../styles.css");
+        let class_selector = |name: &[&str]| [".", &name.concat()].concat();
         let selectors = [
-            [".live", "-map-button"].concat(),
-            [".live", "-map-button", ".primary-button"].concat(),
-            [".live", "-send-actions"].concat(),
-            [".mapped", "-uname-modal"].concat(),
-            [".mapped", "-uname-form"].concat(),
-            [".mapped", "-uname-field"].concat(),
-            [".mapped", "-uname-field input"].concat(),
-            [".mapped", "-uname-actions"].concat(),
+            class_selector(&["live", "-map", "-button"]),
+            [
+                class_selector(&["live", "-map", "-button"]),
+                class_selector(&["primary", "-button"]),
+            ]
+            .concat(),
+            class_selector(&["live", "-send", "-actions"]),
+            class_selector(&["mapped", "-uname", "-modal"]),
+            class_selector(&["mapped", "-uname", "-form"]),
+            class_selector(&["mapped", "-uname", "-field"]),
+            [
+                class_selector(&["mapped", "-uname", "-field"]),
+                " input".to_string(),
+            ]
+            .concat(),
+            class_selector(&["mapped", "-uname", "-actions"]),
         ];
 
         for selector in selectors {
