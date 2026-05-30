@@ -837,8 +837,7 @@ mod tests {
         .concat();
         let modal_save_click = ["on:click=move |_| ", "save", "_mapped", "_uname()"].concat();
         let live_patch_write = ["mapped", "_unames: Some(", "mapped", "_unames)"].concat();
-        let row_button_class_helper =
-            ["mapped", "_uname", "_button", "_class", "("].concat();
+        let row_button_class_helper = ["mapped", "_uname", "_button", "_class", "("].concat();
 
         assert!(
             source.contains(&row_button_click),
