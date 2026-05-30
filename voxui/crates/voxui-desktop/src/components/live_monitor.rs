@@ -12,6 +12,13 @@ use crate::tauri_api::{
     LiveStatus, SendMode,
 };
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct MappedUnameDraft {
+    open_id: String,
+    uname: String,
+    value: String,
+}
+
 #[component]
 pub fn LiveMonitor(
     labels: impl Fn() -> Labels + Send + Sync + 'static + Copy,
@@ -27,6 +34,34 @@ pub fn LiveMonitor(
     let (status_notice, set_status_notice) = signal(None::<String>);
     let (status_notice_generation, set_status_notice_generation) = signal(0_u64);
     let (last_status_key, set_last_status_key) = signal(None::<(LiveStatus, Option<String>)>);
+    let (mapped_uname_draft, set_mapped_uname_draft) = signal(None::<MappedUnameDraft>);
+
+    let open_mapped_uname_modal = move |item: LiveMonitorItem| {
+        let initial_value = mapped_uname_initial_value(
+            &snapshot().config.mapped_unames,
+            &item.open_id,
+            &item.uname,
+        );
+        set_mapped_uname_draft.set(Some(MappedUnameDraft {
+            open_id: item.open_id,
+            uname: item.uname,
+            value: initial_value,
+        }));
+    };
+
+    let save_mapped_uname = move || {
+        let Some(draft) = mapped_uname_draft.get_untracked() else {
+            return;
+        };
+
+        let mut mapped_unames = snapshot().config.mapped_unames.clone();
+        mapped_unames.insert(draft.open_id, draft.value);
+        on_live_patch(LiveConfigPatch {
+            mapped_unames: Some(mapped_unames),
+            ..LiveConfigPatch::default()
+        });
+        set_mapped_uname_draft.set(None);
+    };
 
     Effect::new(move |_| {
         let item_count = snapshot().items.len();
@@ -164,6 +199,33 @@ pub fn LiveMonitor(
                         let mapped_uname = item.mapped_uname.clone();
                         let suggestion = item.suggestion.clone();
                         let paid = item.paid;
+                        let item_for_name_edit = item.clone();
+                        let open_id_for_name_class = item.open_id.clone();
+                        let uname_for_name_class = item.uname.clone();
+                        let mapped_uname_button = view! {
+                            <button
+                                class=move || {
+                                    let snapshot = snapshot();
+                                    mapped_uname_button_class(
+                                        &snapshot.config.mapped_unames,
+                                        &snapshot.config.original_unames,
+                                        &open_id_for_name_class,
+                                        &uname_for_name_class,
+                                    )
+                                }
+                                type="button"
+                                title=labels.uname_map
+                                aria-label=labels.uname_map
+                                on:click=move |_| open_mapped_uname_modal(item_for_name_edit.clone())
+                            >
+                                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                    <path d="M20 21a8 8 0 0 0-16 0"></path>
+                                    <circle cx="12" cy="7" r="4"></circle>
+                                    <path d="M19 8v6"></path>
+                                    <path d="M22 11h-6"></path>
+                                </svg>
+                            </button>
+                        };
                         let show_switch = live_item_supports_switch(kind);
                         let switch_button = show_switch.then(|| {
                             view! {
@@ -203,45 +265,118 @@ pub fn LiveMonitor(
                                     </div>
                                     <p>{suggestion}</p>
                                 </div>
-                                <div
-                                    class="live-item-actions"
-                                    class:live-item-actions-hidden=move || {
-                                        auto_generation_switch(
-                                            snapshot().config.auto_gen_mode,
-                                            kind,
-                                            &snapshot().config,
-                                        )
-                                        .is_some()
-                                    }
-                                >
-                                    <button
-                                        class="live-monitor-button"
-                                        type="button"
-                                        title=labels.send
-                                        aria-label=labels.send
-                                        on:click=move |_| {
-                                            on_send(
-                                                item_id_for_send.clone(),
-                                                false,
-                                                snapshot()
-                                                    .config
-                                                    .send_mode
-                                                    .direct_enqueue_on_click(),
+                                <div class="live-item-actions">
+                                    {mapped_uname_button}
+                                    <div
+                                        class="live-send-actions"
+                                        class:live-item-actions-hidden=move || {
+                                            auto_generation_switch(
+                                                snapshot().config.auto_gen_mode,
+                                                kind,
+                                                &snapshot().config,
                                             )
+                                            .is_some()
                                         }
                                     >
-                                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                                            <line x1="22" y1="2" x2="11" y2="13"></line>
-                                            <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
-                                        </svg>
-                                    </button>
-                                    {switch_button}
+                                        <button
+                                            class="live-monitor-button"
+                                            type="button"
+                                            title=labels.send
+                                            aria-label=labels.send
+                                            on:click=move |_| {
+                                                on_send(
+                                                    item_id_for_send.clone(),
+                                                    false,
+                                                    snapshot()
+                                                        .config
+                                                        .send_mode
+                                                        .direct_enqueue_on_click(),
+                                                )
+                                            }
+                                        >
+                                            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                                <line x1="22" y1="2" x2="11" y2="13"></line>
+                                                <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                                            </svg>
+                                        </button>
+                                        {switch_button}
+                                    </div>
                                 </div>
                             </article>
                         }
                     }
                 />
             </div>
+            <Show when=move || mapped_uname_draft.get().is_some()>
+                {move || {
+                    let draft = mapped_uname_draft.get().unwrap_or_else(|| MappedUnameDraft {
+                        open_id: String::new(),
+                        uname: String::new(),
+                        value: String::new(),
+                    });
+
+                    view! {
+                        <div class="modal-backdrop" role="presentation">
+                            <section class="modal mapped-uname-modal" role="dialog" aria-modal="true" aria-label=move || labels().uname_map>
+                                <header class="modal-header">
+                                    <h2>{move || labels().uname_map}</h2>
+                                    <button
+                                        class="secondary-button"
+                                        type="button"
+                                        aria-label=move || labels().close
+                                        on:click=move |_| set_mapped_uname_draft.set(None)
+                                    >
+                                        {move || labels().close}
+                                    </button>
+                                </header>
+                                <div class="mapped-uname-form">
+                                    <label class="mapped-uname-field">
+                                        <span>"open_id"</span>
+                                        <code>{draft.open_id.clone()}</code>
+                                    </label>
+                                    <label class="mapped-uname-field">
+                                        <span>"uname"</span>
+                                        <strong>{draft.uname.clone()}</strong>
+                                    </label>
+                                    <label class="mapped-uname-field">
+                                        <span>{move || labels().uname_map}</span>
+                                        <input
+                                            type="text"
+                                            aria-label=move || labels().uname_map
+                                            prop:value=move || {
+                                                mapped_uname_draft
+                                                    .get()
+                                                    .map(|draft| draft.value)
+                                                    .unwrap_or_default()
+                                            }
+                                            on:input=move |event| {
+                                                let value = event_target_value(&event);
+                                                set_mapped_uname_draft.update(|draft| {
+                                                    if let Some(draft) = draft {
+                                                        draft.value = value;
+                                                    }
+                                                });
+                                            }
+                                        />
+                                    </label>
+                                </div>
+                                <footer class="mapped-uname-actions">
+                                    <button
+                                        class="secondary-button"
+                                        type="button"
+                                        on:click=move |_| set_mapped_uname_draft.set(None)
+                                    >
+                                        {move || labels().cancel}
+                                    </button>
+                                    <button class="primary-button" type="button" on:click=move |_| save_mapped_uname()>
+                                        {move || labels().save}
+                                    </button>
+                                </footer>
+                            </section>
+                        </div>
+                    }
+                }}
+            </Show>
         </section>
     }
 }
@@ -670,6 +805,28 @@ mod tests {
         assert!(
             source.contains("<svg"),
             "Monitor buttons should use SVG icons"
+        );
+    }
+
+    #[test]
+    fn monitor_renders_mapped_uname_modal_and_button() {
+        let source = include_str!("live_monitor.rs");
+
+        assert!(
+            source.contains("mapped-uname-modal"),
+            "Monitor should render the focused mapped username modal"
+        );
+        assert!(
+            source.contains("live-map-button"),
+            "Monitor should render a mapped username button for live items"
+        );
+        assert!(
+            source.contains("mapped_uname_button_class"),
+            "Monitor should derive mapped username button styling from mapping state"
+        );
+        assert!(
+            source.contains("mapped_uname_initial_value"),
+            "Monitor should initialize modal input from mapping config or current uname"
         );
     }
 
