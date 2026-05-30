@@ -810,27 +810,55 @@ mod tests {
 
     #[test]
     fn monitor_renders_mapped_uname_modal_and_button() {
-        let source = include_str!("live_monitor.rs");
-        let modal_class = ["mapped", "-uname", "-modal"].concat();
-        let button_class = ["live", "-map", "-button"].concat();
-        let button_class_helper = ["mapped", "_uname", "_button", "_class"].concat();
-        let initial_value_helper = ["mapped", "_uname", "_initial", "_value"].concat();
+        let source = include_str!("live_monitor.rs").replace("\r\n", "\n");
+        let row_button_click = [
+            "on:click=move |_| ",
+            "open",
+            "_mapped",
+            "_uname",
+            "_modal(",
+            "item",
+            "_for",
+            "_name",
+            "_edit.clone()",
+            ")",
+        ]
+        .concat();
+        let modal_initial_value = [
+            "mapped",
+            "_uname",
+            "_initial",
+            "_value(\n",
+            "            &snapshot().config.mapped_unames,\n",
+            "            &item.open_id,\n",
+            "            &item.uname,\n",
+            "        )",
+        ]
+        .concat();
+        let modal_save_click = ["on:click=move |_| ", "save", "_mapped", "_uname()"].concat();
+        let live_patch_write = ["mapped", "_unames: Some(", "mapped", "_unames)"].concat();
+        let row_button_class_helper =
+            ["mapped", "_uname", "_button", "_class", "("].concat();
 
         assert!(
-            source.contains(&modal_class),
-            "Monitor should render the focused mapped username modal"
+            source.contains(&row_button_click),
+            "Monitor should wire the row mapped username button to the modal opener"
         );
         assert!(
-            source.contains(&button_class),
-            "Monitor should render a mapped username button for live items"
-        );
-        assert!(
-            source.contains(&button_class_helper),
-            "Monitor should derive mapped username button styling from mapping state"
-        );
-        assert!(
-            source.contains(&initial_value_helper),
+            source.contains(&modal_initial_value),
             "Monitor should initialize modal input from mapping config or current uname"
+        );
+        assert!(
+            source.contains(&modal_save_click),
+            "Monitor should wire the modal save button to the save closure"
+        );
+        assert!(
+            source.contains(&live_patch_write),
+            "Monitor should save mapped usernames through the live patch pipeline"
+        );
+        assert!(
+            source.contains(&row_button_class_helper),
+            "Monitor should derive mapped username button styling from mapping state"
         );
     }
 
