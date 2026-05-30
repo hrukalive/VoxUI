@@ -20,6 +20,8 @@ target/
 .superpowers/
 .codegraph
 .codegraph/
+graphify-out
+graphify-out/
 
 # Keep Cargo.lock for Tauri apps
 !Cargo.lock

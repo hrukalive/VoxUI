@@ -253,6 +253,9 @@ pub fn App() -> impl IntoView {
             <Show when=move || !sidecar_ready.get()>
                 <div class="modal-backdrop" role="presentation">
                     <section class="modal startup-modal" role="dialog" aria-modal="true">
+                        <header class="modal-header">
+                            <h2>{move || current_labels().loading}</h2>
+                        </header>
                         <p>{move || current_labels().loading}</p>
                     </section>
                 </div>

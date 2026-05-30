@@ -22,6 +22,9 @@ pub fn ErrorModal(
                 >
                     <header class="modal-header">
                         <h2>{move || title()}</h2>
+                    </header>
+                    <p class="error-dialog-message">{move || message()}</p>
+                    <footer class="modal-footer">
                         <button
                             class="primary-button"
                             class:danger-button=danger
@@ -31,8 +34,7 @@ pub fn ErrorModal(
                         >
                             {labels.close}
                         </button>
-                    </header>
-                    <p class="error-dialog-message">{move || message()}</p>
+                    </footer>
                 </section>
             </div>
         </Show>

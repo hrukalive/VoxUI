@@ -17,9 +17,6 @@ pub fn LoadProgressModal(
                 <section class="modal progress-modal" role="dialog" aria-modal="true" aria-label={labels.loading}>
                     <header class="modal-header">
                         <h2>{labels.loading}</h2>
-                        <button class="danger-button progress-cancel-button" type="button" aria-label={labels.cancel} on:click=move |_| { on_close() }>
-                            {labels.cancel}
-                        </button>
                     </header>
                     <div class="progress-body">
                         <progress
@@ -35,6 +32,11 @@ pub fn LoadProgressModal(
                         </progress>
                         <p class="progress-label">{move || format!("{:.0}%", normalized_percent())}</p>
                     </div>
+                    <footer class="modal-footer">
+                        <button class="danger-button progress-cancel-button" type="button" aria-label={labels.cancel} on:click=move |_| { on_close() }>
+                            {labels.cancel}
+                        </button>
+                    </footer>
                 </section>
             </div>
         </Show>
