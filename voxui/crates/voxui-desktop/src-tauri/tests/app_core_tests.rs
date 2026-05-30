@@ -104,6 +104,7 @@ fn changing_audio_host_clears_saved_audio_device() {
             volume: None,
             max_input_chars: None,
             generation: None,
+            translation: None,
         })
         .unwrap();
 
@@ -184,6 +185,7 @@ fn unsupported_cuda_backend_patch_is_ignored_until_sidecar_reports_cuda() {
             volume: None,
             max_input_chars: None,
             generation: None,
+            translation: None,
         })
         .unwrap();
 
@@ -207,6 +209,7 @@ fn unsupported_cuda_backend_patch_is_ignored_until_sidecar_reports_cuda() {
             volume: None,
             max_input_chars: None,
             generation: None,
+            translation: None,
         })
         .unwrap();
 
@@ -235,6 +238,7 @@ fn clearing_audio_host_to_default_clears_host_and_device() {
             volume: None,
             max_input_chars: None,
             generation: None,
+            translation: None,
         })
         .unwrap();
 
@@ -264,6 +268,7 @@ fn empty_audio_host_patch_clears_host_and_device() {
             volume: None,
             max_input_chars: None,
             generation: None,
+            translation: None,
         })
         .unwrap();
 
@@ -293,6 +298,7 @@ fn clearing_audio_device_to_default_keeps_selected_host() {
             volume: None,
             max_input_chars: None,
             generation: None,
+            translation: None,
         })
         .unwrap();
 
@@ -322,6 +328,7 @@ fn empty_audio_device_patch_clears_device_and_keeps_host() {
             volume: None,
             max_input_chars: None,
             generation: None,
+            translation: None,
         })
         .unwrap();
 
@@ -644,6 +651,7 @@ fn selection_change_cancels_active_load_and_rejects_stale_completion() {
         volume: None,
         max_input_chars: None,
         generation: None,
+        translation: None,
     })
     .unwrap();
     let swapped = core.complete_model_load_success_for_test(load_id, "a-model".to_string());
@@ -698,6 +706,7 @@ fn applying_config_patch_persists_the_saved_config_to_disk() {
                 prompt_text: Some("prompt".to_string()),
                 reference_wav_path: Some(PathBuf::from("reference.wav")),
             }),
+            translation: None,
         })
         .unwrap();
 
@@ -762,6 +771,7 @@ fn volume_patch_updates_active_playback_handle() {
         volume: Some(0.75),
         max_input_chars: None,
         generation: None,
+        translation: None,
     })
     .unwrap();
 

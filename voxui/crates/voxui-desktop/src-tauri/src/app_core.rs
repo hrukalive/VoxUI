@@ -166,6 +166,9 @@ impl AppCore {
 
         if let Some(language) = patch.language {
             self.config.language = language;
+            self.config.translation.outbound.source_lang = lang_to_code(language);
+            self.config.translation.inbound.target_lang = lang_to_code(language);
+            self.config.translation.outbound.target_lang = opposite_lang_code(language);
         }
         if let Some(theme) = patch.theme {
             self.config.theme = theme;
@@ -200,6 +203,9 @@ impl AppCore {
         if let Some(mut generation) = patch.generation {
             normalize_generation_settings(&mut generation);
             self.config.generation = generation;
+        }
+        if let Some(translation) = patch.translation {
+            self.config.translation = translation;
         }
 
         self.persist_config()?;
@@ -1155,6 +1161,22 @@ fn normalize_backend_for_sidecar(
     }
 }
 
+fn lang_to_code(language: LanguageMode) -> String {
+    match language {
+        LanguageMode::Chinese => "ZH".to_string(),
+        LanguageMode::English => "EN".to_string(),
+        LanguageMode::System => "ZH".to_string(),
+    }
+}
+
+fn opposite_lang_code(language: LanguageMode) -> String {
+    match language {
+        LanguageMode::Chinese => "EN".to_string(),
+        LanguageMode::English => "ZH".to_string(),
+        LanguageMode::System => "EN".to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -1211,6 +1233,7 @@ mod tests {
                     cfg_value: 3.0,
                     ..GenerationSettings::default()
                 }),
+                translation: None,
             })
             .unwrap();
 
@@ -1364,6 +1387,7 @@ mod tests {
                 volume: Some(-0.5),
                 max_input_chars: None,
                 generation: None,
+                translation: None,
             })
             .unwrap();
 
@@ -1399,6 +1423,7 @@ mod tests {
                 volume: None,
                 max_input_chars: None,
                 generation: None,
+                translation: None,
             })
             .unwrap();
 
