@@ -539,6 +539,37 @@ pub fn stop_audio(
     Ok(CommandResult { ok: true })
 }
 
+use wreq::Client;
+
+const ONESHOT_FREE_ENDPOINT: &str = "https://oneshot-free.www.deepl.com/v1/translate";
+const EXTENSION_ID: &str = "cofdbpoegempjloogbagkncekinflcnj";
+const MAX_FREE_TEXT_LENGTH: usize = 1500;
+
+fn get_translation_client() -> &'static Client {
+    static CLIENT: OnceLock<Client> = OnceLock::new();
+    CLIENT.get_or_init(|| {
+        Client::builder()
+            .emulation(wreq_util::Emulation::Chrome120)
+            .timeout(Duration::from_secs(20))
+            .build()
+            .expect("Failed to build wreq client")
+    })
+}
+
+fn map_lang_code(code: &str, is_source: bool) -> String {
+    if is_source && code == "auto" {
+        return String::new();
+    }
+    match code {
+        "ZH" => "zh-Hans".to_string(),
+        "ZH-HANT" => "zh-Hant".to_string(),
+        "EN" => "en-US".to_string(),
+        _ => code.to_lowercase(),
+    }
+}
+
+static COOKIE_WARMED: std::sync::Once = std::sync::Once::new();
+
 #[tauri::command]
 pub async fn translate_text(
     text: String,
@@ -548,53 +579,71 @@ pub async fn translate_text(
     if text.trim().is_empty() {
         return Err("No text to translate".to_string());
     }
-
-    let client = reqwest::Client::new();
-    let mut body = serde_json::json!({
-        "text": text,
-        "target_lang": target_lang,
-    });
-    if source_lang != "auto" && !source_lang.is_empty() {
-        body["source_lang"] = serde_json::Value::String(source_lang.clone());
+    if text.chars().count() > MAX_FREE_TEXT_LENGTH {
+        return Err(format!("Text too long (max {} characters)", MAX_FREE_TEXT_LENGTH));
     }
 
+    let client = get_translation_client();
+
+    COOKIE_WARMED.call_once(|| {
+        let client = client.clone();
+        tauri::async_runtime::spawn(async move {
+            let _ = client
+                .get("https://www.deepl.com/translator")
+                .timeout(Duration::from_secs(5))
+                .send()
+                .await;
+        });
+    });
+
+    let api_source = map_lang_code(&source_lang, true);
+    let api_target = map_lang_code(&target_lang, false);
+
+    let body = serde_json::json!({
+        "text": [text],
+        "target_lang": api_target,
+        "source_lang": api_source,
+        "usage_type": "Translate",
+        "app_information": {
+            "os": "brex_macOS",
+            "os_version": "brex_chrome_120.0.0.0",
+            "app_version": "1.86.0",
+            "app_build": "chrome_web_store",
+            "instance_id": uuid::Uuid::new_v4().to_string(),
+        },
+    });
+
     let response = client
-        .post("https://www2.deepl.com/jsonrpc")
+        .post(ONESHOT_FREE_ENDPOINT)
         .header("Content-Type", "application/json")
-        .json(&serde_json::json!({
-            "jsonrpc": "2.0",
-            "method": "LMT_handle_jobs",
-            "params": {
-                "jobs": [{
-                    "kind": "default",
-                    "raw_en_sentence": &body["text"],
-                    "raw_en_context_before": [],
-                    "raw_en_context_after": [],
-                    "preferred_num_beams": 4,
-                }],
-                "lang": {
-                    "user_preferred_langs": [&body["target_lang"]],
-                    "source_lang_user_selected": &body["source_lang"],
-                },
-                "priority": -1,
-                "commonJobParams": {},
-            },
-            "id": 1,
-        }))
+        .header("Accept", "*/*")
+        .header("Authorization", "None")
+        .header("Origin", format!("chrome-extension://{EXTENSION_ID}"))
+        .header("Sec-Fetch-Site", "cross-site")
+        .header("Sec-Fetch-Mode", "cors")
+        .header("Sec-Fetch-Dest", "empty")
+        .json(&body)
         .send()
         .await
-        .map_err(|e| format!("Translation request failed: {}", e))?;
+        .map_err(|e| format!("Translation request failed: {e}"))?;
 
     if !response.status().is_success() {
-        return Err(format!("Translation service returned status {}", response.status()));
+        let status = response.status();
+        let msg = match status.as_u16() {
+            429 => "Translation service rate-limited. Please wait and try again.",
+            400 => "Invalid language code or request.",
+            404 => "No text provided.",
+            _ => return Err(format!("Translation service returned status {status}")),
+        };
+        return Err(msg.to_string());
     }
 
     let json: serde_json::Value = response
         .json()
         .await
-        .map_err(|e| format!("Failed to parse translation response: {}", e))?;
+        .map_err(|e| format!("Failed to parse response: {e}"))?;
 
-    let translated = json["result"]["translations"][0]["beams"][0]["postprocessed_sentence"]
+    let translated = json["translations"][0]["text"]
         .as_str()
         .ok_or_else(|| "Unexpected translation response format".to_string())?
         .to_string();
