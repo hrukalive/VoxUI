@@ -811,21 +811,25 @@ mod tests {
     #[test]
     fn monitor_renders_mapped_uname_modal_and_button() {
         let source = include_str!("live_monitor.rs");
+        let modal_class = ["mapped", "-uname", "-modal"].concat();
+        let button_class = ["live", "-map", "-button"].concat();
+        let button_class_helper = ["mapped", "_uname", "_button", "_class"].concat();
+        let initial_value_helper = ["mapped", "_uname", "_initial", "_value"].concat();
 
         assert!(
-            source.contains("mapped-uname-modal"),
+            source.contains(&modal_class),
             "Monitor should render the focused mapped username modal"
         );
         assert!(
-            source.contains("live-map-button"),
+            source.contains(&button_class),
             "Monitor should render a mapped username button for live items"
         );
         assert!(
-            source.contains("mapped_uname_button_class"),
+            source.contains(&button_class_helper),
             "Monitor should derive mapped username button styling from mapping state"
         );
         assert!(
-            source.contains("mapped_uname_initial_value"),
+            source.contains(&initial_value_helper),
             "Monitor should initialize modal input from mapping config or current uname"
         );
     }
