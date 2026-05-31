@@ -583,6 +583,8 @@ pub struct RequestSnapshot {
     pub model_id: String,
     pub backend: BackendKind,
     pub generation: GenerationSettings,
+    #[serde(default)]
+    pub lora_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -595,5 +597,9 @@ pub struct AppSnapshot {
     pub selected_model_id: Option<String>,
     pub loaded_model_id: Option<String>,
     pub load_state: LoadUiState,
+    #[serde(default)]
+    pub available_loras: Vec<LoraEntry>,
+    #[serde(default)]
+    pub selected_lora_id: Option<String>,
     pub history: Vec<HistoryItem>,
 }

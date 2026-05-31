@@ -1311,6 +1311,7 @@ fn synthesis_request_dto(request: voxui_inference::SynthesisRequest) -> Synthesi
         retry_badcase_max_times: request.retry_badcase_max_times,
         retry_badcase_ratio_threshold: request.retry_badcase_ratio_threshold,
         consolidate_n: request.consolidate_n,
+        lora_path: request.lora_path,
     }
 }
 

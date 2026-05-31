@@ -9,11 +9,11 @@ use voxui_audio::VolumeHandle;
 
 use crate::generation_queue::{GenerationQueue, HistoryItem, HistoryStatus};
 use crate::live::{LiveEvent, LiveLanguage, LiveState, SuggestionMode};
-use crate::model_discovery::discover_models;
+use crate::model_discovery::{discover_loras, discover_models};
 use crate::playback::{GeneratedAudio, GeneratedAudioCache};
 use crate::types::{
     AppConfig, AppSnapshot, ConfigPatch, LanguageMode, LiveConfigPatch, LiveSnapshot, LiveStatus,
-    LoadUiState, ModelChoice, SidecarCapabilities,
+    LoadUiState, LoraEntry, ModelChoice, SidecarCapabilities,
 };
 use voxui_inference::SynthesisRequest;
 
@@ -44,6 +44,8 @@ pub struct AppCore {
     selected_model_id: Option<String>,
     loaded_model_id: Option<String>,
     loaded_sample_rate: Option<u32>,
+    selected_lora_id: Option<String>,
+    available_loras: Vec<LoraEntry>,
     load_state: LoadUiState,
     next_load_id: u64,
     active_load: Option<ActiveModelLoad>,
@@ -116,6 +118,8 @@ impl AppCore {
             selected_model_id,
             loaded_model_id: None,
             loaded_sample_rate: None,
+            selected_lora_id: None,
+            available_loras: Vec::new(),
             load_state: LoadUiState::Idle,
             next_load_id: 1,
             active_load: None,
@@ -142,6 +146,8 @@ impl AppCore {
             selected_model_id: self.selected_model_id.clone(),
             loaded_model_id: self.loaded_model_id.clone(),
             load_state: self.load_state,
+            available_loras: self.available_loras.clone(),
+            selected_lora_id: self.selected_lora_id.clone(),
             history: self.queue.items().to_vec(),
         }
     }
@@ -436,7 +442,14 @@ impl AppCore {
             HistoryStatus::Queued
         };
 
-        let id = self.queue.enqueue(text, loaded_model_id, &self.config, now, status);
+        let id = self.queue.enqueue(
+            text,
+            loaded_model_id,
+            self.selected_lora_id.clone(),
+            &self.config,
+            now,
+            status,
+        );
         self.queue
             .items()
             .iter()
@@ -450,9 +463,10 @@ impl AppCore {
             .loaded_model_id
             .clone()
             .context("no model loaded for generation")?;
+        let lora_id = self.selected_lora_id.clone();
         if !self
             .queue
-            .start_regeneration(item_id, loaded_model_id, config)
+            .start_regeneration(item_id, loaded_model_id, lora_id, config)
         {
             bail!("unknown history item: {item_id}");
         }
@@ -872,6 +886,8 @@ impl AppCore {
         self.load_state = LoadUiState::Idle;
         self.loaded_model_id = None;
         self.loaded_sample_rate = None;
+        self.available_loras = Vec::new();
+        self.selected_lora_id = None;
 
         let stopped_generation_item_id = self.active_generation_item_id.clone();
         let mut failed_generation_item_id = None;
@@ -928,6 +944,13 @@ impl AppCore {
             retry_badcase_max_times: item.snapshot.generation.retry_badcase_max_times,
             retry_badcase_ratio_threshold: item.snapshot.generation.retry_badcase_ratio_threshold,
             consolidate_n: item.snapshot.generation.stream_consolidate_n.max(1),
+            lora_path: item.snapshot.lora_id.as_ref().map(|id| {
+                self.models
+                    .iter()
+                    .find(|c| c.id == item.snapshot.model_id)
+                    .map(|c| c.model_dir.join(format!("{id}.gguf")))
+                    .unwrap_or_else(|| PathBuf::from(format!("{id}.gguf")))
+            }),
         })
     }
 
@@ -981,6 +1004,19 @@ impl AppCore {
         self.loaded_model_id = Some(choice_id);
         self.loaded_sample_rate = Some(sample_rate);
         self.load_state = LoadUiState::Idle;
+
+        self.available_loras = match &self.loaded_model_id {
+            Some(id) => {
+                if let Some(choice) = self.models.iter().find(|c| c.id == *id) {
+                    discover_loras(&choice.model_dir).unwrap_or_default()
+                } else {
+                    Vec::new()
+                }
+            }
+            None => Vec::new(),
+        };
+        self.selected_lora_id = None;
+
         true
     }
 

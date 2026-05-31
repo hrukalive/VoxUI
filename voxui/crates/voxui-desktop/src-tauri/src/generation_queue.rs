@@ -39,6 +39,7 @@ impl GenerationQueue {
         &mut self,
         text: String,
         loaded_model_id: impl Into<String>,
+        lora_id: Option<String>,
         config: &AppConfig,
         created_at: u64,
         status: HistoryStatus,
@@ -52,7 +53,7 @@ impl GenerationQueue {
             progress_total: 0,
             error: None,
             has_audio: false,
-            snapshot: Self::snapshot(loaded_model_id, config),
+            snapshot: Self::snapshot(loaded_model_id, lora_id, config),
             created_at,
         });
         id
@@ -161,9 +162,10 @@ impl GenerationQueue {
         &mut self,
         id: &str,
         loaded_model_id: impl Into<String>,
+        lora_id: Option<String>,
         config: &AppConfig,
     ) -> bool {
-        let snapshot = Self::snapshot(loaded_model_id, config);
+        let snapshot = Self::snapshot(loaded_model_id, lora_id, config);
         let Some(item) = self.item_mut(id) else {
             return false;
         };
@@ -175,11 +177,12 @@ impl GenerationQueue {
         true
     }
 
-    fn snapshot(loaded_model_id: impl Into<String>, config: &AppConfig) -> RequestSnapshot {
+    fn snapshot(loaded_model_id: impl Into<String>, lora_id: Option<String>, config: &AppConfig) -> RequestSnapshot {
         RequestSnapshot {
             model_id: loaded_model_id.into(),
             backend: config.backend,
             generation: config.generation.clone(),
+            lora_id,
         }
     }
 
