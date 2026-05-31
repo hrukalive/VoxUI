@@ -132,6 +132,7 @@ fn status_label(labels: Labels, status: HistoryStatus) -> &'static str {
         HistoryStatus::Playing => labels.history_status_playing,
         HistoryStatus::Failed => labels.history_status_failed,
         HistoryStatus::Canceled => labels.history_status_canceled,
+        HistoryStatus::Dedupped => labels.history_status_dedupped,
     }
 }
 

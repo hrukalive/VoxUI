@@ -277,6 +277,7 @@ pub fn labels(language: UiLanguage) -> Labels {
             history_status_playing: "Playing",
             history_status_failed: "Failed",
             history_status_canceled: "Canceled",
+            history_status_dedupped: "Dedupped",
             progress: "Progress",
             cancel: "Cancel",
             play: "Play",
