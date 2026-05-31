@@ -1,13 +1,13 @@
 use std::fs;
 
 use tempfile::TempDir;
-use voxui_desktop::model_discovery::{choice_id, discover_models};
+use voxui_desktop::model_discovery::{choice_id, discover_loras, discover_models};
 
 #[cfg(unix)]
 use std::{ffi::OsString, os::unix::ffi::OsStringExt};
 
 #[test]
-fn discovers_base_and_lora_choices() {
+fn discovers_base_model_choices() {
     let temp = TempDir::new().unwrap();
     let model_dir = temp.path().join("voxcpm2-fp16");
     fs::create_dir(&model_dir).unwrap();
@@ -22,17 +22,25 @@ fn discovers_base_and_lora_choices() {
         .map(|c| c.display_name.as_str())
         .collect::<Vec<_>>();
 
-    assert_eq!(
-        names,
-        vec![
-            "voxcpm2-fp16",
-            "voxcpm2-fp16 | lora_a1",
-            "voxcpm2-fp16 | lora_a2",
-        ]
-    );
+    assert_eq!(names, vec!["voxcpm2-fp16"]);
     assert_eq!(choices[0].model_bytes, 4);
-    assert_eq!(choices[1].lora_bytes, 2);
-    assert_eq!(choices[2].lora_bytes, 3);
+    assert_eq!(choices[0].lora_bytes, 0);
+}
+
+#[test]
+fn discovers_lora_entries() {
+    let temp = TempDir::new().unwrap();
+    let model_dir = temp.path().join("voxcpm2-fp16");
+    fs::create_dir(&model_dir).unwrap();
+    fs::write(model_dir.join("model.gguf"), [0u8; 4]).unwrap();
+    fs::write(model_dir.join("lora_a1.gguf"), [1u8; 2]).unwrap();
+    fs::write(model_dir.join("lora_a2.gguf"), [2u8; 3]).unwrap();
+    fs::write(model_dir.join("notes.txt"), b"ignored").unwrap();
+
+    let loras = discover_loras(&model_dir).unwrap();
+    let ids = loras.iter().map(|l| l.id.as_str()).collect::<Vec<_>>();
+
+    assert_eq!(ids, vec!["lora_a1", "lora_a2"]);
 }
 
 #[test]
@@ -72,28 +80,8 @@ fn discovers_models_with_deterministic_ordering_and_ids() {
         .map(|choice| choice.id.as_str())
         .collect::<Vec<_>>();
 
-    assert_eq!(
-        names,
-        vec![
-            "a-model",
-            "a-model | a_lora",
-            "a-model | b_lora",
-            "z-model",
-            "z-model | a_lora",
-            "z-model | z_lora",
-        ]
-    );
-    assert_eq!(
-        ids,
-        vec![
-            "a-model",
-            "a-model|a_lora.gguf",
-            "a-model|b_lora.gguf",
-            "z-model",
-            "z-model|a_lora.gguf",
-            "z-model|z_lora.gguf",
-        ]
-    );
+    assert_eq!(names, vec!["a-model", "z-model"]);
+    assert_eq!(ids, vec!["a-model", "z-model"]);
 }
 
 #[cfg(unix)]
@@ -126,11 +114,11 @@ fn errors_on_non_utf8_discovered_lora_file_name() {
     )
     .unwrap();
 
-    let error = discover_models(temp.path()).unwrap_err();
+    let error = discover_loras(&model_dir).unwrap_err();
 
     assert!(error
         .to_string()
-        .contains("LoRA candidate file name is not UTF-8"));
+        .contains("LoRA file stem is not UTF-8"));
 }
 
 #[test]
