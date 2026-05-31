@@ -15,7 +15,7 @@ use crate::tauri_api::{
     GenerationProgressEvent, GenerationSettings, HistoryStatus, LanguageMode, LiveConfig,
     LiveConfigPatch, LiveSnapshot, LiveStatus, LoadUiState, ModelLoadDoneEvent,
     ModelLoadProgressEvent, PlaybackStateEvent, ReplacementRule, SendMode, TemplateConfig,
-    ThemeMode,
+    ThemeMode, TranslationPair, TranslationSettings,
 };
 
 #[component]
@@ -395,7 +395,7 @@ pub fn App() -> impl IntoView {
                 replacement_text=move || input_replacement.get()
                 on_replacement_consumed=move || set_input_replacement.set(None)
                 on_text_change=move |text| set_input_text.set(text)
-                translation_bar=Some(
+                translation_bar={
                     view! {
                         <TranslationBar
                             labels=current_labels
@@ -416,7 +416,7 @@ pub fn App() -> impl IntoView {
                             on_config_patch=commit_config_patch
                         />
                     }.into_any()
-                )
+                }
                 on_generate=move |text| {
                     spawn_local(async move {
                         if crate::tauri_api::enqueue_generation(text).await.is_ok() {
@@ -621,6 +621,11 @@ fn fallback_snapshot() -> AppSnapshot {
                 prompt_wav_path: None,
                 prompt_text: None,
                 reference_wav_path: None,
+            },
+            translation: TranslationSettings {
+                outbound: TranslationPair { source_lang: "auto".into(), target_lang: "EN".into() },
+                inbound: TranslationPair { source_lang: "auto".into(), target_lang: "ZH".into() },
+                translate_enqueue: false,
             },
             live: fallback_live_config(),
         },

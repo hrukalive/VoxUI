@@ -4,6 +4,7 @@ use leptos::html::Div;
 use leptos::prelude::*;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
+use wasm_bindgen_futures::spawn_local;
 
 use crate::components::controls::{translation_lang_options, CustomSelect, SelectOption};
 use crate::i18n::Labels;
@@ -346,87 +347,79 @@ pub fn LiveMonitor(
                                     let supports_translation = matches!(kind, LiveMessageKind::Danmu | LiveMessageKind::Superchat);
                                     let has_raw_message = item.raw_message.is_some();
                                     if supports_translation && has_raw_message {
-                                        let item_id_for_panel = item.id.clone();
-                                        let raw_msg = item.raw_message.clone().unwrap_or_default();
                                         let trans_config = translation_config.clone();
                                         let trans_patch = on_translation_patch.clone();
+                                        let tid_show = item.id.clone();
+                                        let tid_result = item.id.clone();
+                                        let tid_click = item.id.clone();
+                                        let msg_click = item.raw_message.clone().unwrap_or_default();
                                         view! {
-                                            <Show when=move || expanded_translations.get().contains(&item_id_for_panel)>
-                                                <div class="live-translation-panel">
-                                                    <div class="live-translation-controls">
-                                                        <CustomSelect
-                                                            class="live-translation-source-select"
-                                                            aria_label=move || labels().source_language
-                                                            value=move || trans_config().inbound.source_lang.clone()
-                                                            options=move || translation_lang_options(true, &labels())
-                                                            disabled=move || false
-                                                            on_change=move |value| {
-                                                                let mut cfg = trans_config();
-                                                                cfg.inbound.source_lang = value;
-                                                                trans_patch(cfg);
-                                                            }
-                                                        />
-                                                        <CustomSelect
-                                                            class="live-translation-target-select"
-                                                            aria_label=move || labels().target_language
-                                                            value=move || trans_config().inbound.target_lang.clone()
-                                                            options=move || translation_lang_options(false, &labels())
-                                                            disabled=move || false
-                                                            on_change=move |value| {
-                                                                let mut cfg = trans_config();
-                                                                cfg.inbound.target_lang = value;
-                                                                trans_patch(cfg);
-                                                            }
-                                                        />
-                                                        <button
-                                                            class="primary-button live-translation-do-button"
-                                                            type="button"
-                                                            disabled=move || {
-                                                                translation_results.get()
-                                                                    .get(&item_id_for_panel)
-                                                                    .map(|(_, loading)| *loading)
-                                                                    .unwrap_or(false)
-                                                            }
-                                                            on:click=move |_| {
-                                                                let item_id = item_id_for_panel.clone();
-                                                                let msg = raw_msg.clone();
-                                                                let source = trans_config().inbound.source_lang.clone();
-                                                                let target = trans_config().inbound.target_lang.clone();
-                                                                set_translation_results.update(|results| {
-                                                                    results.insert(item_id.clone(), (String::new(), true));
-                                                                });
-                                                                spawn_local(async move {
-                                                                    match crate::tauri_api::translate_text(msg, source, target).await {
-                                                                        Ok(translated) => {
-                                                                            set_translation_results.update(|results| {
-                                                                                results.insert(item_id, (translated, false));
-                                                                            });
-                                                                        }
-                                                                        Err(_) => {
-                                                                            set_translation_results.update(|results| {
-                                                                                results.remove(&item_id);
-                                                                            });
-                                                                        }
-                                                                    }
-                                                                });
-                                                            }
-                                                        >
-                                                            {move || labels().translate}
-                                                        </button>
-                                                    </div>
-                                                    {move || {
-                                                        translation_results.get()
-                                                            .get(&item_id_for_panel)
-                                                            .map(|(result, loading)| {
-                                                                if *loading {
-                                                                    view! { <p class="live-translation-result live-translation-loading">{labels().translating}</p> }.into_any()
-                                                                } else {
-                                                                    view! { <p class="live-translation-result">{result.clone()}</p> }.into_any()
+                                            <div class="live-translation-panel" class:hidden=move || !expanded_translations.get().contains(&tid_show)>
+                                                <CustomSelect
+                                                    class="live-translation-source-select"
+                                                    aria_label=labels.source_language
+                                                    value=move || trans_config().inbound.source_lang.clone()
+                                                    options=move || translation_lang_options(true, &labels)
+                                                    disabled=move || false
+                                                    on_change=move |value| {
+                                                        let mut cfg = trans_config();
+                                                        cfg.inbound.source_lang = value;
+                                                        trans_patch(cfg);
+                                                    }
+                                                />
+                                                <CustomSelect
+                                                    class="live-translation-target-select"
+                                                    aria_label=labels.target_language
+                                                    value=move || trans_config().inbound.target_lang.clone()
+                                                    options=move || translation_lang_options(false, &labels)
+                                                    disabled=move || false
+                                                    on_change=move |value| {
+                                                        let mut cfg = trans_config();
+                                                        cfg.inbound.target_lang = value;
+                                                        trans_patch(cfg);
+                                                    }
+                                                />
+                                                <button
+                                                    class="primary-button"
+                                                    type="button"
+                                                    on:click=move |_| {
+                                                        let item_id = tid_click.clone();
+                                                        let msg = msg_click.clone();
+                                                        let source = trans_config().inbound.source_lang.clone();
+                                                        let target = trans_config().inbound.target_lang.clone();
+                                                        set_translation_results.update(|results| {
+                                                            results.insert(item_id.clone(), (String::new(), true));
+                                                        });
+                                                        spawn_local(async move {
+                                                            match crate::tauri_api::translate_text(msg, source, target).await {
+                                                                Ok(translated) => {
+                                                                    set_translation_results.update(|results| {
+                                                                        results.insert(item_id, (translated, false));
+                                                                    });
                                                                 }
-                                                            })
-                                                    }}
-                                                </div>
-                                            </Show>
+                                                                Err(_) => {
+                                                                    set_translation_results.update(|results| {
+                                                                        results.remove(&item_id);
+                                                                    });
+                                                                }
+                                                            }
+                                                        });
+                                                    }
+                                                >
+                                                    {labels.translate}
+                                                </button>
+                                                {move || {
+                                                    translation_results.get()
+                                                        .get(&tid_result)
+                                                        .map(|(result, loading)| {
+                                                            if *loading {
+                                                                view! { <p class="live-translation-loading">{labels.translating}</p> }.into_any()
+                                                            } else {
+                                                                view! { <p class="live-translation-result">{result.clone()}</p> }.into_any()
+                                                            }
+                                                        })
+                                                }}
+                                            </div>
                                         }.into_any()
                                     } else {
                                         ().into_any()

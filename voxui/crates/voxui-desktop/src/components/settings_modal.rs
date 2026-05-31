@@ -14,6 +14,7 @@ pub enum SettingsPage {
     Inference,
     Audio,
     Live,
+    Translation,
     About,
 }
 
@@ -713,7 +714,7 @@ pub fn SettingsModal(
                                             <span>{move || labels().source_language}</span>
                                             <CustomSelect
                                                 class="settings-select-control"
-                                                aria_label=move || labels().source_language
+                                                aria_label=(move || labels().source_language)()
                                                 value=move || config().translation.outbound.source_lang.clone()
                                                 options=move || translation_lang_options(true, &labels())
                                                 disabled=move || false
@@ -731,7 +732,7 @@ pub fn SettingsModal(
                                             <span>{move || labels().target_language}</span>
                                             <CustomSelect
                                                 class="settings-select-control"
-                                                aria_label=move || labels().target_language
+                                                aria_label=(move || labels().target_language)()
                                                 value=move || config().translation.outbound.target_lang.clone()
                                                 options=move || translation_lang_options(false, &labels())
                                                 disabled=move || false
@@ -768,7 +769,7 @@ pub fn SettingsModal(
                                             <span>{move || labels().source_language}</span>
                                             <CustomSelect
                                                 class="settings-select-control"
-                                                aria_label=move || labels().source_language
+                                                aria_label=(move || labels().source_language)()
                                                 value=move || config().translation.inbound.source_lang.clone()
                                                 options=move || translation_lang_options(true, &labels())
                                                 disabled=move || false
@@ -786,7 +787,7 @@ pub fn SettingsModal(
                                             <span>{move || labels().target_language}</span>
                                             <CustomSelect
                                                 class="settings-select-control"
-                                                aria_label=move || labels().target_language
+                                                aria_label=(move || labels().target_language)()
                                                 value=move || config().translation.inbound.target_lang.clone()
                                                 options=move || translation_lang_options(false, &labels())
                                                 disabled=move || false

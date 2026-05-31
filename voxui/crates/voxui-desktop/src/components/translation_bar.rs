@@ -1,8 +1,9 @@
 use leptos::prelude::*;
+use wasm_bindgen_futures::spawn_local;
 
 use crate::components::controls::{translation_lang_options, CustomSelect};
 use crate::i18n::Labels;
-use crate::tauri_api::{AppConfig, ConfigPatch, TranslationSettings};
+use crate::tauri_api::{AppConfig, ConfigPatch};
 
 #[component]
 pub fn TranslationBar(
@@ -49,7 +50,7 @@ pub fn TranslationBar(
             <label class="translation-bar-select">
                 <CustomSelect
                     class="translation-target-select"
-                    aria_label=move || labels().target_language
+                    aria_label=(move || labels().target_language)()
                     value=target_value
                     options=move || translation_lang_options(false, &labels())
                     disabled=target_disabled
