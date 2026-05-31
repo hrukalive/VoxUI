@@ -2,6 +2,7 @@ use std::collections::{btree_map::Entry, BTreeMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc};
+use std::time::SystemTime;
 
 use anyhow::{bail, Context, Result};
 use voxui_audio::VolumeHandle;
@@ -404,8 +405,38 @@ impl AppCore {
             .loaded_model_id
             .clone()
             .context("no model loaded for generation")?;
-        let id = self.queue.enqueue(text, loaded_model_id, &self.config);
 
+        let now = SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        let deduped = self.config.dedup_window_secs > 0 && {
+            let normalized = normalize_for_compare(&text);
+            let items: Vec<_> = self.queue.items().iter().rev().cloned().collect();
+            let mut found = false;
+            for item in &items {
+                if now.saturating_sub(item.created_at) > self.config.dedup_window_secs {
+                    break;
+                }
+                let item_normalized = normalize_for_compare(&item.text);
+                if levenshtein_distance(&normalized, &item_normalized)
+                    <= self.config.dedup_edit_threshold
+                {
+                    found = true;
+                    break;
+                }
+            }
+            found
+        };
+
+        let status = if deduped {
+            HistoryStatus::Dedupped
+        } else {
+            HistoryStatus::Queued
+        };
+
+        let id = self.queue.enqueue(text, loaded_model_id, &self.config, now, status);
         self.queue
             .items()
             .iter()
@@ -1172,6 +1203,17 @@ fn lang_to_code(language: LanguageMode) -> String {
         LanguageMode::English => "EN".to_string(),
         LanguageMode::System => "ZH".to_string(),
     }
+}
+
+fn normalize_for_compare(text: &str) -> String {
+    text.to_lowercase()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn levenshtein_distance(a: &str, b: &str) -> usize {
+    levenshtein::levenshtein(a, b)
 }
 
 fn opposite_lang_code(language: LanguageMode) -> String {
