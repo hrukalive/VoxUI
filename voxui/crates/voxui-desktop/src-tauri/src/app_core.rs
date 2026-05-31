@@ -211,6 +211,9 @@ impl AppCore {
         if let Some(translation) = patch.translation {
             self.config.translation = translation;
         }
+        if let Some(selected_lora_id) = patch.selected_lora_id {
+            self.selected_lora_id = selected_lora_id;
+        }
 
         self.persist_config()?;
         Ok(self.snapshot())
@@ -1317,6 +1320,7 @@ mod tests {
                     ..GenerationSettings::default()
                 }),
                 translation: None,
+                selected_lora_id: None,
             })
             .unwrap();
 
@@ -1471,6 +1475,7 @@ mod tests {
                 max_input_chars: None,
                 generation: None,
                 translation: None,
+                selected_lora_id: None,
             })
             .unwrap();
 
@@ -1507,6 +1512,7 @@ mod tests {
                 max_input_chars: None,
                 generation: None,
                 translation: None,
+                selected_lora_id: None,
             })
             .unwrap();
 

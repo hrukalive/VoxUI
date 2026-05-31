@@ -47,6 +47,10 @@ pub struct AppSnapshot {
     pub selected_model_id: Option<String>,
     pub loaded_model_id: Option<String>,
     pub load_state: LoadUiState,
+    #[serde(default)]
+    pub available_loras: Vec<LoraEntry>,
+    #[serde(default)]
+    pub selected_lora_id: Option<String>,
     pub history: Vec<HistoryItem>,
 }
 
@@ -426,6 +430,8 @@ pub struct ConfigPatch {
     pub generation: Option<GenerationSettings>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub translation: Option<TranslationSettings>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub selected_lora_id: Option<Option<String>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -437,6 +443,12 @@ pub struct ModelChoice {
     pub lora_path: Option<String>,
     pub model_bytes: u64,
     pub lora_bytes: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LoraEntry {
+    pub id: String,
+    pub display_name: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -458,6 +470,8 @@ pub struct RequestSnapshot {
     pub model_id: String,
     pub backend: BackendKind,
     pub generation: GenerationSettings,
+    #[serde(default)]
+    pub lora_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

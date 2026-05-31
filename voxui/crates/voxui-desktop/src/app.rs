@@ -692,6 +692,8 @@ fn fallback_snapshot() -> AppSnapshot {
         selected_model_id: None,
         loaded_model_id: None,
         load_state: LoadUiState::Idle,
+        available_loras: Vec::new(),
+        selected_lora_id: None,
         history: Vec::new(),
     }
 }

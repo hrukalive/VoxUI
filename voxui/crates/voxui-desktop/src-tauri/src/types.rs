@@ -488,6 +488,12 @@ pub struct ConfigPatch {
     pub generation: Option<GenerationSettings>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub translation: Option<TranslationSettings>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_double_option"
+    )]
+    pub selected_lora_id: Option<Option<String>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
