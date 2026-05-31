@@ -266,11 +266,6 @@ body:has(.live-monitor-shell) {
   padding: 4px;
 }
 
-.custom-select-menu.open-above {
-  top: auto;
-  bottom: calc(100% + 3px);
-}
-
 .custom-select-option {
   display: block;
   width: 100%;
