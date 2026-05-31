@@ -1,6 +1,8 @@
 use leptos::prelude::*;
 
-use crate::components::controls::{translation_lang_options, CustomSelect, NumberCounter, SelectOption};
+use crate::components::controls::{
+    translation_lang_options, CustomSelect, NumberCounter, SelectOption,
+};
 use crate::i18n::{Labels, UiLanguage};
 use crate::tauri_api::{
     AppConfig, AudioDevice, AudioHost, AudioState, AutoGenMode, BackendKind, ConfigPatch,
@@ -127,7 +129,7 @@ pub fn SettingsModal(
                                             <span>{move || labels().language}</span>
                                             <CustomSelect
                                                 class="settings-select-control"
-                                                aria_label=labels().language
+                                                aria_label=move || labels().language
                                                 value=move || language_value(config().language).to_string()
                                                 options=move || language_options(labels())
                                                 disabled=move || false
@@ -143,7 +145,7 @@ pub fn SettingsModal(
                                             <span>{move || labels().theme}</span>
                                             <CustomSelect
                                                 class="settings-select-control"
-                                                aria_label=labels().theme
+                                                aria_label=move || labels().theme
                                                 value=move || theme_value(config().theme).to_string()
                                                 options=move || theme_options(labels())
                                                 disabled=move || false
@@ -158,7 +160,7 @@ pub fn SettingsModal(
                                         <label class="settings-field" for="settings-max-input">
                                             <span>{move || labels().max_input_characters}</span>
                                             <NumberCounter
-                                                aria_label=labels().max_input_characters
+                                                aria_label=move || labels().max_input_characters
                                                 value=move || config().max_input_chars.to_string()
                                                 disabled=move || false
                                                 min="1"
@@ -188,7 +190,7 @@ pub fn SettingsModal(
                                             <span>{move || labels().backend}</span>
                                             <CustomSelect
                                                 class="settings-select-control"
-                                                aria_label=labels().backend
+                                                aria_label=move || labels().backend
                                                 value=move || backend_value(config().backend).to_string()
                                                 options=move || backend_options(labels(), cuda_available())
                                                 disabled=move || false
@@ -210,7 +212,7 @@ pub fn SettingsModal(
                                         <label class="settings-field" for="settings-stream-consolidate">
                                             <span>{move || labels().stream_consolidate_n}</span>
                                             <NumberCounter
-                                                aria_label=labels().stream_consolidate_n
+                                                aria_label=move || labels().stream_consolidate_n
                                                 value=move || config().generation.stream_consolidate_n.to_string()
                                                 disabled=move || !config().generation.streaming
                                                 min="1"
@@ -222,28 +224,28 @@ pub fn SettingsModal(
                                         </label>
                                         <label class="settings-field" for="settings-cfg">
                                             <span>{move || labels().cfg_value}</span>
-                                            <NumberCounter aria_label=labels().cfg_value value=move || config().generation.cfg_value.to_string() disabled=move || false min="0" step="0.1" on_change=move |next_value| {
+                                            <NumberCounter aria_label=move || labels().cfg_value value=move || config().generation.cfg_value.to_string() disabled=move || false min="0" step="0.1" on_change=move |next_value| {
                                                 let value = parse_f32(&next_value, config().generation.cfg_value);
                                                 patch_generation(Box::new(move |generation| generation.cfg_value = value));
                                             } />
                                         </label>
                                         <label class="settings-field" for="settings-steps">
                                             <span>{move || labels().inference_steps}</span>
-                                            <NumberCounter aria_label=labels().inference_steps value=move || config().generation.inference_timesteps.to_string() disabled=move || false min="1" on_change=move |next_value| {
+                                            <NumberCounter aria_label=move || labels().inference_steps value=move || config().generation.inference_timesteps.to_string() disabled=move || false min="1" on_change=move |next_value| {
                                                 let value = parse_usize(&next_value, config().generation.inference_timesteps);
                                                 patch_generation(Box::new(move |generation| generation.inference_timesteps = value));
                                             } />
                                         </label>
                                         <label class="settings-field" for="settings-min-len">
                                             <span>{move || labels().min_length}</span>
-                                            <NumberCounter aria_label=labels().min_length value=move || config().generation.min_len.to_string() disabled=move || false min="0" on_change=move |next_value| {
+                                            <NumberCounter aria_label=move || labels().min_length value=move || config().generation.min_len.to_string() disabled=move || false min="0" on_change=move |next_value| {
                                                 let value = parse_usize(&next_value, config().generation.min_len);
                                                 patch_generation(Box::new(move |generation| generation.min_len = value));
                                             } />
                                         </label>
                                         <label class="settings-field" for="settings-max-len">
                                             <span>{move || labels().max_length}</span>
-                                            <NumberCounter aria_label=labels().max_length value=move || config().generation.max_len.to_string() disabled=move || false min="1" on_change=move |next_value| {
+                                            <NumberCounter aria_label=move || labels().max_length value=move || config().generation.max_len.to_string() disabled=move || false min="1" on_change=move |next_value| {
                                                 let value = parse_usize(&next_value, config().generation.max_len);
                                                 patch_generation(Box::new(move |generation| generation.max_len = value));
                                             } />
@@ -263,7 +265,7 @@ pub fn SettingsModal(
                                         <label class="settings-field" for="settings-retry-max">
                                             <span>{move || labels().retry_max_times}</span>
                                             <NumberCounter
-                                                aria_label=labels().retry_max_times
+                                                aria_label=move || labels().retry_max_times
                                                 value=move || config().generation.retry_badcase_max_times.to_string()
                                                 disabled=move || !config().generation.retry_badcase || config().generation.streaming
                                                 min="0"
@@ -275,7 +277,7 @@ pub fn SettingsModal(
                                         <label class="settings-field" for="settings-ratio-threshold">
                                             <span>{move || labels().retry_ratio_threshold}</span>
                                             <NumberCounter
-                                                aria_label=labels().retry_ratio_threshold
+                                                aria_label=move || labels().retry_ratio_threshold
                                                 value=move || config().generation.retry_badcase_ratio_threshold.to_string()
                                                 disabled=move || !config().generation.retry_badcase || config().generation.streaming
                                                 min="0"
@@ -325,7 +327,7 @@ pub fn SettingsModal(
                                             <span>{move || labels().audio_driver}</span>
                                             <CustomSelect
                                                 class="settings-select-control"
-                                                aria_label=labels().audio_driver
+                                                aria_label=move || labels().audio_driver
                                                 value=move || config().audio_host.unwrap_or_else(|| DEFAULT_AUDIO_CHOICE.to_string())
                                                 options=move || audio_host_options(audio_state(), config().audio_host, labels())
                                                 disabled=move || false
@@ -342,7 +344,7 @@ pub fn SettingsModal(
                                             <span>{move || labels().output_device}</span>
                                             <CustomSelect
                                                 class="settings-select-control"
-                                                aria_label=labels().output_device
+                                                aria_label=move || labels().output_device
                                                 value=move || config().audio_device.unwrap_or_else(|| DEFAULT_AUDIO_CHOICE.to_string())
                                                 options=move || audio_device_options(audio_state(), &config(), labels())
                                                 disabled=move || false
@@ -425,7 +427,7 @@ pub fn SettingsModal(
                                             <span>{move || labels().send_mode}</span>
                                             <CustomSelect
                                                 class="settings-select-control"
-                                                aria_label=labels().send_mode
+                                                aria_label=move || labels().send_mode
                                                 value=move || live_snapshot().config.send_mode.value().to_string()
                                                 options=move || live_send_mode_options(labels())
                                                 disabled=move || false
@@ -441,7 +443,7 @@ pub fn SettingsModal(
                                             <span>{move || labels().auto_gen_mode}</span>
                                             <CustomSelect
                                                 class="settings-select-control"
-                                                aria_label=labels().auto_gen_mode
+                                                aria_label=move || labels().auto_gen_mode
                                                 value=move || live_snapshot().config.auto_gen_mode.value().to_string()
                                                 options=move || live_auto_gen_mode_options(labels())
                                                 disabled=move || false
@@ -714,7 +716,7 @@ pub fn SettingsModal(
                                             <span>{move || labels().source_language}</span>
                                             <CustomSelect
                                                 class="settings-select-control"
-                                                aria_label=(move || labels().source_language)()
+                                                aria_label=move || labels().source_language
                                                 value=move || config().translation.outbound.source_lang.clone()
                                                 options=move || translation_lang_options(true, &labels())
                                                 disabled=move || false
@@ -732,7 +734,7 @@ pub fn SettingsModal(
                                             <span>{move || labels().target_language}</span>
                                             <CustomSelect
                                                 class="settings-select-control"
-                                                aria_label=(move || labels().target_language)()
+                                                aria_label=move || labels().target_language
                                                 value=move || config().translation.outbound.target_lang.clone()
                                                 options=move || translation_lang_options(false, &labels())
                                                 disabled=move || false
@@ -769,7 +771,7 @@ pub fn SettingsModal(
                                             <span>{move || labels().source_language}</span>
                                             <CustomSelect
                                                 class="settings-select-control"
-                                                aria_label=(move || labels().source_language)()
+                                                aria_label=move || labels().source_language
                                                 value=move || config().translation.inbound.source_lang.clone()
                                                 options=move || translation_lang_options(true, &labels())
                                                 disabled=move || false
@@ -787,7 +789,7 @@ pub fn SettingsModal(
                                             <span>{move || labels().target_language}</span>
                                             <CustomSelect
                                                 class="settings-select-control"
-                                                aria_label=(move || labels().target_language)()
+                                                aria_label=move || labels().target_language
                                                 value=move || config().translation.inbound.target_lang.clone()
                                                 options=move || translation_lang_options(false, &labels())
                                                 disabled=move || false
@@ -1144,7 +1146,7 @@ mod tests {
 
     #[test]
     fn live_settings_pending_live_config_tracks_snapshot_updates() {
-        let source = include_str!("settings_modal.rs");
+        let source = include_str!("settings_modal.rs").replace("\r\n", "\n");
         let sync_effect = [
             "Effect::new(move |_| {\n",
             "        let live = live_snapshot();",

@@ -17,7 +17,7 @@ impl SelectOption {
 
 #[component]
 pub fn CustomSelect(
-    aria_label: &'static str,
+    aria_label: impl Fn() -> &'static str + Send + Sync + Clone + 'static,
     value: impl Fn() -> String + Send + Sync + Clone + 'static,
     options: impl Fn() -> Vec<SelectOption> + Send + Sync + Clone + 'static,
     disabled: impl Fn() -> bool + Send + Sync + Clone + 'static,
@@ -52,6 +52,8 @@ pub fn CustomSelect(
     let menu_options = options.clone();
     let menu_value = value.clone();
     let menu_on_change = on_change.clone();
+    let button_aria_label = aria_label.clone();
+    let menu_aria_label = aria_label.clone();
 
     view! {
         <div class=class_name on:focusout=move |_| {
@@ -62,7 +64,7 @@ pub fn CustomSelect(
             <button
                 class="custom-select-button"
                 type="button"
-                aria-label=aria_label
+                aria-label=move || button_aria_label()
                 aria-expanded=move || open.get().to_string()
                 disabled=move || button_disabled()
                 on:mousedown=move |event| {
@@ -92,7 +94,7 @@ pub fn CustomSelect(
                 class:open=move || open.get() && !menu_disabled_class()
                 hidden=move || !open.get() || menu_disabled_attr()
                 role="listbox"
-                aria-label=aria_label
+                aria-label=move || menu_aria_label()
             >
                 {move || {
                     let current_value = menu_value();
@@ -148,7 +150,7 @@ pub fn CustomSelect(
 
 #[component]
 pub fn NumberCounter(
-    aria_label: &'static str,
+    aria_label: impl Fn() -> &'static str + Send + Sync + Clone + 'static,
     value: impl Fn() -> String + Send + Sync + Clone + 'static,
     disabled: impl Fn() -> bool + Send + Sync + Clone + 'static,
     on_change: impl Fn(String) + Send + Sync + Clone + 'static,
@@ -167,13 +169,14 @@ pub fn NumberCounter(
     let increment_on_change = on_change.clone();
     let decrement_value = value.clone();
     let decrement_on_change = on_change.clone();
+    let input_aria_label = aria_label.clone();
 
     view! {
         <div class="number-counter" class:disabled=move || container_disabled()>
             <input
                 type="text"
                 inputmode="decimal"
-                aria-label=aria_label
+                aria-label=move || input_aria_label()
                 disabled=move || input_disabled()
                 prop:value=input_value
                 on:change=move |event| input_on_change(event_target_value(&event))
@@ -236,7 +239,35 @@ fn format_number(value: f64, precision: usize) -> String {
     }
 }
 
-pub fn translation_lang_options(include_auto: bool, labels: &crate::i18n::Labels) -> Vec<SelectOption> {
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn aria_labels_are_reactive_functions() {
+        let source = include_str!("controls.rs").replace("\r\n", "\n");
+
+        assert!(
+            source.contains("aria_label: impl Fn() -> &'static str"),
+            "shared controls should accept aria-label closures so callers do not evaluate signal-backed labels during component construction"
+        );
+        assert!(
+            source.contains("aria-label=move || button_aria_label()"),
+            "CustomSelect button aria-label should be read from a reactive closure"
+        );
+        assert!(
+            source.contains("aria-label=move || menu_aria_label()"),
+            "CustomSelect menu aria-label should be read from a reactive closure"
+        );
+        assert!(
+            source.contains("aria-label=move || input_aria_label()"),
+            "NumberCounter input aria-label should be read from a reactive closure"
+        );
+    }
+}
+
+pub fn translation_lang_options(
+    include_auto: bool,
+    labels: &crate::i18n::Labels,
+) -> Vec<SelectOption> {
     let mut options = Vec::new();
 
     if include_auto {
@@ -248,15 +279,39 @@ pub fn translation_lang_options(include_auto: bool, labels: &crate::i18n::Labels
     options.push(SelectOption::new("JA", "日本語"));
 
     let rest: &[(&str, &str)] = &[
-        ("AR", "العربية"), ("BG", "Български"), ("CS", "Čeština"), ("DA", "Dansk"),
-        ("DE", "Deutsch"), ("EL", "Ελληνικά"), ("EN-GB", "English (UK)"), ("EN-US", "English (US)"),
-        ("ES", "Español"), ("ES-419", "Español (Latinoamérica)"), ("ET", "Eesti"),
-        ("FI", "Suomi"), ("FR", "Français"), ("HE", "עברית"), ("HU", "Magyar"),
-        ("ID", "Bahasa Indonesia"), ("IT", "Italiano"), ("KO", "한국어"), ("LT", "Lietuvių"),
-        ("LV", "Latviešu"), ("NB", "Norsk"), ("NL", "Nederlands"), ("PL", "Polski"),
-        ("PT-BR", "Português (Brasil)"), ("PT-PT", "Português (Portugal)"),
-        ("RO", "Română"), ("RU", "Русский"), ("SK", "Slovenčina"), ("SL", "Slovenščina"),
-        ("SV", "Svenska"), ("TR", "Türkçe"), ("UK", "Українська"), ("VI", "Tiếng Việt"),
+        ("AR", "العربية"),
+        ("BG", "Български"),
+        ("CS", "Čeština"),
+        ("DA", "Dansk"),
+        ("DE", "Deutsch"),
+        ("EL", "Ελληνικά"),
+        ("EN-GB", "English (UK)"),
+        ("EN-US", "English (US)"),
+        ("ES", "Español"),
+        ("ES-419", "Español (Latinoamérica)"),
+        ("ET", "Eesti"),
+        ("FI", "Suomi"),
+        ("FR", "Français"),
+        ("HE", "עברית"),
+        ("HU", "Magyar"),
+        ("ID", "Bahasa Indonesia"),
+        ("IT", "Italiano"),
+        ("KO", "한국어"),
+        ("LT", "Lietuvių"),
+        ("LV", "Latviešu"),
+        ("NB", "Norsk"),
+        ("NL", "Nederlands"),
+        ("PL", "Polski"),
+        ("PT-BR", "Português (Brasil)"),
+        ("PT-PT", "Português (Portugal)"),
+        ("RO", "Română"),
+        ("RU", "Русский"),
+        ("SK", "Slovenčina"),
+        ("SL", "Slovenščina"),
+        ("SV", "Svenska"),
+        ("TR", "Türkçe"),
+        ("UK", "Українська"),
+        ("VI", "Tiếng Việt"),
         ("ZH-HANT", "繁體中文"),
     ];
 

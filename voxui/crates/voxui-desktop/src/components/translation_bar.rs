@@ -53,7 +53,7 @@ pub fn TranslationBar(
             <label class="translation-bar-select">
                 <CustomSelect
                     class="translation-target-select"
-                    aria_label=(move || labels().target_language)()
+                    aria_label=move || labels().target_language
                     value=target_value
                     options=move || translation_lang_options(false, &labels())
                     disabled=target_disabled

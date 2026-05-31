@@ -56,6 +56,8 @@ pub fn App() -> impl IntoView {
     });
 
     let current_snapshot = move || snapshot.get().unwrap_or_else(fallback_snapshot);
+    let current_snapshot_untracked =
+        move || snapshot.get_untracked().unwrap_or_else(fallback_snapshot);
     let current_labels = move || {
         let snapshot = current_snapshot();
         labels(ui_language(
@@ -312,7 +314,7 @@ pub fn App() -> impl IntoView {
                             });
                         }
                         on_load=move || {
-                            if let Some(choice_id) = current_snapshot().selected_model_id {
+                            if let Some(choice_id) = current_snapshot_untracked().selected_model_id {
                                 set_load_error.set(None);
                                 set_load_percent.set(0.0);
                                 set_load_open.set(true);
@@ -356,7 +358,7 @@ pub fn App() -> impl IntoView {
                 items=move || current_snapshot().history
                 on_play=move |item_id| {
                     spawn_local(async move {
-                        let is_playing = current_snapshot()
+                        let is_playing = current_snapshot_untracked()
                             .history
                             .iter()
                             .any(|item| item.id == item_id && matches!(item.status, HistoryStatus::Playing));
@@ -408,8 +410,9 @@ pub fn App() -> impl IntoView {
                             }
                             on_replace_text=move |text| set_input_replacement.set(Some(text))
                             on_enqueue=move |text| {
-                                let target_lang = current_snapshot().config.translation.outbound.target_lang.clone();
-                                let final_text = if current_snapshot().config.auto_period {
+                                let snapshot = current_snapshot_untracked();
+                                let target_lang = snapshot.config.translation.outbound.target_lang.clone();
+                                let final_text = if snapshot.config.auto_period {
                                     ensure_period(&text, &target_lang)
                                 } else {
                                     text
@@ -501,7 +504,7 @@ pub fn App() -> impl IntoView {
                 on_browse_prompt_wav=move || {
                     spawn_local(async move {
                         if let Ok(Some(path)) = crate::tauri_api::browse_prompt_wav().await {
-                            let mut generation = current_snapshot().config.generation;
+                            let mut generation = current_snapshot_untracked().config.generation;
                             generation.prompt_wav_path = Some(path);
                             if let Ok(next_snapshot) = crate::tauri_api::set_config_patch(ConfigPatch {
                                 generation: Some(generation),
@@ -517,7 +520,7 @@ pub fn App() -> impl IntoView {
                 on_browse_reference_wav=move || {
                     spawn_local(async move {
                         if let Ok(Some(path)) = crate::tauri_api::browse_reference_wav().await {
-                            let mut generation = current_snapshot().config.generation;
+                            let mut generation = current_snapshot_untracked().config.generation;
                             generation.reference_wav_path = Some(path);
                             if let Ok(next_snapshot) = crate::tauri_api::set_config_patch(ConfigPatch {
                                 generation: Some(generation),
@@ -645,8 +648,14 @@ fn fallback_snapshot() -> AppSnapshot {
                 reference_wav_path: None,
             },
             translation: TranslationSettings {
-                outbound: TranslationPair { source_lang: "auto".into(), target_lang: "EN".into() },
-                inbound: TranslationPair { source_lang: "auto".into(), target_lang: "ZH".into() },
+                outbound: TranslationPair {
+                    source_lang: "auto".into(),
+                    target_lang: "EN".into(),
+                },
+                inbound: TranslationPair {
+                    source_lang: "auto".into(),
+                    target_lang: "ZH".into(),
+                },
                 translate_enqueue: false,
             },
             live: fallback_live_config(),

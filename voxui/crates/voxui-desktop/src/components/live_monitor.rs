@@ -39,7 +39,8 @@ pub fn LiveMonitor(
     let (last_status_key, set_last_status_key) = signal(None::<(LiveStatus, Option<String>)>);
     let (mapped_uname_draft, set_mapped_uname_draft) = signal(None::<MappedUnameDraft>);
     let (expanded_translations, set_expanded_translations) = signal(HashSet::<String>::new());
-    let (translation_results, set_translation_results) = signal(HashMap::<String, (String, bool)>::new());
+    let (translation_results, set_translation_results) =
+        signal(HashMap::<String, (String, bool)>::new());
 
     let open_mapped_uname_modal = move |item: LiveMonitorItem| {
         let initial_value = mapped_uname_initial_value(
@@ -143,7 +144,7 @@ pub fn LiveMonitor(
                 <div class="live-monitor-header-actions">
                     <CustomSelect
                         class="live-send-mode-select"
-                        aria_label=labels().send_mode
+                        aria_label=move || labels().send_mode
                         value=move || snapshot().config.send_mode.value().to_string()
                         options=move || live_send_mode_options(labels())
                         disabled=move || false
@@ -156,7 +157,7 @@ pub fn LiveMonitor(
                     />
                     <CustomSelect
                         class="live-auto-gen-mode-select"
-                        aria_label=labels().auto_gen_mode
+                        aria_label=move || labels().auto_gen_mode
                         value=move || snapshot().config.auto_gen_mode.value().to_string()
                         options=move || live_auto_gen_mode_options(labels())
                         disabled=move || false
@@ -254,10 +255,11 @@ pub fn LiveMonitor(
                                         }
                                     >
                                         <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                                            <polyline points="17 1 21 5 17 9"></polyline>
-                                            <path d="M3 11V9a4 4 0 0 1 4-4h14"></path>
-                                            <polyline points="7 23 3 19 7 15"></polyline>
-                                            <path d="M21 13v2a4 4 0 0 1-4 4H3"></path>
+                                            <polyline points="16 3 21 3 21 8"></polyline>
+                                            <line x1="4" y1="20" x2="21" y2="3"></line>
+                                            <polyline points="21 16 21 21 16 21"></polyline>
+                                            <line x1="15" y1="15" x2="21" y2="21"></line>
+                                            <line x1="4" y1="4" x2="9" y2="9"></line>
                                         </svg>
                                     </button>
                             }
@@ -361,7 +363,7 @@ pub fn LiveMonitor(
                                                 <div class="live-translation-controls">
                                                 <CustomSelect
                                                     class="live-translation-source-select"
-                                                    aria_label=labels.source_language
+                                                    aria_label=move || labels.source_language
                                                     value=move || trans_config().inbound.source_lang.clone()
                                                     options=move || translation_lang_options(true, &labels)
                                                     disabled=move || false
@@ -373,7 +375,7 @@ pub fn LiveMonitor(
                                                 />
                                                 <CustomSelect
                                                     class="live-translation-target-select"
-                                                    aria_label=labels.target_language
+                                                    aria_label=move || labels.target_language
                                                     value=move || trans_config().inbound.target_lang.clone()
                                                     options=move || translation_lang_options(false, &labels)
                                                     disabled=move || false
@@ -763,6 +765,7 @@ mod tests {
             mapped_uname: "Alice".to_string(),
             suggestion: "old template".to_string(),
             raw_json: serde_json::Value::Null,
+            raw_message: None,
         };
         let first_key = live_item_render_key(&item);
 
