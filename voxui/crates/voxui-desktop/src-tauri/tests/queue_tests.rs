@@ -16,11 +16,11 @@ fn enqueue_captures_settings_and_preserves_order() {
     config.generation.inference_timesteps = 12;
     let mut queue = GenerationQueue::default();
 
-    let first_id = queue.enqueue("first text".to_string(), "loaded-model-a", &config);
+    let first_id = queue.enqueue("first text".to_string(), "loaded-model-a", &config, 1, HistoryStatus::Queued);
     config.selected_model_id = Some("selected-model-b".to_string());
     config.backend = BackendKind::Cpu;
     config.generation.cfg_value = 1.5;
-    let second_id = queue.enqueue("second text".to_string(), "loaded-model-b", &config);
+    let second_id = queue.enqueue("second text".to_string(), "loaded-model-b", &config, 2, HistoryStatus::Queued);
 
     let items = queue.items();
 
@@ -28,23 +28,42 @@ fn enqueue_captures_settings_and_preserves_order() {
     assert_eq!(items[0].id, first_id);
     assert_eq!(items[0].text, "first text");
     assert_eq!(items[0].status, HistoryStatus::Queued);
+    assert_eq!(items[0].created_at, 1);
     assert_eq!(items[0].snapshot.model_id, "loaded-model-a");
     assert_eq!(items[0].snapshot.backend, BackendKind::Cuda);
     assert_eq!(items[0].snapshot.generation.cfg_value, 3.25);
     assert_eq!(items[0].snapshot.generation.inference_timesteps, 12);
     assert_eq!(items[1].id, second_id);
     assert_eq!(items[1].text, "second text");
+    assert_eq!(items[1].created_at, 2);
     assert_eq!(items[1].snapshot.model_id, "loaded-model-b");
     assert_eq!(items[1].snapshot.backend, BackendKind::Cpu);
     assert_eq!(queue.next_queued_id(), Some(first_id.as_str()));
 }
 
 #[test]
+fn enqueue_with_dedupped_status_is_not_picked_up_by_next_queued() {
+    let config = configured_model("model-a");
+    let mut queue = GenerationQueue::default();
+
+    let dedupped_id = queue.enqueue("text".to_string(), "model-a", &config, 1, HistoryStatus::Dedupped);
+    let queued_id = queue.enqueue("text".to_string(), "model-a", &config, 2, HistoryStatus::Queued);
+
+    assert_eq!(queue.next_queued_id(), Some(queued_id.as_str()));
+
+    let items = queue.items();
+    assert_eq!(items[0].id, dedupped_id);
+    assert_eq!(items[0].status, HistoryStatus::Dedupped);
+    assert_eq!(items[1].id, queued_id);
+    assert_eq!(items[1].status, HistoryStatus::Queued);
+}
+
+#[test]
 fn cancel_queued_item_marks_it_canceled() {
     let config = configured_model("model-a");
     let mut queue = GenerationQueue::default();
-    let first_id = queue.enqueue("first text".to_string(), "model-a", &config);
-    let second_id = queue.enqueue("second text".to_string(), "model-a", &config);
+    let first_id = queue.enqueue("first text".to_string(), "model-a", &config, 1, HistoryStatus::Queued);
+    let second_id = queue.enqueue("second text".to_string(), "model-a", &config, 2, HistoryStatus::Queued);
 
     assert!(queue.cancel_queued(&first_id));
 
@@ -58,7 +77,7 @@ fn cancel_queued_item_marks_it_canceled() {
 fn regeneration_attempt_keeps_existing_audio_flag_until_success() {
     let mut config = configured_model("model-a");
     let mut queue = GenerationQueue::default();
-    let id = queue.enqueue("text".to_string(), "loaded-model-a", &config);
+    let id = queue.enqueue("text".to_string(), "loaded-model-a", &config, 1, HistoryStatus::Queued);
     queue.mark_ready(&id);
 
     config.selected_model_id = Some("selected-but-not-loaded-model-b".to_string());
@@ -82,7 +101,7 @@ fn regeneration_attempt_keeps_existing_audio_flag_until_success() {
 fn canceling_regeneration_with_existing_audio_returns_item_to_ready() {
     let config = configured_model("model-a");
     let mut queue = GenerationQueue::default();
-    let id = queue.enqueue("text".to_string(), "loaded-model-a", &config);
+    let id = queue.enqueue("text".to_string(), "loaded-model-a", &config, 1, HistoryStatus::Queued);
     queue.mark_ready(&id);
 
     assert!(queue.start_regeneration(&id, "loaded-model-a", &config));
@@ -98,8 +117,8 @@ fn canceling_regeneration_with_existing_audio_returns_item_to_ready() {
 fn playback_marks_ready_audio_as_playing_and_stops_it() {
     let config = configured_model("model-a");
     let mut queue = GenerationQueue::default();
-    let ready_id = queue.enqueue("ready text".to_string(), "model-a", &config);
-    let queued_id = queue.enqueue("queued text".to_string(), "model-a", &config);
+    let ready_id = queue.enqueue("ready text".to_string(), "model-a", &config, 1, HistoryStatus::Queued);
+    let queued_id = queue.enqueue("queued text".to_string(), "model-a", &config, 2, HistoryStatus::Queued);
 
     assert!(!queue.mark_playing(&ready_id));
 
