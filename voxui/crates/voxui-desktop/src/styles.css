@@ -266,6 +266,11 @@ body:has(.live-monitor-shell) {
   padding: 4px;
 }
 
+.custom-select-menu.open-up {
+  top: auto;
+  bottom: calc(100% + 3px);
+}
+
 .custom-select-option {
   display: block;
   width: 100%;
@@ -1703,8 +1708,8 @@ body:has(.live-monitor-shell) {
   grid-column: 1 / -1;
   margin-top: 8px;
   padding: 8px;
-  border-top: 1px solid var(--control-border);
-  background: var(--primary-hover);
+  border-top: 1px solid var(--panel-border);
+  background: var(--panel-bg);
   border-radius: 4px;
 }
 

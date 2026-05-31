@@ -1,4 +1,5 @@
 use leptos::prelude::*;
+use wasm_bindgen::JsCast;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SelectOption {
@@ -25,6 +26,7 @@ pub fn CustomSelect(
     #[prop(default = "")] class: &'static str,
 ) -> impl IntoView {
     let (open, set_open) = signal(false);
+    let (open_up, set_open_up) = signal(false);
     let (suppress_button_click, set_suppress_button_click) = signal(false);
     let (suppress_option_click, set_suppress_option_click) = signal(false);
     let (option_pointer_down, set_option_pointer_down) = signal(false);
@@ -72,17 +74,47 @@ pub fn CustomSelect(
                         set_option_pointer_down.set(false);
                         set_suppress_option_click.set(false);
                         set_suppress_button_click.set(true);
-                        set_open.update(|open| *open = !*open);
+                        let was_open = open.get();
+                        let will_open = !was_open;
+                        if will_open {
+                            if let Some(target) = event.current_target() {
+                                if let Ok(el) = target.dyn_into::<web_sys::HtmlElement>() {
+                                    let rect = el.get_bounding_client_rect();
+                                    let space_below = web_sys::window()
+                                        .and_then(|w| w.inner_height().ok())
+                                        .and_then(|h| h.as_f64())
+                                        .unwrap_or(0.0)
+                                        - rect.bottom();
+                                    set_open_up.set(space_below < 250.0);
+                                }
+                            }
+                        }
+                        set_open.set(will_open);
                     }
                 }
-                on:click=move |_| {
+                on:click=move |event| {
                     if suppress_button_click.get() {
                         set_suppress_button_click.set(false);
                         return;
                     }
                     if !click_disabled() {
                         set_suppress_option_click.set(false);
-                        set_open.update(|open| *open = !*open);
+                        let was_open = open.get();
+                        let will_open = !was_open;
+                        if will_open {
+                            if let Some(target) = event.current_target() {
+                                if let Ok(el) = target.dyn_into::<web_sys::HtmlElement>() {
+                                    let rect = el.get_bounding_client_rect();
+                                    let space_below = web_sys::window()
+                                        .and_then(|w| w.inner_height().ok())
+                                        .and_then(|h| h.as_f64())
+                                        .unwrap_or(0.0)
+                                        - rect.bottom();
+                                    set_open_up.set(space_below < 250.0);
+                                }
+                            }
+                        }
+                        set_open.set(will_open);
                     }
                 }
             >
@@ -92,6 +124,7 @@ pub fn CustomSelect(
             <div
                 class="custom-select-menu"
                 class:open=move || open.get() && !menu_disabled_class()
+                class:open-up=move || open_up.get()
                 hidden=move || !open.get() || menu_disabled_attr()
                 role="listbox"
                 aria-label=move || menu_aria_label()
