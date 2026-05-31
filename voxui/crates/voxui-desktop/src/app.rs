@@ -308,6 +308,8 @@ pub fn App() -> impl IntoView {
                 let load_disabled = selected_model_id.is_none()
                     || selected_model_id == loaded_model_id
                     || matches!(snapshot.load_state, LoadUiState::Loading);
+                let lora_disabled = loaded_model_id.is_none()
+                    || snapshot.available_loras.is_empty();
                 let volume = volume_preview.get();
                 view! {
                     <Header
@@ -315,6 +317,21 @@ pub fn App() -> impl IntoView {
                         models=snapshot.models
                         selected_model_id=snapshot.selected_model_id
                         load_disabled=load_disabled
+                        loras=snapshot.available_loras
+                        selected_lora_id=snapshot.selected_lora_id
+                        lora_disabled=lora_disabled
+                        on_lora_select=move |lora_id| {
+                            spawn_local(async move {
+                                if let Ok(next_snapshot) = crate::tauri_api::set_config_patch(ConfigPatch {
+                                    selected_lora_id: Some(lora_id),
+                                    ..ConfigPatch::default()
+                                })
+                                .await
+                                {
+                                    set_snapshot.set(Some(next_snapshot));
+                                }
+                            });
+                        }
                         volume=volume
                         on_model_select=move |model_id| {
                             spawn_local(async move {
