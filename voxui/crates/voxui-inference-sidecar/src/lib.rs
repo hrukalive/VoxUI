@@ -83,13 +83,11 @@ impl SidecarEngine {
             SidecarCommand::LoadModel {
                 load_id,
                 model_dir,
-                lora_path,
                 backend,
             } => {
                 tracing::info!(
                     load_id,
                     model_dir = %model_dir.display(),
-                    lora_path = lora_path.as_ref().map(|path| path.display().to_string()).as_deref().unwrap_or(""),
                     backend = ?backend,
                     "sidecar starting model load"
                 );
@@ -130,14 +128,7 @@ impl SidecarEngine {
                         let progress_error = progress_error.into_inner();
                         match (loaded, progress_error) {
                             (_, Some(error)) => Err(error),
-                            (Ok(mut engine), None) => {
-                                if let Some(path) = lora_path {
-                                    engine.load_lora(&path).with_context(|| {
-                                        format!("load LoRA adapter {}", path.display())
-                                    })?;
-                                }
-                                Ok(engine)
-                            }
+                            (Ok(engine), None) => Ok(engine),
                             (Err(error), None) => Err(error),
                         }
                     }

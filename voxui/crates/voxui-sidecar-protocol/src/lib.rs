@@ -13,7 +13,6 @@ pub enum SidecarCommand {
     LoadModel {
         load_id: u64,
         model_dir: PathBuf,
-        lora_path: Option<PathBuf>,
         backend: BackendKind,
     },
     CancelLoad {

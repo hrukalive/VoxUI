@@ -60,52 +60,6 @@ pub fn discover_models(root: &Path) -> Result<Vec<ModelChoice>> {
             model_bytes,
             lora_bytes: 0,
         });
-
-        let mut lora_paths = Vec::new();
-        for entry in fs::read_dir(&model_dir)
-            .with_context(|| format!("failed to read model directory {}", model_dir.display()))?
-        {
-            let entry = entry.with_context(|| {
-                format!(
-                    "failed to read entry in model directory {}",
-                    model_dir.display()
-                )
-            })?;
-            let path = entry.path();
-            let file_type = entry
-                .file_type()
-                .with_context(|| format!("failed to read file type for {}", path.display()))?;
-            if is_lora_candidate(&path, &file_type)? {
-                lora_paths.push(path);
-            }
-        }
-        lora_paths.sort();
-
-        for lora_path in lora_paths {
-            let lora_stem = lora_path
-                .file_stem()
-                .and_then(|stem| stem.to_str())
-                .with_context(|| {
-                    format!(
-                        "LoRA file stem is not UTF-8 or is missing: {}",
-                        lora_path.display()
-                    )
-                })?;
-            let lora_bytes = lora_path
-                .metadata()
-                .with_context(|| format!("failed to read metadata for {}", lora_path.display()))?
-                .len();
-
-            choices.push(ModelChoice {
-                id: choice_id(root, &model_dir, Some(&lora_path))?,
-                display_name: format!("{model_name} | {lora_stem}"),
-                model_dir: model_dir.clone(),
-                model_path: model_path.clone(),
-                lora_path: Some(lora_path),
-                model_bytes,
-                lora_bytes,
-            });
-        }
     }
 
     Ok(choices)

@@ -425,7 +425,6 @@ pub fn load_model(
     let command = SidecarCommand::LoadModel {
         load_id,
         model_dir: choice.model_dir.clone(),
-        lora_path: choice.lora_path.clone(),
         backend: protocol_backend(backend),
     };
     if let Err(error) = send_sidecar_command(window.app_handle(), shared, command) {
