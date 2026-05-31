@@ -61,6 +61,23 @@ pub fn discover_models(root: &Path) -> Result<Vec<ModelChoice>> {
             model_bytes,
             lora_bytes: 0,
         });
+
+        let loras = discover_loras(&model_dir)?;
+        for lora in loras {
+            let lora_path = model_dir.join(format!("{}.gguf", lora.id));
+            let lora_metadata = lora_path
+                .metadata()
+                .with_context(|| format!("failed to read metadata for {}", lora_path.display()))?;
+            choices.push(ModelChoice {
+                id: choice_id(root, &model_dir, Some(&lora_path))?,
+                display_name: format!("{} | {}", model_name, lora.display_name),
+                model_dir: model_dir.clone(),
+                model_path: model_path.clone(),
+                lora_path: Some(lora_path),
+                model_bytes,
+                lora_bytes: lora_metadata.len(),
+            });
+        }
     }
 
     Ok(choices)
