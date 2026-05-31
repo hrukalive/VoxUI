@@ -554,6 +554,12 @@ pub struct ModelChoice {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LoraEntry {
+    pub id: String,
+    pub display_name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AudioHostDto {
     pub name: String,
 }

@@ -4,6 +4,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 
+use crate::types::LoraEntry;
 use crate::types::ModelChoice;
 
 pub fn discover_models(root: &Path) -> Result<Vec<ModelChoice>> {
@@ -106,4 +107,46 @@ fn relative_slash_path(root: &Path, path: &Path) -> Result<String> {
         .map(|component| component.as_os_str().to_string_lossy())
         .collect::<Vec<_>>()
         .join("/"))
+}
+
+pub fn discover_loras(model_dir: &Path) -> Result<Vec<LoraEntry>> {
+    if !model_dir
+        .try_exists()
+        .with_context(|| format!("failed to inspect model directory {}", model_dir.display()))?
+    {
+        return Ok(Vec::new());
+    }
+
+    let mut entries = Vec::new();
+    for entry in fs::read_dir(model_dir)
+        .with_context(|| format!("failed to read model directory {}", model_dir.display()))?
+    {
+        let entry = entry.with_context(|| {
+            format!(
+                "failed to read entry in model directory {}",
+                model_dir.display()
+            )
+        })?;
+        let path = entry.path();
+        let file_type = entry
+            .file_type()
+            .with_context(|| format!("failed to read file type for {}", path.display()))?;
+        if is_lora_candidate(&path, &file_type)? {
+            let stem = path
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+                .with_context(|| {
+                    format!(
+                        "LoRA file stem is not UTF-8 or is missing: {}",
+                        path.display()
+                    )
+                })?;
+            entries.push(LoraEntry {
+                id: stem.to_owned(),
+                display_name: stem.to_owned(),
+            });
+        }
+    }
+    entries.sort_by(|a, b| a.id.cmp(&b.id));
+    Ok(entries)
 }
