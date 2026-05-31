@@ -71,6 +71,49 @@ impl Default for GenerationSettings {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TranslationPair {
+    #[serde(default = "default_translation_source")]
+    pub source_lang: String,
+    #[serde(default = "default_translation_target")]
+    pub target_lang: String,
+}
+
+fn default_translation_source() -> String {
+    "auto".to_string()
+}
+
+fn default_translation_target() -> String {
+    "EN".to_string()
+}
+
+impl Default for TranslationPair {
+    fn default() -> Self {
+        Self {
+            source_lang: default_translation_source(),
+            target_lang: default_translation_target(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TranslationSettings {
+    pub outbound: TranslationPair,
+    pub inbound: TranslationPair,
+    pub translate_enqueue: bool,
+}
+
+impl Default for TranslationSettings {
+    fn default() -> Self {
+        Self {
+            outbound: TranslationPair::default(),
+            inbound: TranslationPair::default(),
+            translate_enqueue: false,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LiveMessageKind {
@@ -262,6 +305,7 @@ pub struct LiveMonitorItemDto {
     pub uname: String,
     pub mapped_uname: String,
     pub suggestion: String,
+    pub raw_message: Option<String>,
     pub raw_json: serde_json::Value,
 }
 
@@ -336,6 +380,7 @@ pub struct AppConfig {
     pub max_input_chars: usize,
     pub auto_period: bool,
     pub generation: GenerationSettings,
+    pub translation: TranslationSettings,
     pub live: LiveConfig,
 }
 
@@ -353,6 +398,7 @@ impl Default for AppConfig {
             max_input_chars: 280,
             auto_period: true,
             generation: GenerationSettings::default(),
+            translation: TranslationSettings::default(),
             live: LiveConfig::default(),
         }
     }
@@ -436,6 +482,8 @@ pub struct ConfigPatch {
     pub auto_period: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub generation: Option<GenerationSettings>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub translation: Option<TranslationSettings>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

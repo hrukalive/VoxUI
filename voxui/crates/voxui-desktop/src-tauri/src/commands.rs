@@ -26,7 +26,7 @@ pub type SharedAppCore = Arc<Mutex<AppCore>>;
 
 static SIDECAR_PROCESS: OnceLock<Mutex<Option<SidecarProcess>>> = OnceLock::new();
 static LIVE_WORKER: OnceLock<Mutex<Option<LiveWorkerHandle>>> = OnceLock::new();
-static STREAMING_PLAYERS: OnceLock<Mutex<HashMap<String, mpsc::Sender<StreamingPlaybackCommand>>>> =
+static STREAMING_PLAYERS: OnceLock<Mutex<HashMap<String, StreamingPlaybackControl>>> =
     OnceLock::new();
 const LIVE_WORKER_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(3);
 
@@ -62,6 +62,11 @@ enum StreamingPlaybackCommand {
     Stop,
 }
 
+struct StreamingPlaybackControl {
+    sender: mpsc::Sender<StreamingPlaybackCommand>,
+    volume: VolumeHandle,
+}
+
 pub(crate) fn with_core<T>(
     state: State<'_, SharedAppCore>,
     f: impl FnOnce(&mut AppCore) -> anyhow::Result<T>,
@@ -83,14 +88,25 @@ pub fn set_config_patch(
     state: State<'_, SharedAppCore>,
     patch: ConfigPatch,
 ) -> Result<AppSnapshot, String> {
+    let updates_volume = patch.volume.is_some();
     let (snapshot, live_snapshot) = with_core(state, |core| {
         let snapshot = core.apply_patch(patch)?;
         let live_snapshot = core.live_snapshot_for_current_language();
         Ok((snapshot, live_snapshot))
     })?;
+    if updates_volume {
+        set_streaming_playback_volume(snapshot.config.volume);
+    }
     let _ = app.emit("app_config_changed", snapshot.clone());
     emit_live_snapshot(&app, "live_items_changed", &live_snapshot);
     Ok(snapshot)
+}
+
+#[tauri::command]
+pub fn set_runtime_volume(state: State<'_, SharedAppCore>, volume: f32) -> Result<f32, String> {
+    let volume = with_core(state, |core| Ok(core.set_runtime_volume(volume)))?;
+    set_streaming_playback_volume(volume);
+    Ok(volume)
 }
 
 #[tauri::command]
@@ -537,6 +553,121 @@ pub fn stop_audio(
         )
         .map_err(|error| error.to_string())?;
     Ok(CommandResult { ok: true })
+}
+
+use wreq::Client;
+
+const ONESHOT_FREE_ENDPOINT: &str = "https://oneshot-free.www.deepl.com/v1/translate";
+const EXTENSION_ID: &str = "cofdbpoegempjloogbagkncekinflcnj";
+const MAX_FREE_TEXT_LENGTH: usize = 1500;
+
+fn get_translation_client() -> &'static Client {
+    static CLIENT: OnceLock<Client> = OnceLock::new();
+    CLIENT.get_or_init(|| {
+        Client::builder()
+            .emulation(wreq_util::Emulation::Chrome120)
+            .timeout(Duration::from_secs(20))
+            .build()
+            .expect("Failed to build wreq client")
+    })
+}
+
+fn map_lang_code(code: &str, is_source: bool) -> String {
+    if is_source && code == "auto" {
+        return String::new();
+    }
+    match code {
+        "ZH" => "zh-Hans".to_string(),
+        "ZH-HANT" => "zh-Hant".to_string(),
+        "EN" => "en-US".to_string(),
+        _ => code.to_lowercase(),
+    }
+}
+
+static COOKIE_WARMED: std::sync::Once = std::sync::Once::new();
+
+#[tauri::command]
+pub async fn translate_text(
+    text: String,
+    source_lang: String,
+    target_lang: String,
+) -> Result<String, String> {
+    if text.trim().is_empty() {
+        return Err("No text to translate".to_string());
+    }
+    if text.chars().count() > MAX_FREE_TEXT_LENGTH {
+        return Err(format!(
+            "Text too long (max {} characters)",
+            MAX_FREE_TEXT_LENGTH
+        ));
+    }
+
+    let client = get_translation_client();
+
+    COOKIE_WARMED.call_once(|| {
+        let client = client.clone();
+        tauri::async_runtime::spawn(async move {
+            let _ = client
+                .get("https://www.deepl.com/translator")
+                .timeout(Duration::from_secs(5))
+                .send()
+                .await;
+        });
+    });
+
+    let api_source = map_lang_code(&source_lang, true);
+    let api_target = map_lang_code(&target_lang, false);
+
+    let body = serde_json::json!({
+        "text": [text],
+        "target_lang": api_target,
+        "source_lang": api_source,
+        "usage_type": "Translate",
+        "app_information": {
+            "os": "brex_macOS",
+            "os_version": "brex_chrome_120.0.0.0",
+            "app_version": "1.86.0",
+            "app_build": "chrome_web_store",
+            "instance_id": uuid::Uuid::new_v4().to_string(),
+        },
+    });
+
+    let response = client
+        .post(ONESHOT_FREE_ENDPOINT)
+        .header("Content-Type", "application/json")
+        .header("Accept", "*/*")
+        .header("Authorization", "None")
+        .header("Origin", format!("chrome-extension://{EXTENSION_ID}"))
+        .header("Sec-Fetch-Site", "cross-site")
+        .header("Sec-Fetch-Mode", "cors")
+        .header("Sec-Fetch-Dest", "empty")
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("Translation request failed: {e}"))?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let msg = match status.as_u16() {
+            429 => "Translation service rate-limited. Please wait and try again.",
+            400 => "Invalid language code or request.",
+            404 => "No text provided.",
+            _ => return Err(format!("Translation service returned status {status}")),
+        };
+        return Err(msg.to_string());
+    }
+
+    let json: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse response: {e}"))?;
+
+    let translated = json["translations"][0]["text"]
+        .as_str()
+        .ok_or_else(|| "Unexpected translation response format".to_string())?
+        .to_string();
+
+    Ok(translated)
 }
 
 fn kick_generation_queue(app: &AppHandle, shared: SharedAppCore) {
@@ -1184,7 +1315,7 @@ fn synthesis_request_dto(request: voxui_inference::SynthesisRequest) -> Synthesi
     }
 }
 
-fn streaming_players() -> &'static Mutex<HashMap<String, mpsc::Sender<StreamingPlaybackCommand>>> {
+fn streaming_players() -> &'static Mutex<HashMap<String, StreamingPlaybackControl>> {
     STREAMING_PLAYERS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
@@ -1213,8 +1344,8 @@ fn handle_streaming_audio_chunk(
     };
     if !players.contains_key(&item_id) {
         match start_streaming_playback_worker(app.clone(), shared, item_id.clone(), sample_rate) {
-            Ok(sender) => {
-                players.insert(item_id.clone(), sender);
+            Ok(control) => {
+                players.insert(item_id.clone(), control);
                 let _ = app.emit(
                     "playback_state",
                     PlaybackStateEvent {
@@ -1230,8 +1361,8 @@ fn handle_streaming_audio_chunk(
         }
     }
 
-    if let Some(sender) = players.get(&item_id) {
-        if let Err(error) = sender.send(StreamingPlaybackCommand::Push(samples)) {
+    if let Some(control) = players.get(&item_id) {
+        if let Err(error) = control.sender.send(StreamingPlaybackCommand::Push(samples)) {
             tracing::warn!("failed to push streaming audio for {item_id}: {error}");
         }
     }
@@ -1242,16 +1373,18 @@ fn start_streaming_playback_worker(
     shared: SharedAppCore,
     item_id: String,
     sample_rate: u32,
-) -> Result<mpsc::Sender<StreamingPlaybackCommand>, String> {
+) -> Result<StreamingPlaybackControl, String> {
     let config = shared
         .lock()
         .map_err(|_| "app state lock poisoned".to_string())?
         .snapshot()
         .config;
     let (sender, receiver) = mpsc::channel();
+    let volume = VolumeHandle::new(config.volume);
+    let worker_volume = volume.clone();
     let worker_item_id = item_id.clone();
     spawn_background("voxui-streaming-playback", move || {
-        let state = run_streaming_playback_worker(config, sample_rate, receiver);
+        let state = run_streaming_playback_worker(config, sample_rate, worker_volume, receiver);
         let _ = app.emit(
             "playback_state",
             PlaybackStateEvent {
@@ -1260,15 +1393,16 @@ fn start_streaming_playback_worker(
             },
         );
     })?;
-    Ok(sender)
+    Ok(StreamingPlaybackControl { sender, volume })
 }
 
 fn run_streaming_playback_worker(
     config: crate::types::AppConfig,
     sample_rate: u32,
+    volume: VolumeHandle,
     receiver: mpsc::Receiver<StreamingPlaybackCommand>,
 ) -> String {
-    let mut player = match create_streaming_player(config, sample_rate) {
+    let mut player = match create_streaming_player(config, sample_rate, volume) {
         Ok(player) => player,
         Err(error) => return format!("error:{error}"),
     };
@@ -1300,6 +1434,7 @@ fn run_streaming_playback_worker(
 fn create_streaming_player(
     config: crate::types::AppConfig,
     sample_rate: u32,
+    volume: VolumeHandle,
 ) -> Result<StreamingPlayer, String> {
     let system = AudioSystem::new();
     let host = config
@@ -1313,25 +1448,27 @@ fn create_streaming_player(
         system.default_device_name(&host),
     )
     .map_err(|error| error.to_string())?;
-    StreamingPlayer::new(
-        &host,
-        &device,
-        sample_rate,
-        0.25,
-        VolumeHandle::new(config.volume),
-    )
-    .map_err(|error| error.to_string())
+    StreamingPlayer::new(&host, &device, sample_rate, 0.25, volume)
+        .map_err(|error| error.to_string())
+}
+
+fn set_streaming_playback_volume(volume: f32) {
+    if let Ok(players) = streaming_players().lock() {
+        for control in players.values() {
+            control.volume.set(volume);
+        }
+    }
 }
 
 fn finish_streaming_playback(app: &AppHandle, item_id: String) -> bool {
-    let sender = match streaming_players().lock() {
+    let control = match streaming_players().lock() {
         Ok(mut players) => players.remove(&item_id),
         Err(_) => None,
     };
-    let Some(sender) = sender else {
+    let Some(control) = control else {
         return false;
     };
-    if let Err(error) = sender.send(StreamingPlaybackCommand::Finish) {
+    if let Err(error) = control.sender.send(StreamingPlaybackCommand::Finish) {
         tracing::warn!("failed to finish streaming playback for {item_id}: {error}");
         let _ = app.emit(
             "playback_state",
@@ -1345,12 +1482,12 @@ fn finish_streaming_playback(app: &AppHandle, item_id: String) -> bool {
 }
 
 fn stop_streaming_playback(item_id: &str) {
-    let sender = match streaming_players().lock() {
+    let control = match streaming_players().lock() {
         Ok(mut players) => players.remove(item_id),
         Err(_) => None,
     };
-    if let Some(sender) = sender {
-        let _ = sender.send(StreamingPlaybackCommand::Stop);
+    if let Some(control) = control {
+        let _ = control.sender.send(StreamingPlaybackCommand::Stop);
     }
 }
 
@@ -1570,6 +1707,28 @@ mod tests {
         assert!(
             implementation.contains("emit_live_snapshot(&app, \"live_items_changed\", &live_snapshot"),
             "set_config_patch should refresh live snapshots because language and auto-period can change rendered live rows"
+        );
+    }
+
+    #[test]
+    fn streaming_playback_stores_updateable_volume_handles() {
+        let source = include_str!("commands.rs").replace("\r\n", "\n");
+        let implementation = source
+            .split("#[cfg(test)]\nmod tests")
+            .next()
+            .expect("commands implementation source");
+
+        assert!(
+            implementation.contains("struct StreamingPlaybackControl"),
+            "streaming playback map should store both command sender and shared volume handle"
+        );
+        assert!(
+            implementation.contains("fn set_streaming_playback_volume"),
+            "runtime and persisted volume changes should update active streaming players"
+        );
+        assert!(
+            implementation.contains("volume.set(volume)"),
+            "streaming volume updates should use the shared VolumeHandle"
         );
     }
 }

@@ -1,4 +1,5 @@
 use leptos::prelude::*;
+use wasm_bindgen::JsCast;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SelectOption {
@@ -17,7 +18,7 @@ impl SelectOption {
 
 #[component]
 pub fn CustomSelect(
-    aria_label: &'static str,
+    aria_label: impl Fn() -> &'static str + Send + Sync + Clone + 'static,
     value: impl Fn() -> String + Send + Sync + Clone + 'static,
     options: impl Fn() -> Vec<SelectOption> + Send + Sync + Clone + 'static,
     disabled: impl Fn() -> bool + Send + Sync + Clone + 'static,
@@ -25,6 +26,7 @@ pub fn CustomSelect(
     #[prop(default = "")] class: &'static str,
 ) -> impl IntoView {
     let (open, set_open) = signal(false);
+    let (open_up, set_open_up) = signal(false);
     let (suppress_button_click, set_suppress_button_click) = signal(false);
     let (suppress_option_click, set_suppress_option_click) = signal(false);
     let (option_pointer_down, set_option_pointer_down) = signal(false);
@@ -52,6 +54,8 @@ pub fn CustomSelect(
     let menu_options = options.clone();
     let menu_value = value.clone();
     let menu_on_change = on_change.clone();
+    let button_aria_label = aria_label.clone();
+    let menu_aria_label = aria_label.clone();
 
     view! {
         <div class=class_name on:focusout=move |_| {
@@ -62,7 +66,7 @@ pub fn CustomSelect(
             <button
                 class="custom-select-button"
                 type="button"
-                aria-label=aria_label
+                aria-label=move || button_aria_label()
                 aria-expanded=move || open.get().to_string()
                 disabled=move || button_disabled()
                 on:mousedown=move |event| {
@@ -70,17 +74,47 @@ pub fn CustomSelect(
                         set_option_pointer_down.set(false);
                         set_suppress_option_click.set(false);
                         set_suppress_button_click.set(true);
-                        set_open.update(|open| *open = !*open);
+                        let was_open = open.get();
+                        let will_open = !was_open;
+                        if will_open {
+                            if let Some(target) = event.current_target() {
+                                if let Ok(el) = target.dyn_into::<web_sys::HtmlElement>() {
+                                    let rect = el.get_bounding_client_rect();
+                                    let space_below = web_sys::window()
+                                        .and_then(|w| w.inner_height().ok())
+                                        .and_then(|h| h.as_f64())
+                                        .unwrap_or(0.0)
+                                        - rect.bottom();
+                                    set_open_up.set(space_below < 250.0);
+                                }
+                            }
+                        }
+                        set_open.set(will_open);
                     }
                 }
-                on:click=move |_| {
+                on:click=move |event| {
                     if suppress_button_click.get() {
                         set_suppress_button_click.set(false);
                         return;
                     }
                     if !click_disabled() {
                         set_suppress_option_click.set(false);
-                        set_open.update(|open| *open = !*open);
+                        let was_open = open.get();
+                        let will_open = !was_open;
+                        if will_open {
+                            if let Some(target) = event.current_target() {
+                                if let Ok(el) = target.dyn_into::<web_sys::HtmlElement>() {
+                                    let rect = el.get_bounding_client_rect();
+                                    let space_below = web_sys::window()
+                                        .and_then(|w| w.inner_height().ok())
+                                        .and_then(|h| h.as_f64())
+                                        .unwrap_or(0.0)
+                                        - rect.bottom();
+                                    set_open_up.set(space_below < 250.0);
+                                }
+                            }
+                        }
+                        set_open.set(will_open);
                     }
                 }
             >
@@ -90,9 +124,10 @@ pub fn CustomSelect(
             <div
                 class="custom-select-menu"
                 class:open=move || open.get() && !menu_disabled_class()
+                class:open-up=move || open_up.get()
                 hidden=move || !open.get() || menu_disabled_attr()
                 role="listbox"
-                aria-label=aria_label
+                aria-label=move || menu_aria_label()
             >
                 {move || {
                     let current_value = menu_value();
@@ -148,7 +183,7 @@ pub fn CustomSelect(
 
 #[component]
 pub fn NumberCounter(
-    aria_label: &'static str,
+    aria_label: impl Fn() -> &'static str + Send + Sync + Clone + 'static,
     value: impl Fn() -> String + Send + Sync + Clone + 'static,
     disabled: impl Fn() -> bool + Send + Sync + Clone + 'static,
     on_change: impl Fn(String) + Send + Sync + Clone + 'static,
@@ -167,13 +202,14 @@ pub fn NumberCounter(
     let increment_on_change = on_change.clone();
     let decrement_value = value.clone();
     let decrement_on_change = on_change.clone();
+    let input_aria_label = aria_label.clone();
 
     view! {
         <div class="number-counter" class:disabled=move || container_disabled()>
             <input
                 type="text"
                 inputmode="decimal"
-                aria-label=aria_label
+                aria-label=move || input_aria_label()
                 disabled=move || input_disabled()
                 prop:value=input_value
                 on:change=move |event| input_on_change(event_target_value(&event))
@@ -234,4 +270,68 @@ fn format_number(value: f64, precision: usize) -> String {
             .trim_end_matches('.')
             .to_string()
     }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn aria_labels_are_reactive_functions() {
+        let source = include_str!("controls.rs").replace("\r\n", "\n");
+
+        assert!(
+            source.contains("aria_label: impl Fn() -> &'static str"),
+            "shared controls should accept aria-label closures so callers do not evaluate signal-backed labels during component construction"
+        );
+        assert!(
+            source.contains("aria-label=move || button_aria_label()"),
+            "CustomSelect button aria-label should be read from a reactive closure"
+        );
+        assert!(
+            source.contains("aria-label=move || menu_aria_label()"),
+            "CustomSelect menu aria-label should be read from a reactive closure"
+        );
+        assert!(
+            source.contains("aria-label=move || input_aria_label()"),
+            "NumberCounter input aria-label should be read from a reactive closure"
+        );
+    }
+}
+
+pub fn translation_lang_options(
+    include_auto: bool,
+    labels: &crate::i18n::Labels,
+) -> Vec<SelectOption> {
+    let mut options = Vec::new();
+
+    if include_auto {
+        options.push(SelectOption::new("auto", labels.auto_detect));
+    }
+
+    options.push(SelectOption::new("ZH", "中文"));
+    options.push(SelectOption::new("EN", "English"));
+    options.push(SelectOption::new("JA", "日本語"));
+
+    let rest: &[(&str, &str)] = &[
+        ("KO", "한국어"),
+        ("DE", "Deutsch"),
+        ("FR", "Français"),
+        ("RU", "Русский"),
+        ("ES", "Español"),
+        ("VI", "Tiếng Việt"),
+        ("IT", "Italiano"),
+        ("EL", "Ελληνικά"),
+        ("ID", "Bahasa Indonesia"),
+        ("PL", "Polski"),
+        ("PT-BR", "Português (Brasil)"),
+        ("RO", "Română"),
+        ("TR", "Türkçe"),
+        ("AR", "العربية"),
+        ("CS", "Čeština"),
+    ];
+
+    for (code, label) in rest {
+        options.push(SelectOption::new(*code, *label));
+    }
+
+    options
 }

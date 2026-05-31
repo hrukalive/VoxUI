@@ -63,7 +63,21 @@ pub struct AppConfig {
     pub max_input_chars: usize,
     pub auto_period: bool,
     pub generation: GenerationSettings,
+    pub translation: TranslationSettings,
     pub live: LiveConfig,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TranslationPair {
+    pub source_lang: String,
+    pub target_lang: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TranslationSettings {
+    pub outbound: TranslationPair,
+    pub inbound: TranslationPair,
+    pub translate_enqueue: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -369,6 +383,7 @@ pub struct LiveMonitorItem {
     pub uname: String,
     pub mapped_uname: String,
     pub suggestion: String,
+    pub raw_message: Option<String>,
     pub raw_json: serde_json::Value,
 }
 
@@ -409,6 +424,8 @@ pub struct ConfigPatch {
     pub auto_period: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub generation: Option<GenerationSettings>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub translation: Option<TranslationSettings>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -540,6 +557,16 @@ pub async fn set_config_patch(patch: ConfigPatch) -> Result<AppSnapshot, String>
     serde_wasm_bindgen::from_value(value).map_err(|err| err.to_string())
 }
 
+pub async fn set_runtime_volume(volume: f32) -> Result<f32, String> {
+    let args = serde_wasm_bindgen::to_value(&serde_json::json!({ "volume": volume }))
+        .map_err(|err| err.to_string())?;
+    let value = invoke("set_runtime_volume", args)
+        .await
+        .map_err(stringify_js_error)?;
+
+    serde_wasm_bindgen::from_value(value).map_err(|err| err.to_string())
+}
+
 pub async fn get_live_state() -> Result<LiveSnapshot, String> {
     let value = invoke("get_live_state", JsValue::NULL)
         .await
@@ -636,6 +663,23 @@ pub async fn enqueue_generation(text: String) -> Result<HistoryItem, String> {
         .await
         .map_err(stringify_js_error)?;
 
+    serde_wasm_bindgen::from_value(value).map_err(|err| err.to_string())
+}
+
+pub async fn translate_text(
+    text: String,
+    source_lang: String,
+    target_lang: String,
+) -> Result<String, String> {
+    let args = serde_wasm_bindgen::to_value(&serde_json::json!({
+        "text": text,
+        "sourceLang": source_lang,
+        "targetLang": target_lang,
+    }))
+    .map_err(|err| err.to_string())?;
+    let value = invoke("translate_text", args)
+        .await
+        .map_err(stringify_js_error)?;
     serde_wasm_bindgen::from_value(value).map_err(|err| err.to_string())
 }
 

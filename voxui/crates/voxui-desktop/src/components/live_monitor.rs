@@ -1,15 +1,16 @@
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use leptos::html::Div;
 use leptos::prelude::*;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
+use wasm_bindgen_futures::spawn_local;
 
-use crate::components::controls::{CustomSelect, SelectOption};
+use crate::components::controls::{translation_lang_options, CustomSelect, SelectOption};
 use crate::i18n::Labels;
 use crate::tauri_api::{
     AutoGenMode, LiveConfig, LiveConfigPatch, LiveMessageKind, LiveMonitorItem, LiveSnapshot,
-    LiveStatus, SendMode,
+    LiveStatus, SendMode, TranslationSettings,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -26,6 +27,8 @@ pub fn LiveMonitor(
     on_live_patch: impl Fn(LiveConfigPatch) + Send + Sync + 'static + Copy,
     on_send: impl Fn(String, bool, bool) + Send + Sync + 'static + Copy,
     on_clear: impl Fn() + Send + Sync + 'static + Copy,
+    translation_config: impl Fn() -> TranslationSettings + Send + Sync + 'static + Copy,
+    on_translation_patch: impl Fn(TranslationSettings) + Send + Sync + 'static + Copy,
 ) -> impl IntoView {
     let feed_ref = NodeRef::<Div>::new();
     let (was_near_bottom, set_was_near_bottom) = signal(true);
@@ -35,6 +38,9 @@ pub fn LiveMonitor(
     let (status_notice_generation, set_status_notice_generation) = signal(0_u64);
     let (last_status_key, set_last_status_key) = signal(None::<(LiveStatus, Option<String>)>);
     let (mapped_uname_draft, set_mapped_uname_draft) = signal(None::<MappedUnameDraft>);
+    let (expanded_translations, set_expanded_translations) = signal(HashSet::<String>::new());
+    let (translation_results, set_translation_results) =
+        signal(HashMap::<String, (String, bool)>::new());
 
     let open_mapped_uname_modal = move |item: LiveMonitorItem| {
         let initial_value = mapped_uname_initial_value(
@@ -138,7 +144,7 @@ pub fn LiveMonitor(
                 <div class="live-monitor-header-actions">
                     <CustomSelect
                         class="live-send-mode-select"
-                        aria_label=labels().send_mode
+                        aria_label=move || labels().send_mode
                         value=move || snapshot().config.send_mode.value().to_string()
                         options=move || live_send_mode_options(labels())
                         disabled=move || false
@@ -151,7 +157,7 @@ pub fn LiveMonitor(
                     />
                     <CustomSelect
                         class="live-auto-gen-mode-select"
-                        aria_label=labels().auto_gen_mode
+                        aria_label=move || labels().auto_gen_mode
                         value=move || snapshot().config.auto_gen_mode.value().to_string()
                         options=move || live_auto_gen_mode_options(labels())
                         disabled=move || false
@@ -193,7 +199,7 @@ pub fn LiveMonitor(
             >
                 <For
                     each=move || snapshot().items
-                    key=live_item_render_key
+                    key=move |item: &LiveMonitorItem| live_item_render_key(item, labels())
                     children=move |item| {
                         let labels = labels();
                         let kind = item.kind;
@@ -249,10 +255,11 @@ pub fn LiveMonitor(
                                         }
                                     >
                                         <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                                            <polyline points="17 1 21 5 17 9"></polyline>
-                                            <path d="M3 11V9a4 4 0 0 1 4-4h14"></path>
-                                            <polyline points="7 23 3 19 7 15"></polyline>
-                                            <path d="M21 13v2a4 4 0 0 1-4 4H3"></path>
+                                            <polyline points="16 3 21 3 21 8"></polyline>
+                                            <line x1="4" y1="20" x2="21" y2="3"></line>
+                                            <polyline points="21 16 21 21 16 21"></polyline>
+                                            <line x1="15" y1="15" x2="21" y2="21"></line>
+                                            <line x1="4" y1="4" x2="9" y2="9"></line>
                                         </svg>
                                     </button>
                             }
@@ -269,6 +276,42 @@ pub fn LiveMonitor(
                                     <p>{suggestion}</p>
                                 </div>
                                 <div class="live-item-actions">
+                                    {
+                                        let supports_translation = matches!(kind, LiveMessageKind::Danmu | LiveMessageKind::Superchat);
+                                        let has_raw_message = item.raw_message.is_some();
+                                        if supports_translation && has_raw_message {
+                                            let translate_item_id = item.id.clone();
+                                            let tid_for_toggle = item.id.clone();
+                                            view! {
+                                                <button
+                                                    class="live-monitor-button"
+                                                    class:active=move || expanded_translations.get().contains(&translate_item_id)
+                                                    type="button"
+                                                    title=labels.translate
+                                                    aria-label=labels.translate
+                                                    on:click=move |_| {
+                                                        let id = tid_for_toggle.clone();
+                                                        set_expanded_translations.update(|set| {
+                                                            if set.contains(&id) {
+                                                                set.remove(&id);
+                                                            } else {
+                                                                set.insert(id);
+                                                            }
+                                                        });
+                                                    }
+                                                >
+                                                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                                        <circle cx="12" cy="12" r="10"></circle>
+                                                        <path d="M2 12h20"></path>
+                                                        <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10"></path>
+                                                        <path d="M12 2a15.3 15.3 0 0 0-4 10 15.3 15.3 0 0 0 4 10"></path>
+                                                    </svg>
+                                                </button>
+                                            }.into_any()
+                                        } else {
+                                            ().into_any()
+                                        }
+                                    }
                                     {mapped_uname_button}
                                     <div
                                         class="live-send-actions"
@@ -305,6 +348,91 @@ pub fn LiveMonitor(
                                         {switch_button}
                                     </div>
                                 </div>
+                                {
+                                    let supports_translation = matches!(kind, LiveMessageKind::Danmu | LiveMessageKind::Superchat);
+                                    let has_raw_message = item.raw_message.is_some();
+                                    if supports_translation && has_raw_message {
+                                        let trans_config = translation_config.clone();
+                                        let trans_patch = on_translation_patch.clone();
+                                        let tid_show = item.id.clone();
+                                        let tid_result = item.id.clone();
+                                        let tid_click = item.id.clone();
+                                        let msg_click = item.raw_message.clone().unwrap_or_default();
+                                        view! {
+                                            <div class="live-translation-panel" class:hidden=move || !expanded_translations.get().contains(&tid_show)>
+                                                <div class="live-translation-controls">
+                                                <CustomSelect
+                                                    class="live-translation-source-select"
+                                                    aria_label=move || labels.source_language
+                                                    value=move || trans_config().inbound.source_lang.clone()
+                                                    options=move || translation_lang_options(true, &labels)
+                                                    disabled=move || false
+                                                    on_change=move |value| {
+                                                        let mut cfg = trans_config();
+                                                        cfg.inbound.source_lang = value;
+                                                        trans_patch(cfg);
+                                                    }
+                                                />
+                                                <CustomSelect
+                                                    class="live-translation-target-select"
+                                                    aria_label=move || labels.target_language
+                                                    value=move || trans_config().inbound.target_lang.clone()
+                                                    options=move || translation_lang_options(false, &labels)
+                                                    disabled=move || false
+                                                    on_change=move |value| {
+                                                        let mut cfg = trans_config();
+                                                        cfg.inbound.target_lang = value;
+                                                        trans_patch(cfg);
+                                                    }
+                                                />
+                                                <button
+                                                    class="primary-button"
+                                                    type="button"
+                                                    on:click=move |_| {
+                                                        let item_id = tid_click.clone();
+                                                        let msg = msg_click.clone();
+                                                        let source = trans_config().inbound.source_lang.clone();
+                                                        let target = trans_config().inbound.target_lang.clone();
+                                                        let fail_text = labels.translation_failed.to_string();
+                                                        set_translation_results.update(|results| {
+                                                            results.insert(item_id.clone(), (String::new(), true));
+                                                        });
+                                                        spawn_local(async move {
+                                                            match crate::tauri_api::translate_text(msg, source, target).await {
+                                                                Ok(translated) => {
+                                                                    set_translation_results.update(|results| {
+                                                                        results.insert(item_id, (translated, false));
+                                                                    });
+                                                                }
+                                                                Err(_) => {
+                                                                    set_translation_results.update(|results| {
+                                                                        results.insert(item_id, (fail_text, false));
+                                                                    });
+                                                                }
+                                                            }
+                                                        });
+                                                    }
+                                                >
+                                                    {labels.translate}
+                                                </button>
+                                                </div>
+                                                {move || {
+                                                    translation_results.get()
+                                                        .get(&tid_result)
+                                                        .map(|(result, loading)| {
+                                                            if *loading {
+                                                                view! { <p class="live-translation-loading">{labels.translating}</p> }.into_any()
+                                                            } else {
+                                                                view! { <p class="live-translation-result">{result.clone()}</p> }.into_any()
+                                                            }
+                                                        })
+                                                }}
+                                            </div>
+                                        }.into_any()
+                                    } else {
+                                        ().into_any()
+                                    }
+                                }
                             </article>
                         }
                     }
@@ -436,10 +564,10 @@ fn live_auto_gen_mode_options(labels: Labels) -> Vec<SelectOption> {
     .collect()
 }
 
-fn live_item_render_key(item: &LiveMonitorItem) -> String {
+fn live_item_render_key(item: &LiveMonitorItem, labels: Labels) -> String {
     format!(
-        "{}\x1f{}\x1f{}",
-        item.id, item.mapped_uname, item.suggestion
+        "{}\x1f{}\x1f{}\x1f{:?}",
+        item.id, item.mapped_uname, item.suggestion, labels.language
     )
 }
 
@@ -628,6 +756,7 @@ mod tests {
 
     #[test]
     fn live_item_render_key_changes_with_rendered_text() {
+        let labels = crate::i18n::labels(crate::i18n::UiLanguage::English);
         let mut item = LiveMonitorItem {
             id: "1".to_string(),
             kind: LiveMessageKind::Gift,
@@ -637,15 +766,16 @@ mod tests {
             mapped_uname: "Alice".to_string(),
             suggestion: "old template".to_string(),
             raw_json: serde_json::Value::Null,
+            raw_message: None,
         };
-        let first_key = live_item_render_key(&item);
+        let first_key = live_item_render_key(&item, labels);
 
         item.suggestion = "new template".to_string();
-        assert_ne!(first_key, live_item_render_key(&item));
+        assert_ne!(first_key, live_item_render_key(&item, labels));
 
-        let second_key = live_item_render_key(&item);
+        let second_key = live_item_render_key(&item, labels);
         item.mapped_uname = "A-chan".to_string();
-        assert_ne!(second_key, live_item_render_key(&item));
+        assert_ne!(second_key, live_item_render_key(&item, labels));
     }
 
     #[test]

@@ -1,0 +1,5 @@
+1. Unify all modal dialog style
+2. Translate input box text and messages
+3. Debounce with time range and edit distance
+4. LoRA as a plugable module.
+5. Input suggestion

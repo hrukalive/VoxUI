@@ -166,6 +166,9 @@ impl AppCore {
 
         if let Some(language) = patch.language {
             self.config.language = language;
+            self.config.translation.outbound.source_lang = lang_to_code(language);
+            self.config.translation.inbound.target_lang = lang_to_code(language);
+            self.config.translation.outbound.target_lang = opposite_lang_code(language);
         }
         if let Some(theme) = patch.theme {
             self.config.theme = theme;
@@ -186,10 +189,7 @@ impl AppCore {
             self.config.audio_device = empty_string_as_none(audio_device);
         }
         if let Some(volume) = patch.volume {
-            self.config.volume = volume.clamp(0.0, 1.0);
-            if let Some(active_playback) = self.active_playback.as_ref() {
-                active_playback.volume.set(self.config.volume);
-            }
+            self.set_runtime_volume(volume);
         }
         if let Some(max_input_chars) = patch.max_input_chars {
             self.config.max_input_chars = max_input_chars.max(1);
@@ -200,6 +200,9 @@ impl AppCore {
         if let Some(mut generation) = patch.generation {
             normalize_generation_settings(&mut generation);
             self.config.generation = generation;
+        }
+        if let Some(translation) = patch.translation {
+            self.config.translation = translation;
         }
 
         self.persist_config()?;
@@ -496,6 +499,14 @@ impl AppCore {
             volume,
             stop: stop_receiver,
         })
+    }
+
+    pub fn set_runtime_volume(&mut self, volume: f32) -> f32 {
+        self.config.volume = volume.clamp(0.0, 1.0);
+        if let Some(active_playback) = self.active_playback.as_ref() {
+            active_playback.volume.set(self.config.volume);
+        }
+        self.config.volume
     }
 
     pub fn begin_or_queue_auto_playback(&mut self, item_id: &str) -> Result<Option<PlaybackRun>> {
@@ -1155,6 +1166,22 @@ fn normalize_backend_for_sidecar(
     }
 }
 
+fn lang_to_code(language: LanguageMode) -> String {
+    match language {
+        LanguageMode::Chinese => "ZH".to_string(),
+        LanguageMode::English => "EN".to_string(),
+        LanguageMode::System => "ZH".to_string(),
+    }
+}
+
+fn opposite_lang_code(language: LanguageMode) -> String {
+    match language {
+        LanguageMode::Chinese => "EN".to_string(),
+        LanguageMode::English => "ZH".to_string(),
+        LanguageMode::System => "EN".to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -1211,6 +1238,7 @@ mod tests {
                     cfg_value: 3.0,
                     ..GenerationSettings::default()
                 }),
+                translation: None,
             })
             .unwrap();
 
@@ -1364,6 +1392,7 @@ mod tests {
                 volume: Some(-0.5),
                 max_input_chars: None,
                 generation: None,
+                translation: None,
             })
             .unwrap();
 
@@ -1399,6 +1428,7 @@ mod tests {
                 volume: None,
                 max_input_chars: None,
                 generation: None,
+                translation: None,
             })
             .unwrap();
 

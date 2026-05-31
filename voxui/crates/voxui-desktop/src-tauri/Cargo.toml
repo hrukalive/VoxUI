@@ -19,6 +19,8 @@ voxui-sidecar-protocol = { path = "../../voxui-sidecar-protocol" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+wreq = { version = "6.0.0-rc", features = ["json"] }
+wreq-util = "3.0.0-rc"
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"

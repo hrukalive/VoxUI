@@ -8,13 +8,14 @@ use crate::components::input_box::InputBox;
 use crate::components::live_monitor::LiveMonitor;
 use crate::components::load_progress_modal::LoadProgressModal;
 use crate::components::settings_modal::{SettingsModal, SettingsPage};
+use crate::components::translation_bar::TranslationBar;
 use crate::i18n::{labels, UiLanguage};
 use crate::tauri_api::{
     AppConfig, AppSnapshot, AudioState, AutoGenMode, BackendKind, ConfigPatch, GenerationDoneEvent,
     GenerationProgressEvent, GenerationSettings, HistoryStatus, LanguageMode, LiveConfig,
     LiveConfigPatch, LiveSnapshot, LiveStatus, LoadUiState, ModelLoadDoneEvent,
     ModelLoadProgressEvent, PlaybackStateEvent, ReplacementRule, SendMode, TemplateConfig,
-    ThemeMode,
+    ThemeMode, TranslationPair, TranslationSettings,
 };
 
 #[component]
@@ -31,6 +32,10 @@ pub fn App() -> impl IntoView {
     let (live_snapshot, set_live_snapshot) = signal(fallback_live_snapshot());
     let (audio_state, set_audio_state) = signal(AudioState::default());
     let (input_replacement, set_input_replacement) = signal(None::<String>);
+    let (input_text, set_input_text) = signal(String::new());
+    let (translation_error, set_translation_error) = signal(None::<String>);
+    let (volume_preview, set_volume_preview) = signal(fallback_snapshot().config.volume);
+    let (volume_adjusting, set_volume_adjusting) = signal(false);
 
     // Root component is mounted once; Tauri event listeners intentionally live for the app lifetime.
     spawn_local(async move {
@@ -53,6 +58,8 @@ pub fn App() -> impl IntoView {
     });
 
     let current_snapshot = move || snapshot.get().unwrap_or_else(fallback_snapshot);
+    let current_snapshot_untracked =
+        move || snapshot.get_untracked().unwrap_or_else(fallback_snapshot);
     let current_labels = move || {
         let snapshot = current_snapshot();
         labels(ui_language(
@@ -60,6 +67,12 @@ pub fn App() -> impl IntoView {
             snapshot.system_language,
         ))
     };
+    Effect::new(move |_| {
+        let volume = current_snapshot().config.volume;
+        if !volume_adjusting.get_untracked() {
+            set_volume_preview.set(volume);
+        }
+    });
     let refresh_snapshot = move || {
         spawn_local(async move {
             if let Ok(next_snapshot) = crate::tauri_api::get_app_state().await {
@@ -199,6 +212,23 @@ pub fn App() -> impl IntoView {
             }
         });
     };
+    let preview_volume = move |volume: f32| {
+        let volume = volume.clamp(0.0, 1.0);
+        set_volume_adjusting.set(true);
+        set_volume_preview.set(volume);
+        spawn_local(async move {
+            let _ = crate::tauri_api::set_runtime_volume(volume).await;
+        });
+    };
+    let commit_volume = move |volume: f32| {
+        let volume = volume.clamp(0.0, 1.0);
+        set_volume_adjusting.set(false);
+        set_volume_preview.set(volume);
+        commit_config_patch(ConfigPatch {
+            volume: Some(volume),
+            ..ConfigPatch::default()
+        });
+    };
 
     let current_ui_language = move || {
         let snapshot = current_snapshot();
@@ -238,6 +268,13 @@ pub fn App() -> impl IntoView {
                             }
                         });
                     }
+                    translation_config=move || current_snapshot().config.translation.clone()
+                    on_translation_patch=move |translation| {
+                        commit_config_patch(ConfigPatch {
+                            translation: Some(translation),
+                            ..ConfigPatch::default()
+                        });
+                    }
                 />
             </div>
         }
@@ -271,13 +308,14 @@ pub fn App() -> impl IntoView {
                 let load_disabled = selected_model_id.is_none()
                     || selected_model_id == loaded_model_id
                     || matches!(snapshot.load_state, LoadUiState::Loading);
+                let volume = volume_preview.get();
                 view! {
                     <Header
                         labels=labels
                         models=snapshot.models
                         selected_model_id=snapshot.selected_model_id
                         load_disabled=load_disabled
-                        volume=snapshot.config.volume
+                        volume=volume
                         on_model_select=move |model_id| {
                             spawn_local(async move {
                                 let selected_model_id = if model_id.is_empty() {
@@ -295,14 +333,8 @@ pub fn App() -> impl IntoView {
                                 }
                             });
                         }
-                        on_volume_change=move |volume| {
-                            commit_config_patch(ConfigPatch {
-                                volume: Some(volume),
-                                ..ConfigPatch::default()
-                            });
-                        }
                         on_load=move || {
-                            if let Some(choice_id) = current_snapshot().selected_model_id {
+                            if let Some(choice_id) = current_snapshot_untracked().selected_model_id {
                                 set_load_error.set(None);
                                 set_load_percent.set(0.0);
                                 set_load_open.set(true);
@@ -315,6 +347,8 @@ pub fn App() -> impl IntoView {
                                 });
                             }
                         }
+                        on_volume_input=preview_volume
+                        on_volume_commit=commit_volume
                         on_open_settings=move || set_settings_open.set(true)
                         on_open_live_monitor=move || {
                             spawn_local(async move {
@@ -346,7 +380,7 @@ pub fn App() -> impl IntoView {
                 items=move || current_snapshot().history
                 on_play=move |item_id| {
                     spawn_local(async move {
-                        let is_playing = current_snapshot()
+                        let is_playing = current_snapshot_untracked()
                             .history
                             .iter()
                             .any(|item| item.id == item_id && matches!(item.status, HistoryStatus::Playing));
@@ -385,6 +419,39 @@ pub fn App() -> impl IntoView {
                 }
                 replacement_text=move || input_replacement.get()
                 on_replacement_consumed=move || set_input_replacement.set(None)
+                on_text_change=move |text| set_input_text.set(text)
+                translation_bar={
+                    view! {
+                        <TranslationBar
+                            labels=current_labels
+                            config=move || current_snapshot().config.clone()
+                            input_text=move || input_text.get()
+                            disabled=move || {
+                                let snapshot = current_snapshot();
+                                snapshot.loaded_model_id.is_none() || matches!(snapshot.load_state, LoadUiState::Loading)
+                            }
+                            on_replace_text=move |text| set_input_replacement.set(Some(text))
+                            on_enqueue=move |text| {
+                                let snapshot = current_snapshot_untracked();
+                                let target_lang = snapshot.config.translation.outbound.target_lang.clone();
+                                let final_text = if snapshot.config.auto_period {
+                                    ensure_period(&text, &target_lang)
+                                } else {
+                                    text
+                                };
+                                set_input_text.set(String::new());
+                                set_input_replacement.set(Some(String::new()));
+                                spawn_local(async move {
+                                    if crate::tauri_api::enqueue_generation(final_text).await.is_ok() {
+                                        refresh_snapshot();
+                                    }
+                                });
+                            }
+                            on_error=move |err| set_translation_error.set(Some(err))
+                            on_config_patch=commit_config_patch
+                        />
+                    }.into_any()
+                }
                 on_generate=move |text| {
                     spawn_local(async move {
                         if crate::tauri_api::enqueue_generation(text).await.is_ok() {
@@ -397,6 +464,7 @@ pub fn App() -> impl IntoView {
                 labels=current_labels
                 language=current_ui_language
                 config=move || current_snapshot().config
+                volume=move || volume_preview.get()
                 live_snapshot=move || live_snapshot.get()
                 cuda_available=move || current_snapshot().cuda_available
                 audio_state=move || audio_state.get()
@@ -405,6 +473,8 @@ pub fn App() -> impl IntoView {
                 on_close=move || set_settings_open.set(false)
                 on_page_select=move |page| set_settings_page.set(page)
                 on_config_patch=commit_config_patch
+                on_volume_input=preview_volume
+                on_volume_commit=commit_volume
                 on_live_patch=commit_live_patch
                 on_live_connect=move || {
                     spawn_local(async move {
@@ -459,7 +529,7 @@ pub fn App() -> impl IntoView {
                 on_browse_prompt_wav=move || {
                     spawn_local(async move {
                         if let Ok(Some(path)) = crate::tauri_api::browse_prompt_wav().await {
-                            let mut generation = current_snapshot().config.generation;
+                            let mut generation = current_snapshot_untracked().config.generation;
                             generation.prompt_wav_path = Some(path);
                             if let Ok(next_snapshot) = crate::tauri_api::set_config_patch(ConfigPatch {
                                 generation: Some(generation),
@@ -475,7 +545,7 @@ pub fn App() -> impl IntoView {
                 on_browse_reference_wav=move || {
                     spawn_local(async move {
                         if let Ok(Some(path)) = crate::tauri_api::browse_reference_wav().await {
-                            let mut generation = current_snapshot().config.generation;
+                            let mut generation = current_snapshot_untracked().config.generation;
                             generation.reference_wav_path = Some(path);
                             if let Ok(next_snapshot) = crate::tauri_api::set_config_patch(ConfigPatch {
                                 generation: Some(generation),
@@ -547,6 +617,18 @@ pub fn App() -> impl IntoView {
                     />
                 }
             }}
+            {move || {
+                let labels = current_labels();
+                view! {
+                    <ErrorModal
+                        labels=labels
+                        open=move || translation_error.get().is_some()
+                        title=move || current_labels().translation_failed.to_string()
+                        message=move || translation_error.get().unwrap_or_default()
+                        on_close=move || set_translation_error.set(None)
+                    />
+                }
+            }}
         </div>
     }
     .into_any()
@@ -589,6 +671,17 @@ fn fallback_snapshot() -> AppSnapshot {
                 prompt_wav_path: None,
                 prompt_text: None,
                 reference_wav_path: None,
+            },
+            translation: TranslationSettings {
+                outbound: TranslationPair {
+                    source_lang: "auto".into(),
+                    target_lang: "EN".into(),
+                },
+                inbound: TranslationPair {
+                    source_lang: "auto".into(),
+                    target_lang: "ZH".into(),
+                },
+                translate_enqueue: false,
             },
             live: fallback_live_config(),
         },
@@ -713,10 +806,26 @@ fn apply_optimistic_patch(snapshot: &mut AppSnapshot, patch: &ConfigPatch) {
     if let Some(generation) = patch.generation.as_ref() {
         snapshot.config.generation = generation.clone();
     }
+    if let Some(translation) = patch.translation.as_ref() {
+        snapshot.config.translation = translation.clone();
+    }
 }
 
 fn empty_string_as_none(value: Option<String>) -> Option<String> {
     value.filter(|value| !value.is_empty())
+}
+
+fn ensure_period(text: &str, target_lang: &str) -> String {
+    let period = match target_lang {
+        "ZH" | "ZH-HANT" | "JA" => '。',
+        _ => '.',
+    };
+    let endings = ['?', '!', '.', '…', '？', '！', '。'];
+    if text.is_empty() || text.ends_with(&endings) {
+        text.to_string()
+    } else {
+        format!("{}{}", text, period)
+    }
 }
 
 fn apply_live_optimistic_patch(snapshot: &mut LiveSnapshot, patch: &LiveConfigPatch) {
