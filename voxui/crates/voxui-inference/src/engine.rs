@@ -1,6 +1,7 @@
 //! Native VoxCPM generation pipeline.
 
-use std::path::Path;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
@@ -116,6 +117,8 @@ pub struct VoxCPMEngine {
     stop_proj: LinearProjection,
     stop_head: LinearProjection,
     lora: Option<LoraAdapter>,
+    active_lora_path: Option<PathBuf>,
+    lora_cache: HashMap<PathBuf, LoraAdapter>,
     device: Device,
     config: EngineConfig,
 }
@@ -265,6 +268,8 @@ impl VoxCPMEngine {
             stop_proj,
             stop_head,
             lora: None,
+            active_lora_path: None,
+            lora_cache: HashMap::new(),
             device,
             config,
         })
@@ -293,6 +298,36 @@ impl VoxCPMEngine {
 
     pub fn unload_lora(&mut self) {
         self.lora = None;
+    }
+
+    pub fn reconcile_lora(&mut self, lora_path: Option<&Path>) -> Result<()> {
+        let requested = lora_path.map(|p| {
+            p.canonicalize().unwrap_or_else(|_| p.to_path_buf())
+        });
+        if self.active_lora_path == requested {
+            return Ok(());
+        }
+
+        if let Some(active_path) = self.active_lora_path.take() {
+            if let Some(adapter) = self.lora.take() {
+                self.lora_cache.insert(active_path, adapter);
+            }
+        }
+
+        if let Some(path) = requested {
+            if let Some(adapter) = self.lora_cache.remove(&path) {
+                self.lora = Some(adapter);
+            } else {
+                self.lora = Some(LoraAdapter::load_file_for_model(
+                    lora_path.unwrap(),
+                    &self.device,
+                    &self.manifest,
+                )?);
+            }
+            self.active_lora_path = Some(path);
+        }
+
+        Ok(())
     }
 
     pub fn generate_debug_first_patch(
