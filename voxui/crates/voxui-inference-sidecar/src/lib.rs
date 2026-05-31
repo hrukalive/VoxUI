@@ -202,6 +202,20 @@ impl SidecarEngine {
                 install_active_cancel(&self.generation_cancel, item_id.clone(), cancel.clone());
                 let request = synthesis_request_from_dto(request);
 
+                if let Err(error) = engine.reconcile_lora(request.lora_path.as_deref()) {
+                    emit(Frame {
+                        header: SidecarEvent::GenerationDone {
+                            item_id: item_id.clone(),
+                            status: OperationStatus::Failed,
+                            sample_rate: None,
+                            duration_seconds: None,
+                            error: Some(format!("failed to load LoRA: {error}")),
+                        },
+                        payload: Vec::new(),
+                    })?;
+                    return Ok(false);
+                }
+
                 let result = if streaming {
                     run_streaming_generation(
                         engine,
@@ -537,6 +551,7 @@ fn synthesis_request_from_dto(dto: SynthesisRequestDto) -> SynthesisRequest {
         retry_badcase_max_times: dto.retry_badcase_max_times,
         retry_badcase_ratio_threshold: dto.retry_badcase_ratio_threshold,
         consolidate_n: dto.consolidate_n,
+        lora_path: dto.lora_path,
         ..SynthesisRequest::default()
     }
 }
