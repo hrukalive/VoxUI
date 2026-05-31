@@ -65,6 +65,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::get_app_state,
             commands::set_config_patch,
+            commands::set_runtime_volume,
             commands::get_live_state,
             commands::set_live_config_patch,
             commands::clear_live_items,

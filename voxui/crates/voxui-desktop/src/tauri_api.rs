@@ -557,6 +557,16 @@ pub async fn set_config_patch(patch: ConfigPatch) -> Result<AppSnapshot, String>
     serde_wasm_bindgen::from_value(value).map_err(|err| err.to_string())
 }
 
+pub async fn set_runtime_volume(volume: f32) -> Result<f32, String> {
+    let args = serde_wasm_bindgen::to_value(&serde_json::json!({ "volume": volume }))
+        .map_err(|err| err.to_string())?;
+    let value = invoke("set_runtime_volume", args)
+        .await
+        .map_err(stringify_js_error)?;
+
+    serde_wasm_bindgen::from_value(value).map_err(|err| err.to_string())
+}
+
 pub async fn get_live_state() -> Result<LiveSnapshot, String> {
     let value = invoke("get_live_state", JsValue::NULL)
         .await

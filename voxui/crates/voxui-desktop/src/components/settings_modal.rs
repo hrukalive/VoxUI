@@ -27,6 +27,7 @@ pub fn SettingsModal(
     labels: impl Fn() -> Labels + Send + Sync + 'static + Copy,
     language: impl Fn() -> UiLanguage + Send + Sync + 'static + Copy,
     config: impl Fn() -> AppConfig + Send + Sync + 'static + Copy,
+    volume: impl Fn() -> f32 + Send + Sync + 'static + Copy,
     live_snapshot: impl Fn() -> LiveSnapshot + Send + Sync + 'static + Copy,
     cuda_available: impl Fn() -> bool + Send + Sync + 'static + Copy,
     audio_state: impl Fn() -> AudioState + Send + Sync + 'static + Copy,
@@ -35,6 +36,8 @@ pub fn SettingsModal(
     on_close: impl Fn() + Send + Sync + 'static + Copy,
     on_page_select: impl Fn(SettingsPage) + Send + Sync + 'static + Copy,
     on_config_patch: impl Fn(ConfigPatch) + Send + Sync + 'static + Copy,
+    on_volume_input: impl Fn(f32) + Send + Sync + 'static + Copy,
+    on_volume_commit: impl Fn(f32) + Send + Sync + 'static + Copy,
     on_live_patch: impl Fn(LiveConfigPatch) + Send + Sync + 'static + Copy,
     on_live_connect: impl Fn() + Send + Sync + 'static + Copy,
     on_live_disconnect: impl Fn() + Send + Sync + 'static + Copy,
@@ -357,18 +360,18 @@ pub fn SettingsModal(
                                             />
                                         </label>
                                         <div class="settings-field settings-volume-test-field settings-span-2">
-                                            <span>{move || format!("{}: {}%", labels().volume, volume_to_percent(config().volume))}</span>
+                                            <span>{move || format!("{}: {}%", labels().volume, volume_to_percent(volume()))}</span>
                                             <input
                                                 id="settings-volume"
                                                 type="range"
                                                 min="0"
                                                 max="100"
-                                                prop:value=move || volume_to_percent(config().volume)
+                                                prop:value=move || volume_to_percent(volume())
                                                 on:input=move |event| {
-                                                    on_config_patch(ConfigPatch {
-                                                        volume: Some((parse_f32(&event_target_value(&event), config().volume * 100.0) / 100.0).clamp(0.0, 1.0)),
-                                                        ..ConfigPatch::default()
-                                                    });
+                                                    on_volume_input(volume_from_event(&event, volume()));
+                                                }
+                                                on:change=move |event| {
+                                                    on_volume_commit(volume_from_event(&event, volume()));
                                                 }
                                             />
                                             <button class="primary-button" type="button" on:click=move |_| { on_test_audio() }>
@@ -1018,6 +1021,10 @@ fn parse_backend(value: &str) -> BackendKind {
 
 fn volume_to_percent(volume: f32) -> String {
     ((volume.clamp(0.0, 1.0) * 100.0).round() as usize).to_string()
+}
+
+fn volume_from_event(event: &web_sys::Event, fallback: f32) -> f32 {
+    (parse_f32(&event_target_value(event), fallback * 100.0) / 100.0).clamp(0.0, 1.0)
 }
 
 fn parse_f32(value: &str, fallback: f32) -> f32 {

@@ -189,10 +189,7 @@ impl AppCore {
             self.config.audio_device = empty_string_as_none(audio_device);
         }
         if let Some(volume) = patch.volume {
-            self.config.volume = volume.clamp(0.0, 1.0);
-            if let Some(active_playback) = self.active_playback.as_ref() {
-                active_playback.volume.set(self.config.volume);
-            }
+            self.set_runtime_volume(volume);
         }
         if let Some(max_input_chars) = patch.max_input_chars {
             self.config.max_input_chars = max_input_chars.max(1);
@@ -502,6 +499,14 @@ impl AppCore {
             volume,
             stop: stop_receiver,
         })
+    }
+
+    pub fn set_runtime_volume(&mut self, volume: f32) -> f32 {
+        self.config.volume = volume.clamp(0.0, 1.0);
+        if let Some(active_playback) = self.active_playback.as_ref() {
+            active_playback.volume.set(self.config.volume);
+        }
+        self.config.volume
     }
 
     pub fn begin_or_queue_auto_playback(&mut self, item_id: &str) -> Result<Option<PlaybackRun>> {

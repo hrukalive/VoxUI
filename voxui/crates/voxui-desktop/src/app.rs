@@ -34,6 +34,8 @@ pub fn App() -> impl IntoView {
     let (input_replacement, set_input_replacement) = signal(None::<String>);
     let (input_text, set_input_text) = signal(String::new());
     let (translation_error, set_translation_error) = signal(None::<String>);
+    let (volume_preview, set_volume_preview) = signal(fallback_snapshot().config.volume);
+    let (volume_adjusting, set_volume_adjusting) = signal(false);
 
     // Root component is mounted once; Tauri event listeners intentionally live for the app lifetime.
     spawn_local(async move {
@@ -65,6 +67,12 @@ pub fn App() -> impl IntoView {
             snapshot.system_language,
         ))
     };
+    Effect::new(move |_| {
+        let volume = current_snapshot().config.volume;
+        if !volume_adjusting.get_untracked() {
+            set_volume_preview.set(volume);
+        }
+    });
     let refresh_snapshot = move || {
         spawn_local(async move {
             if let Ok(next_snapshot) = crate::tauri_api::get_app_state().await {
@@ -204,6 +212,23 @@ pub fn App() -> impl IntoView {
             }
         });
     };
+    let preview_volume = move |volume: f32| {
+        let volume = volume.clamp(0.0, 1.0);
+        set_volume_adjusting.set(true);
+        set_volume_preview.set(volume);
+        spawn_local(async move {
+            let _ = crate::tauri_api::set_runtime_volume(volume).await;
+        });
+    };
+    let commit_volume = move |volume: f32| {
+        let volume = volume.clamp(0.0, 1.0);
+        set_volume_adjusting.set(false);
+        set_volume_preview.set(volume);
+        commit_config_patch(ConfigPatch {
+            volume: Some(volume),
+            ..ConfigPatch::default()
+        });
+    };
 
     let current_ui_language = move || {
         let snapshot = current_snapshot();
@@ -283,13 +308,14 @@ pub fn App() -> impl IntoView {
                 let load_disabled = selected_model_id.is_none()
                     || selected_model_id == loaded_model_id
                     || matches!(snapshot.load_state, LoadUiState::Loading);
+                let volume = volume_preview.get();
                 view! {
                     <Header
                         labels=labels
                         models=snapshot.models
                         selected_model_id=snapshot.selected_model_id
                         load_disabled=load_disabled
-                        volume=snapshot.config.volume
+                        volume=volume
                         on_model_select=move |model_id| {
                             spawn_local(async move {
                                 let selected_model_id = if model_id.is_empty() {
@@ -307,12 +333,6 @@ pub fn App() -> impl IntoView {
                                 }
                             });
                         }
-                        on_volume_change=move |volume| {
-                            commit_config_patch(ConfigPatch {
-                                volume: Some(volume),
-                                ..ConfigPatch::default()
-                            });
-                        }
                         on_load=move || {
                             if let Some(choice_id) = current_snapshot_untracked().selected_model_id {
                                 set_load_error.set(None);
@@ -327,6 +347,8 @@ pub fn App() -> impl IntoView {
                                 });
                             }
                         }
+                        on_volume_input=preview_volume
+                        on_volume_commit=commit_volume
                         on_open_settings=move || set_settings_open.set(true)
                         on_open_live_monitor=move || {
                             spawn_local(async move {
@@ -442,6 +464,7 @@ pub fn App() -> impl IntoView {
                 labels=current_labels
                 language=current_ui_language
                 config=move || current_snapshot().config
+                volume=move || volume_preview.get()
                 live_snapshot=move || live_snapshot.get()
                 cuda_available=move || current_snapshot().cuda_available
                 audio_state=move || audio_state.get()
@@ -450,6 +473,8 @@ pub fn App() -> impl IntoView {
                 on_close=move || set_settings_open.set(false)
                 on_page_select=move |page| set_settings_page.set(page)
                 on_config_patch=commit_config_patch
+                on_volume_input=preview_volume
+                on_volume_commit=commit_volume
                 on_live_patch=commit_live_patch
                 on_live_connect=move || {
                     spawn_local(async move {
