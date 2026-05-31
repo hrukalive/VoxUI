@@ -110,6 +110,7 @@ pub struct SynthesisRequestDto {
     pub retry_badcase_max_times: usize,
     pub retry_badcase_ratio_threshold: f32,
     pub consolidate_n: usize,
+    pub lora_path: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

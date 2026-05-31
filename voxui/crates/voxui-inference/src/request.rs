@@ -21,6 +21,7 @@ pub struct SynthesisRequest {
     pub retry_badcase_max_times: usize,
     pub retry_badcase_ratio_threshold: f32,
     pub consolidate_n: usize,
+    pub lora_path: Option<PathBuf>,
 }
 
 impl Default for SynthesisRequest {
@@ -39,6 +40,7 @@ impl Default for SynthesisRequest {
             retry_badcase_max_times: 3,
             retry_badcase_ratio_threshold: 6.0,
             consolidate_n: 1,
+            lora_path: None,
         }
     }
 }
