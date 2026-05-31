@@ -1479,6 +1479,80 @@ mod tests {
     }
 
     #[test]
+    fn dedup_drops_similar_text_within_window() {
+        let mut config = AppConfig::default();
+        config.dedup_window_secs = 60;
+        config.dedup_edit_threshold = 1;
+        let mut core = AppCore::from_config(config).unwrap();
+        core.set_loaded_model_for_test("alpha".to_string());
+
+        let first = core.enqueue_generation("hello world".to_string()).unwrap();
+        assert_eq!(first.status, HistoryStatus::Queued);
+
+        let dup = core.enqueue_generation("hello world".to_string()).unwrap();
+        assert_eq!(dup.status, HistoryStatus::Dedupped);
+    }
+
+    #[test]
+    fn dedup_allows_different_text() {
+        let mut config = AppConfig::default();
+        config.dedup_window_secs = 60;
+        config.dedup_edit_threshold = 1;
+        let mut core = AppCore::from_config(config).unwrap();
+        core.set_loaded_model_for_test("alpha".to_string());
+
+        let first = core.enqueue_generation("hello".to_string()).unwrap();
+        assert_eq!(first.status, HistoryStatus::Queued);
+
+        let second = core.enqueue_generation("world".to_string()).unwrap();
+        assert_eq!(second.status, HistoryStatus::Queued);
+    }
+
+    #[test]
+    fn dedup_window_zero_disables_dedup() {
+        let mut config = AppConfig::default();
+        config.dedup_window_secs = 0;
+        let mut core = AppCore::from_config(config).unwrap();
+        core.set_loaded_model_for_test("alpha".to_string());
+
+        let first = core.enqueue_generation("hello".to_string()).unwrap();
+        assert_eq!(first.status, HistoryStatus::Queued);
+
+        let second = core.enqueue_generation("hello".to_string()).unwrap();
+        assert_eq!(second.status, HistoryStatus::Queued);
+    }
+
+    #[test]
+    fn dedup_normalizes_whitespace_and_case() {
+        let mut config = AppConfig::default();
+        config.dedup_window_secs = 60;
+        config.dedup_edit_threshold = 1;
+        let mut core = AppCore::from_config(config).unwrap();
+        core.set_loaded_model_for_test("alpha".to_string());
+
+        let first = core.enqueue_generation("  Hello   World  ".to_string()).unwrap();
+        assert_eq!(first.status, HistoryStatus::Queued);
+
+        let dup = core.enqueue_generation("hello world".to_string()).unwrap();
+        assert_eq!(dup.status, HistoryStatus::Dedupped);
+    }
+
+    #[test]
+    fn dedup_edit_threshold_zero_requires_exact_normalized_match() {
+        let mut config = AppConfig::default();
+        config.dedup_window_secs = 60;
+        config.dedup_edit_threshold = 0;
+        let mut core = AppCore::from_config(config).unwrap();
+        core.set_loaded_model_for_test("alpha".to_string());
+
+        let first = core.enqueue_generation("hello world".to_string()).unwrap();
+        assert_eq!(first.status, HistoryStatus::Queued);
+
+        let allowed = core.enqueue_generation("hello world!".to_string()).unwrap();
+        assert_eq!(allowed.status, HistoryStatus::Queued);
+    }
+
+    #[test]
     fn cancel_generation_item_only_cancels_queued_items() {
         let mut core = AppCore::from_config(AppConfig::default()).unwrap();
         core.set_loaded_model_for_test("alpha".to_string());
