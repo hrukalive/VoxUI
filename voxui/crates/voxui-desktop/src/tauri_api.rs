@@ -449,6 +449,8 @@ pub struct HistoryItem {
     pub error: Option<String>,
     pub has_audio: bool,
     pub snapshot: RequestSnapshot,
+    #[serde(default)]
+    pub created_at: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -496,6 +498,7 @@ pub enum HistoryStatus {
     Failed,
     Ready,
     Playing,
+    Dedupped,
 }
 
 #[derive(Debug, Serialize)]
