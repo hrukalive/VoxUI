@@ -500,7 +500,7 @@ body:has(.live-monitor-shell) {
 .composer-panel {
   display: grid;
   min-height: 0;
-  grid-template-columns: minmax(0, 1fr) 116px;
+  grid-template-columns: auto minmax(0, 1fr) 116px;
   align-items: stretch;
   gap: 10px;
   padding: 12px 16px;
@@ -1647,12 +1647,6 @@ body:has(.live-monitor-shell) {
 }
 
 /* Translation Bar (main window, left of input) */
-.composer-row {
-  display: flex;
-  gap: 10px;
-  align-items: stretch;
-}
-
 .composer-translation-column {
   display: flex;
   flex-direction: column;
@@ -1690,6 +1684,10 @@ body:has(.live-monitor-shell) {
   margin: 0;
 }
 
+.hidden {
+  display: none !important;
+}
+
 /* Live Monitor Translation Panel */
 .live-translation-panel {
   margin-top: 8px;
@@ -1703,7 +1701,7 @@ body:has(.live-monitor-shell) {
   display: flex;
   gap: 6px;
   align-items: center;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
 }
 
 .live-translation-source-select,
@@ -1713,6 +1711,7 @@ body:has(.live-monitor-shell) {
 
 .live-translation-do-button {
   flex-shrink: 0;
+  white-space: nowrap;
 }
 
 .live-translation-result {

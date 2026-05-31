@@ -355,6 +355,7 @@ pub fn LiveMonitor(
                                         let msg_click = item.raw_message.clone().unwrap_or_default();
                                         view! {
                                             <div class="live-translation-panel" class:hidden=move || !expanded_translations.get().contains(&tid_show)>
+                                                <div class="live-translation-controls">
                                                 <CustomSelect
                                                     class="live-translation-source-select"
                                                     aria_label=labels.source_language
@@ -408,6 +409,7 @@ pub fn LiveMonitor(
                                                 >
                                                     {labels.translate}
                                                 </button>
+                                                </div>
                                                 {move || {
                                                     translation_results.get()
                                                         .get(&tid_result)

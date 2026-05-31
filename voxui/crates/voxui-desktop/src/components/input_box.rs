@@ -63,30 +63,28 @@ pub fn InputBox(
 
     view! {
         <form class="composer-panel" on:submit=submit>
-            <div class="composer-row">
-                {if let Some(bar) = translation_bar {
-                    view! { <div class="composer-translation-column">{bar}</div> }.into_any()
-                } else {
-                    ().into_any()
-                }}
-                <div class="composer-field">
-                    <textarea
-                        class="composer-input"
-                        prop:value=move || text.get()
-                        placeholder=move || labels().input_placeholder
-                        disabled=move || disabled()
-                        on:input=move |event| {
-                            let value = event_target_value(&event);
-                            if let Some(ref cb) = on_text_change {
-                                cb(value.clone());
-                            }
-                            set_text.set(value);
+            {if let Some(bar) = translation_bar {
+                view! { <div class="composer-translation-column">{bar}</div> }.into_any()
+            } else {
+                ().into_any()
+            }}
+            <div class="composer-field">
+                <textarea
+                    class="composer-input"
+                    prop:value=move || text.get()
+                    placeholder=move || labels().input_placeholder
+                    disabled=move || disabled()
+                    on:input=move |event| {
+                        let value = event_target_value(&event);
+                        if let Some(ref cb) = on_text_change {
+                            cb(value.clone());
                         }
-                    ></textarea>
-                    <span class:over-limit=is_over_limit class="char-counter">
-                        {move || format!("{}/{}", char_count(), max_chars())}
-                    </span>
-                </div>
+                        set_text.set(value);
+                    }
+                ></textarea>
+                <span class:over-limit=is_over_limit class="char-counter">
+                    {move || format!("{}/{}", char_count(), max_chars())}
+                </span>
             </div>
             <div class="composer-actions">
                 <button class="generate-button" type="submit" disabled=generate_disabled>
