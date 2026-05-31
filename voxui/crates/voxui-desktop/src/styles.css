@@ -253,7 +253,7 @@ body:has(.live-monitor-shell) {
 
 .custom-select-menu {
   position: absolute;
-  z-index: 20;
+  z-index: 1000;
   top: calc(100% + 3px);
   left: 0;
   right: 0;
@@ -264,6 +264,11 @@ body:has(.live-monitor-shell) {
   background: var(--control-bg);
   box-shadow: 0 14px 32px rgb(0 0 0 / 24%);
   padding: 4px;
+}
+
+.custom-select-menu.open-above {
+  top: auto;
+  bottom: calc(100% + 3px);
 }
 
 .custom-select-option {
@@ -1703,8 +1708,8 @@ body:has(.live-monitor-shell) {
   grid-column: 1 / -1;
   margin-top: 8px;
   padding: 8px;
-  border-top: 1px solid var(--border-color);
-  background: var(--bg-hover);
+  border-top: 1px solid var(--control-border);
+  background: var(--primary-hover);
   border-radius: 4px;
 }
 
@@ -1730,7 +1735,7 @@ body:has(.live-monitor-shell) {
 .live-translation-result {
   margin-top: 8px;
   font-size: 13px;
-  color: var(--text-secondary);
+  color: var(--text);
   word-break: break-word;
 }
 
@@ -1742,6 +1747,6 @@ body:has(.live-monitor-shell) {
 /* Settings Translation section */
 .settings-section-desc {
   font-size: 13px;
-  color: var(--text-secondary);
+  color: var(--text);
   margin: 0 0 10px 0;
 }
