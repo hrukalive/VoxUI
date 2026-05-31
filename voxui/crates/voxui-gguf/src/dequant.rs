@@ -37,7 +37,7 @@ fn dequantize_f16(data: &[u8], n_elements: usize) -> anyhow::Result<Vec<f32>> {
 }
 
 fn dequantize_q4_0(data: &[u8], n_elements: usize) -> anyhow::Result<Vec<f32>> {
-    let n_blocks = (n_elements + 31) / 32;
+    let n_blocks = n_elements.div_ceil(32);
     anyhow::ensure!(data.len() >= n_blocks * 18, "insufficient data for Q4_0");
     let mut out = Vec::with_capacity(n_blocks * 32);
     let mut offset = 0;
@@ -62,7 +62,7 @@ fn dequantize_q4_0(data: &[u8], n_elements: usize) -> anyhow::Result<Vec<f32>> {
 }
 
 fn dequantize_q8_0(data: &[u8], n_elements: usize) -> anyhow::Result<Vec<f32>> {
-    let n_blocks = (n_elements + 31) / 32;
+    let n_blocks = n_elements.div_ceil(32);
     anyhow::ensure!(data.len() >= n_blocks * 34, "insufficient data for Q8_0");
     let mut out = Vec::with_capacity(n_blocks * 32);
     let mut offset = 0;

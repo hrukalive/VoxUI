@@ -96,22 +96,12 @@ impl Default for TranslationPair {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct TranslationSettings {
     pub outbound: TranslationPair,
     pub inbound: TranslationPair,
     pub translate_enqueue: bool,
-}
-
-impl Default for TranslationSettings {
-    fn default() -> Self {
-        Self {
-            outbound: TranslationPair::default(),
-            inbound: TranslationPair::default(),
-            translate_enqueue: false,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -144,31 +134,21 @@ pub enum LiveStatus {
     Error,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum SendMode {
+    #[default]
     Manual,
     AutoEnqueue,
 }
 
-impl Default for SendMode {
-    fn default() -> Self {
-        Self::Manual
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum AutoGenMode {
+    #[default]
     None,
     Normal,
     Replacement,
-}
-
-impl Default for AutoGenMode {
-    fn default() -> Self {
-        Self::None
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

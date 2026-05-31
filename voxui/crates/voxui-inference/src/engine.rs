@@ -101,6 +101,9 @@ struct GenerationOutput {
     context_len: usize,
 }
 
+type PatchCallback<'a> = dyn FnMut(&VoxCPMEngine, &GenerationState, usize, usize, bool) -> Result<()> + 'a;
+type RefPrefix = (Vec<u32>, Tensor, Vec<f32>, Vec<f32>);
+
 pub struct VoxCPMEngine {
     manifest: ModelConfig,
     tokenizer: VoxTokenizer,
@@ -156,7 +159,7 @@ impl VoxCPMEngine {
 
         let check_cancel = |step: usize| -> Result<()> {
             on_progress(step, 6);
-            if cancel.map_or(false, |c| c.load(Ordering::Relaxed)) {
+            if cancel.is_some_and(|c| c.load(Ordering::Relaxed)) {
                 bail!("model loading cancelled");
             }
             Ok(())
@@ -704,13 +707,13 @@ impl VoxCPMEngine {
         let prompt_feat =
             self.encode_wav_patches(request.prompt_wav_path.as_ref().unwrap(), PaddingMode::Left)?;
         let prompt_len = prompt_feat.dim(0)?;
-        text_tokens.extend(std::iter::repeat(0).take(prompt_len));
+        text_tokens.extend(std::iter::repeat_n(0, prompt_len));
         let audio_feat =
             Tensor::cat(&[&self.zero_feat(text_len)?, &prompt_feat], 0)?.unsqueeze(0)?;
         let mut text_mask_values = vec![1.0; text_len];
-        text_mask_values.extend(std::iter::repeat(0.0).take(prompt_len));
+        text_mask_values.extend(std::iter::repeat_n(0.0, prompt_len));
         let mut audio_mask_values = vec![0.0; text_len];
-        audio_mask_values.extend(std::iter::repeat(1.0).take(prompt_len));
+        audio_mask_values.extend(std::iter::repeat_n(1.0, prompt_len));
 
         self.prepared(
             text_tokens,
@@ -738,9 +741,9 @@ impl VoxCPMEngine {
         all_tokens.extend(text_tokens);
         let audio_feat = Tensor::cat(&[&ref_feats, &self.zero_feat(text_len)?], 0)?.unsqueeze(0)?;
         let mut text_mask_values = ref_text_mask;
-        text_mask_values.extend(std::iter::repeat(1.0).take(text_len));
+        text_mask_values.extend(std::iter::repeat_n(1.0, text_len));
         let mut audio_mask_values = ref_audio_mask;
-        audio_mask_values.extend(std::iter::repeat(0.0).take(text_len));
+        audio_mask_values.extend(std::iter::repeat_n(0.0, text_len));
 
         self.prepared(
             all_tokens,
@@ -778,17 +781,17 @@ impl VoxCPMEngine {
 
         let mut all_tokens = ref_tokens;
         all_tokens.extend(text_tokens);
-        all_tokens.extend(std::iter::repeat(0).take(prompt_len));
+        all_tokens.extend(std::iter::repeat_n(0, prompt_len));
         let text_pad_feat = self.zero_feat(text_len)?;
         let audio_feat =
             Tensor::cat(&[&ref_feats, &text_pad_feat, &prompt_feat], 0)?.unsqueeze(0)?;
 
         let mut text_mask_values = ref_text_mask;
-        text_mask_values.extend(std::iter::repeat(1.0).take(text_len));
-        text_mask_values.extend(std::iter::repeat(0.0).take(prompt_len));
+        text_mask_values.extend(std::iter::repeat_n(1.0, text_len));
+        text_mask_values.extend(std::iter::repeat_n(0.0, prompt_len));
         let mut audio_mask_values = ref_audio_mask;
-        audio_mask_values.extend(std::iter::repeat(0.0).take(text_len));
-        audio_mask_values.extend(std::iter::repeat(1.0).take(prompt_len));
+        audio_mask_values.extend(std::iter::repeat_n(0.0, text_len));
+        audio_mask_values.extend(std::iter::repeat_n(1.0, prompt_len));
 
         self.prepared(
             all_tokens,
@@ -925,13 +928,13 @@ impl VoxCPMEngine {
         max_len: usize,
         progress: &F,
         cancel: Option<&AtomicBool>,
-        on_patch: &mut dyn FnMut(&VoxCPMEngine, &GenerationState, usize, usize, bool) -> Result<()>,
+        on_patch: &mut PatchCallback<'_>,
     ) -> Result<GenerationOutput> {
         let mut state = self.prefill(prepared)?;
         let mut generated_patch_count = 0usize;
 
         for step in 0..max_len {
-            if cancel.map_or(false, |c| c.load(Ordering::Relaxed)) {
+            if cancel.is_some_and(|c| c.load(Ordering::Relaxed)) {
                 bail!("synthesis cancelled");
             }
             progress(step, max_len);
@@ -1086,7 +1089,7 @@ impl VoxCPMEngine {
         .map_err(Into::into)
     }
 
-    fn make_ref_prefix(&self, ref_feat: &Tensor) -> Result<(Vec<u32>, Tensor, Vec<f32>, Vec<f32>)> {
+    fn make_ref_prefix(&self, ref_feat: &Tensor) -> Result<RefPrefix> {
         let ref_len = ref_feat.dim(0)?;
         let ref_audio_start = self
             .manifest
@@ -1101,18 +1104,18 @@ impl VoxCPMEngine {
 
         let mut tokens = Vec::with_capacity(ref_len + 2);
         tokens.push(ref_audio_start);
-        tokens.extend(std::iter::repeat(0).take(ref_len));
+        tokens.extend(std::iter::repeat_n(0, ref_len));
         tokens.push(ref_audio_end);
 
         let z1 = self.zero_feat(1)?;
         let feats = Tensor::cat(&[&z1, ref_feat, &z1], 0)?;
         let mut text_mask = Vec::with_capacity(ref_len + 2);
         text_mask.push(1.0);
-        text_mask.extend(std::iter::repeat(0.0).take(ref_len));
+        text_mask.extend(std::iter::repeat_n(0.0, ref_len));
         text_mask.push(1.0);
         let mut audio_mask = Vec::with_capacity(ref_len + 2);
         audio_mask.push(0.0);
-        audio_mask.extend(std::iter::repeat(1.0).take(ref_len));
+        audio_mask.extend(std::iter::repeat_n(1.0, ref_len));
         audio_mask.push(0.0);
         Ok((tokens, feats, text_mask, audio_mask))
     }
@@ -1133,7 +1136,7 @@ impl VoxCPMEngine {
                     padded.extend(samples);
                     samples = padded;
                 }
-                PaddingMode::Right => samples.extend(std::iter::repeat(0.0).take(padding_size)),
+                PaddingMode::Right => samples.extend(std::iter::repeat_n(0.0, padding_size)),
             }
         }
 

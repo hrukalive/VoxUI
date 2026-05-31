@@ -581,10 +581,10 @@ impl AppCore {
     }
 
     fn stop_playback_if_active(&mut self, item_id: &str) -> Option<String> {
-        if !self
+        if self
             .active_playback
             .as_ref()
-            .is_some_and(|active_playback| active_playback.item_id == item_id)
+            .is_none_or(|active_playback| active_playback.item_id != item_id)
         {
             return None;
         }
@@ -668,9 +668,7 @@ impl AppCore {
         let sample_rate = self.loaded_sample_rate.unwrap_or(16_000);
         let cancel = Arc::new(AtomicBool::new(false));
 
-        if let Err(error) = self.begin_generation_state(item_id, cancel.clone()) {
-            return Err(error);
-        }
+        self.begin_generation_state(item_id, cancel.clone())?;
 
         Ok(GenerationRun {
             item_id: item_id.to_string(),

@@ -291,10 +291,10 @@ fn run_openblive_session(
                     .pack(),
                 ))
                 .context("failed to send OpenLive websocket heartbeat")?;
-            heartbeat_app_once(&client, &start.game_id)
+            heartbeat_app_once(client, &start.game_id)
                 .context("failed to send OpenLive app heartbeat")?;
             if enable_ceve_server_heartbeat {
-                if let Err(error) = heartbeat_ceve_once(&client, &start.game_id) {
+                if let Err(error) = heartbeat_ceve_once(client, &start.game_id) {
                     tracing::warn!("CEVE heartbeat failed: {error}");
                 }
             }
@@ -821,7 +821,7 @@ fn parse_start_game_id(data: &Value) -> anyhow::Result<String> {
 }
 
 fn parse_start_details(data: &Value, game_id: String) -> anyhow::Result<StartAppResponse> {
-    let websocket_info = data.get("websocket_info").unwrap_or(&data);
+    let websocket_info = data.get("websocket_info").unwrap_or(data);
     let auth_body = required_string_or_json(
         websocket_info,
         &["/auth_body"],

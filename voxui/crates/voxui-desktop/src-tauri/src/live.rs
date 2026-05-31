@@ -624,7 +624,7 @@ fn ensure_period(text: &str, language: LiveLanguage, auto_period: bool) -> Strin
     let endings = [
         '?', '!', '.', '\u{2026}', '\u{ff1f}', '\u{ff01}', '\u{3002}',
     ];
-    if text.is_empty() || text.ends_with(&endings) {
+    if text.is_empty() || text.ends_with(endings) {
         text.to_string()
     } else {
         format!("{}{}", text, period_for_language(language))

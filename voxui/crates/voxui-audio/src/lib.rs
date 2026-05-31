@@ -32,6 +32,12 @@ pub struct AudioSystem {
     hosts: Vec<HostInfo>,
 }
 
+impl Default for AudioSystem {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AudioSystem {
     pub fn new() -> Self {
         let hosts = cpal::available_hosts()
@@ -543,9 +549,9 @@ fn apply_edge_fades(samples: &mut [f32], sample_rate: u32) {
     let fade_in_len = fade_len.min(samples.len());
     let fade_out_len = fade_len.min(samples.len());
 
-    for index in 0..fade_in_len {
+    for (index, sample) in samples.iter_mut().enumerate().take(fade_in_len) {
         let gain = index as f32 / fade_in_len as f32;
-        samples[index] *= gain;
+        *sample *= gain;
     }
 
     for index in 0..fade_out_len {

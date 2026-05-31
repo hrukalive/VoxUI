@@ -161,12 +161,10 @@ pub fn compute_data_size(shape: &[u64], dtype: GgmlType) -> usize {
         GgmlType::F32 => n_elements * 4,
         GgmlType::F16 => n_elements * 2,
         GgmlType::Q4_0 => {
-            let n_blocks = (n_elements + 31) / 32;
-            n_blocks * 18
+            n_elements.div_ceil(32) * 18
         }
         GgmlType::Q8_0 => {
-            let n_blocks = (n_elements + 31) / 32;
-            n_blocks * 34
+            n_elements.div_ceil(32) * 34
         }
     }
 }

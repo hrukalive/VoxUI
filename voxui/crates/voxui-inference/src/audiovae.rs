@@ -128,7 +128,7 @@ fn weight_norm(g: &Tensor, v: &Tensor) -> Result<Tensor> {
     // norm over dims 1,2 per output channel
     let v_sq = v.sqr()?;
     let norm = v_sq.sum_keepdim((1, 2))?.sqrt()?; // [out, 1, 1]
-    let w = v.broadcast_mul(&g)?.broadcast_div(&norm)?;
+    let w = v.broadcast_mul(g)?.broadcast_div(&norm)?;
     Ok(w)
 }
 

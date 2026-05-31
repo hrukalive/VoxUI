@@ -226,7 +226,7 @@ fn conditioning_prefix_len(
     hidden_dim: usize,
     cond_len: usize,
 ) -> Result<usize> {
-    if hidden_dim == 0 || mu_dim == 0 || mu_dim % hidden_dim != 0 {
+    if hidden_dim == 0 || mu_dim == 0 || !mu_dim.is_multiple_of(hidden_dim) {
         anyhow::bail!(
             "DiT mu dimension {mu_dim} must be a positive multiple of hidden dimension {hidden_dim}"
         );
@@ -664,8 +664,8 @@ impl DiT {
 
         let mut t_val = t_span[0];
 
-        for step in 1..=n_steps {
-            let dt_val = t_val - t_span[step];
+        for (step, &t_span_val) in t_span.iter().enumerate().skip(1) {
+            let dt_val = t_val - t_span_val;
 
             let dphi_dt = if step <= zero_init_steps {
                 Tensor::zeros(
