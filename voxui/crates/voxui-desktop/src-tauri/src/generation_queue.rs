@@ -12,6 +12,7 @@ pub enum HistoryStatus {
     Failed,
     Ready,
     Playing,
+    Dedupped,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -24,6 +25,8 @@ pub struct HistoryItem {
     pub error: Option<String>,
     pub has_audio: bool,
     pub snapshot: RequestSnapshot,
+    #[serde(default)]
+    pub created_at: u64,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -37,17 +40,20 @@ impl GenerationQueue {
         text: String,
         loaded_model_id: impl Into<String>,
         config: &AppConfig,
+        created_at: u64,
+        status: HistoryStatus,
     ) -> String {
         let id = Uuid::new_v4().to_string();
         self.items.push(HistoryItem {
             id: id.clone(),
             text,
-            status: HistoryStatus::Queued,
+            status,
             progress_current: 0,
             progress_total: 0,
             error: None,
             has_audio: false,
             snapshot: Self::snapshot(loaded_model_id, config),
+            created_at,
         });
         id
     }
