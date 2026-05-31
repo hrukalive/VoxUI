@@ -319,7 +319,7 @@ impl VoxCPMEngine {
                 self.lora = Some(adapter);
             } else {
                 self.lora = Some(LoraAdapter::load_file_for_model(
-                    lora_path.unwrap(),
+                    &path,
                     &self.device,
                     &self.manifest,
                 )?);
