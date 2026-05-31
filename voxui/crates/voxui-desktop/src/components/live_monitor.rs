@@ -199,7 +199,7 @@ pub fn LiveMonitor(
             >
                 <For
                     each=move || snapshot().items
-                    key=live_item_render_key
+                    key=move |item: &LiveMonitorItem| live_item_render_key(item, labels())
                     children=move |item| {
                         let labels = labels();
                         let kind = item.kind;
@@ -564,10 +564,10 @@ fn live_auto_gen_mode_options(labels: Labels) -> Vec<SelectOption> {
     .collect()
 }
 
-fn live_item_render_key(item: &LiveMonitorItem) -> String {
+fn live_item_render_key(item: &LiveMonitorItem, labels: Labels) -> String {
     format!(
-        "{}\x1f{}\x1f{}",
-        item.id, item.mapped_uname, item.suggestion
+        "{}\x1f{}\x1f{}\x1f{:?}",
+        item.id, item.mapped_uname, item.suggestion, labels.language
     )
 }
 
@@ -756,6 +756,7 @@ mod tests {
 
     #[test]
     fn live_item_render_key_changes_with_rendered_text() {
+        let labels = crate::i18n::labels(crate::i18n::UiLanguage::English);
         let mut item = LiveMonitorItem {
             id: "1".to_string(),
             kind: LiveMessageKind::Gift,
@@ -767,14 +768,14 @@ mod tests {
             raw_json: serde_json::Value::Null,
             raw_message: None,
         };
-        let first_key = live_item_render_key(&item);
+        let first_key = live_item_render_key(&item, labels);
 
         item.suggestion = "new template".to_string();
-        assert_ne!(first_key, live_item_render_key(&item));
+        assert_ne!(first_key, live_item_render_key(&item, labels));
 
-        let second_key = live_item_render_key(&item);
+        let second_key = live_item_render_key(&item, labels);
         item.mapped_uname = "A-chan".to_string();
-        assert_ne!(second_key, live_item_render_key(&item));
+        assert_ne!(second_key, live_item_render_key(&item, labels));
     }
 
     #[test]
