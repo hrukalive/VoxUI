@@ -279,14 +279,16 @@ pub fn LiveMonitor(
                                         let has_raw_message = item.raw_message.is_some();
                                         if supports_translation && has_raw_message {
                                             let translate_item_id = item.id.clone();
+                                            let tid_for_toggle = item.id.clone();
                                             view! {
                                                 <button
                                                     class="live-monitor-button"
+                                                    class:active=move || expanded_translations.get().contains(&translate_item_id)
                                                     type="button"
                                                     title=labels.translate
                                                     aria-label=labels.translate
                                                     on:click=move |_| {
-                                                        let id = translate_item_id.clone();
+                                                        let id = tid_for_toggle.clone();
                                                         set_expanded_translations.update(|set| {
                                                             if set.contains(&id) {
                                                                 set.remove(&id);
@@ -297,9 +299,10 @@ pub fn LiveMonitor(
                                                     }
                                                 >
                                                     <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                                                        <path d="M5 8l6-6 6 6"></path>
-                                                        <path d="M5 16l6 6 6-6"></path>
-                                                        <line x1="12" y1="2" x2="12" y2="22"></line>
+                                                        <circle cx="12" cy="12" r="10"></circle>
+                                                        <path d="M2 12h20"></path>
+                                                        <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10"></path>
+                                                        <path d="M12 2a15.3 15.3 0 0 0-4 10 15.3 15.3 0 0 0 4 10"></path>
                                                     </svg>
                                                 </button>
                                             }.into_any()
@@ -388,6 +391,7 @@ pub fn LiveMonitor(
                                                         let msg = msg_click.clone();
                                                         let source = trans_config().inbound.source_lang.clone();
                                                         let target = trans_config().inbound.target_lang.clone();
+                                                        let fail_text = labels.translation_failed.to_string();
                                                         set_translation_results.update(|results| {
                                                             results.insert(item_id.clone(), (String::new(), true));
                                                         });
@@ -400,7 +404,7 @@ pub fn LiveMonitor(
                                                                 }
                                                                 Err(_) => {
                                                                     set_translation_results.update(|results| {
-                                                                        results.remove(&item_id);
+                                                                        results.insert(item_id, (fail_text, false));
                                                                     });
                                                                 }
                                                             }

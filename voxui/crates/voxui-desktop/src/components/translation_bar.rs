@@ -13,6 +13,7 @@ pub fn TranslationBar(
     disabled: impl Fn() -> bool + Send + Sync + 'static + Copy,
     on_replace_text: impl Fn(String) + 'static + Copy,
     on_enqueue: impl Fn(String) + 'static + Copy,
+    on_error: impl Fn(String) + 'static + Copy,
     on_config_patch: impl Fn(ConfigPatch) + Send + Sync + 'static + Copy,
 ) -> impl IntoView {
     let (translating, set_translating) = signal(false);
@@ -39,7 +40,9 @@ pub fn TranslationBar(
                         on_replace_text(translated);
                     }
                 }
-                Err(_) => {}
+                Err(err) => {
+                    on_error(err);
+                }
             }
             set_translating.set(false);
         });

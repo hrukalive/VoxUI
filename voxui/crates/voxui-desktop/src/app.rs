@@ -33,6 +33,7 @@ pub fn App() -> impl IntoView {
     let (audio_state, set_audio_state) = signal(AudioState::default());
     let (input_replacement, set_input_replacement) = signal(None::<String>);
     let (input_text, set_input_text) = signal(String::new());
+    let (translation_error, set_translation_error) = signal(None::<String>);
 
     // Root component is mounted once; Tauri event listeners intentionally live for the app lifetime.
     spawn_local(async move {
@@ -407,12 +408,21 @@ pub fn App() -> impl IntoView {
                             }
                             on_replace_text=move |text| set_input_replacement.set(Some(text))
                             on_enqueue=move |text| {
+                                let target_lang = current_snapshot().config.translation.outbound.target_lang.clone();
+                                let final_text = if current_snapshot().config.auto_period {
+                                    ensure_period(&text, &target_lang)
+                                } else {
+                                    text
+                                };
+                                set_input_text.set(String::new());
+                                set_input_replacement.set(Some(String::new()));
                                 spawn_local(async move {
-                                    if crate::tauri_api::enqueue_generation(text).await.is_ok() {
+                                    if crate::tauri_api::enqueue_generation(final_text).await.is_ok() {
                                         refresh_snapshot();
                                     }
                                 });
                             }
+                            on_error=move |err| set_translation_error.set(Some(err))
                             on_config_patch=commit_config_patch
                         />
                     }.into_any()
@@ -576,6 +586,18 @@ pub fn App() -> impl IntoView {
                                 let _ = crate::tauri_api::exit_app().await;
                             });
                         }
+                    />
+                }
+            }}
+            {move || {
+                let labels = current_labels();
+                view! {
+                    <ErrorModal
+                        labels=labels
+                        open=move || translation_error.get().is_some()
+                        title=move || current_labels().translation_failed.to_string()
+                        message=move || translation_error.get().unwrap_or_default()
+                        on_close=move || set_translation_error.set(None)
                     />
                 }
             }}
@@ -757,6 +779,19 @@ fn apply_optimistic_patch(snapshot: &mut AppSnapshot, patch: &ConfigPatch) {
 
 fn empty_string_as_none(value: Option<String>) -> Option<String> {
     value.filter(|value| !value.is_empty())
+}
+
+fn ensure_period(text: &str, target_lang: &str) -> String {
+    let period = match target_lang {
+        "ZH" | "ZH-HANT" | "JA" => '。',
+        _ => '.',
+    };
+    let endings = ['?', '!', '.', '…', '？', '！', '。'];
+    if text.is_empty() || text.ends_with(&endings) {
+        text.to_string()
+    } else {
+        format!("{}{}", text, period)
+    }
 }
 
 fn apply_live_optimistic_patch(snapshot: &mut LiveSnapshot, patch: &LiveConfigPatch) {

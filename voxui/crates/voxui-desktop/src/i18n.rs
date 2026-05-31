@@ -109,7 +109,6 @@ pub struct Labels {
     pub inbound_description: &'static str,
     pub translating: &'static str,
     pub translation_failed: &'static str,
-    pub no_text_to_translate: &'static str,
 }
 
 pub fn labels(language: UiLanguage) -> Labels {
@@ -218,7 +217,6 @@ pub fn labels(language: UiLanguage) -> Labels {
             inbound_description: "用于翻译收到的直播消息",
             translating: "翻译中...",
             translation_failed: "翻译失败",
-            no_text_to_translate: "没有可翻译的文字",
         },
         UiLanguage::English => Labels {
             title: "AhanSays",
@@ -324,7 +322,6 @@ pub fn labels(language: UiLanguage) -> Labels {
             inbound_description: "Used to translate received livestream messages",
             translating: "Translating...",
             translation_failed: "Translation failed",
-            no_text_to_translate: "No text to translate",
         },
     }
 }
