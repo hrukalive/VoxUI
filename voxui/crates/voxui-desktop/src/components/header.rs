@@ -85,7 +85,7 @@ pub fn Header(
                 aria_label=move || labels.lora
                 value=current_lora_id
                 options=lora_options
-                disabled=lora_disabled
+                disabled=move || lora_disabled
                 on_change=move |lora_id| on_lora_select(if lora_id.is_empty() { None } else { Some(lora_id) })
             />
 

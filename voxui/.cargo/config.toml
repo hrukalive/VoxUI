@@ -3,3 +3,10 @@ CUDA_COMPUTE_CAP = "89"
 NVCC_APPEND_FLAGS = "--allow-unsupported-compiler"
 RUST_LOG="voxui_desktop=debug,voxui_inference_sidecar=debug,voxui_inference=info,tauri=info"
 RUST_BACKTRACE="1"
+
+[target.x86_64-pc-windows-msvc]
+linker = "rust-lld.exe"
+rustflags = ["-C", "linker-flavor=lld-link"]
+
+[build]
+rustc-wrapper = "C:/Users/Reon/scoop/apps/sccache/current/sccache.exe"
