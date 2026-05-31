@@ -2,7 +2,7 @@ use leptos::prelude::*;
 
 use crate::components::controls::{CustomSelect, SelectOption};
 use crate::i18n::Labels;
-use crate::tauri_api::ModelChoice;
+use crate::tauri_api::{LoraEntry, ModelChoice};
 
 #[component]
 pub fn Header(
@@ -10,6 +10,10 @@ pub fn Header(
     models: Vec<ModelChoice>,
     selected_model_id: Option<String>,
     load_disabled: bool,
+    loras: Vec<LoraEntry>,
+    selected_lora_id: Option<String>,
+    lora_disabled: bool,
+    on_lora_select: impl Fn(Option<String>) + Send + Sync + 'static + Copy,
     volume: f32,
     on_model_select: impl Fn(String) + Send + Sync + 'static + Copy,
     on_load: impl Fn() + Send + Sync + 'static + Copy,
@@ -32,6 +36,24 @@ pub fn Header(
     let current_model_id = {
         let selected_model_id = selected_model_id.clone();
         move || selected_model_id.clone()
+    };
+
+    let selected_lora_id = selected_lora_id.unwrap_or_default();
+    let lora_options = {
+        let loras = loras.clone();
+        move || {
+            let mut opts: Vec<SelectOption> = vec![
+                SelectOption::new(String::new(), "None".to_string()),
+            ];
+            for lora in &loras {
+                opts.push(SelectOption::new(lora.id.clone(), lora.display_name.clone()));
+            }
+            opts
+        }
+    };
+    let current_lora_id = {
+        let selected_lora_id = selected_lora_id.clone();
+        move || selected_lora_id.clone()
     };
 
     view! {
@@ -57,6 +79,15 @@ pub fn Header(
             >
                 {labels.load}
             </button>
+
+            <CustomSelect
+                class="lora-select"
+                aria_label=move || labels.lora
+                value=current_lora_id
+                options=lora_options
+                disabled=lora_disabled
+                on_change=move |lora_id| on_lora_select(if lora_id.is_empty() { None } else { Some(lora_id) })
+            />
 
             <label class="header-volume-control" title={labels.volume}>
                 <span>{move || format!("{}%", volume_to_percent(volume))}</span>
